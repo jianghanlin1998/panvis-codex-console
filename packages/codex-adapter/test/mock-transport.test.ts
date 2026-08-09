@@ -108,7 +108,7 @@ describe("mock JSONL transport failures", () => {
   });
 
   it("uses a bounded timeout instead of hanging", async () => {
-    harness = startHarness("interrupt", 50);
+    harness = startHarness("interrupt");
     await initializeHarness(harness);
     await expect(
       harness.waitForMessage((message) => message.method === "never/emitted", 10),

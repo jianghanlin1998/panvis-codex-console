@@ -45,14 +45,17 @@ export {
   ContextItemSchema,
   ContextKindSchema,
   ContextProvenanceSchema,
+  ContextScopeSchema,
   ContextSourceTypeSchema,
   ContextStatusSchema,
+  deriveContextScope,
 } from "./context.js";
 export type {
   ContextAuthority,
   ContextItem,
   ContextKind,
   ContextProvenance,
+  ContextScope,
   ContextSourceType,
   ContextStatus,
 } from "./context.js";

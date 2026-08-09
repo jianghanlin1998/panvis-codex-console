@@ -8,6 +8,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 export const projectsTable = sqliteTable(
   "projects",
@@ -120,6 +121,82 @@ export const taskDependenciesTable = sqliteTable(
     check(
       "task_dependencies_type_check",
       sql`${table.dependencyType} in ('BLOCKING', 'INFORMATIONAL')`,
+    ),
+  ],
+);
+
+export const contextItemsTable = sqliteTable(
+  "context_items",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    bigTaskId: text("big_task_id").references(() => bigTasksTable.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    subtaskId: text("subtask_id").references(() => subtasksTable.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    kind: text("kind").notNull(),
+    status: text("status").notNull(),
+    authority: text("authority").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceReference: text("source_reference").notNull(),
+    effectiveAt: text("effective_at").notNull(),
+    supersedesContextItemId: text("supersedes_context_item_id").references(
+      (): AnySQLiteColumn => contextItemsTable.id,
+      { onDelete: "restrict", onUpdate: "cascade" },
+    ),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("context_items_project_id_index").on(table.projectId),
+    index("context_items_big_task_id_index").on(table.bigTaskId),
+    index("context_items_subtask_id_index").on(table.subtaskId),
+    index("context_items_status_index").on(table.status),
+    uniqueIndex("context_items_supersedes_unique").on(table.supersedesContextItemId),
+    index("context_items_effective_at_id_index").on(table.effectiveAt, table.id),
+    check(
+      "context_items_kind_check",
+      sql`${table.kind} in ('DECISION', 'REQUIREMENT', 'CONSTRAINT', 'ENGINEERING_FACT', 'OPEN_QUESTION', 'RISK')`,
+    ),
+    check(
+      "context_items_status_check",
+      sql`${table.status} in ('PROPOSED', 'ACTIVE', 'SUPERSEDED', 'REJECTED', 'RESOLVED')`,
+    ),
+    check(
+      "context_items_authority_check",
+      sql`${table.authority} in ('HUMAN', 'REPO_EVIDENCE', 'CODEX_CANDIDATE', 'SYSTEM')`,
+    ),
+    check(
+      "context_items_source_type_check",
+      sql`${table.sourceType} in ('CHAT_MESSAGE', 'REPO', 'HANDOFF', 'IMPORT', 'MANUAL', 'SYSTEM')`,
+    ),
+    check(
+      "context_items_scope_check",
+      sql`${table.subtaskId} is null or ${table.bigTaskId} is not null`,
+    ),
+    check(
+      "context_items_no_self_supersession_check",
+      sql`${table.supersedesContextItemId} is null or ${table.id} <> ${table.supersedesContextItemId}`,
+    ),
+    check(
+      "context_items_title_length_check",
+      sql`length(trim(${table.title})) between 1 and 256`,
+    ),
+    check(
+      "context_items_body_length_check",
+      sql`length(trim(${table.body})) between 1 and 4000`,
+    ),
+    check(
+      "context_items_source_reference_length_check",
+      sql`length(trim(${table.sourceReference})) between 1 and 2048`,
     ),
   ],
 );

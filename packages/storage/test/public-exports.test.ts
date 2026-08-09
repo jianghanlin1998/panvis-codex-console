@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   bigTasksTable,
+  contextItemsTable,
   openTaskDatabase,
   projectsTable,
   STORAGE_ERROR_CODES,
@@ -19,6 +20,7 @@ describe("storage package public exports", () => {
     expect(STORAGE_ERROR_CODES).toContain("MIGRATION_FAILED");
     expect(projectsTable).toBeDefined();
     expect(bigTasksTable).toBeDefined();
+    expect(contextItemsTable).toBeDefined();
     expect(subtasksTable).toBeDefined();
     expect(taskDependenciesTable).toBeDefined();
   });

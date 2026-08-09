@@ -4,12 +4,18 @@ import { join } from "node:path";
 
 import {
   BigTaskSchema,
+  ContextItemSchema,
+  ContextScopeSchema,
   ProjectSchema,
   SubtaskDependencySchema,
   SubtaskSchema,
 } from "@codex-task-console/domain";
 import type {
   BigTask,
+  ContextItem,
+  ContextItemId,
+  ContextScope,
+  ContextStatus,
   Project,
   Subtask,
   SubtaskDependency,
@@ -81,6 +87,43 @@ export const makeDependency = (
     upstreamSubtaskId,
     downstreamSubtaskId,
     dependencyType,
+  });
+
+interface MakeContextItemOptions {
+  readonly status?: ContextStatus;
+  readonly effectiveAt?: string;
+  readonly supersedesContextItemId?: ContextItemId;
+  readonly title?: string;
+  readonly body?: string;
+}
+
+export const makeContextItem = (
+  id = "ctx_a",
+  scope: ContextScope = ContextScopeSchema.parse({
+    scopeType: "BIG_TASK",
+    projectId: "prj_console",
+    bigTaskId: "bt_v1",
+  }),
+  options: MakeContextItemOptions = {},
+): ContextItem =>
+  ContextItemSchema.parse({
+    id,
+    projectId: scope.projectId,
+    ...(scope.scopeType === "PROJECT" ? {} : { bigTaskId: scope.bigTaskId }),
+    ...(scope.scopeType === "SUBTASK" ? { subtaskId: scope.subtaskId } : {}),
+    kind: "ENGINEERING_FACT",
+    status: options.status ?? "ACTIVE",
+    authority: "REPO_EVIDENCE",
+    title: options.title ?? `Context ${id}`,
+    body: options.body ?? `Compact body for ${id}.`,
+    provenance: {
+      sourceType: "REPO",
+      sourceReference: `repository#${id}`,
+      effectiveAt: options.effectiveAt ?? FIXED_TIME,
+      ...(options.supersedesContextItemId === undefined
+        ? {}
+        : { supersedesContextItemId: options.supersedesContextItemId }),
+    },
   });
 
 export const withMemoryStorage = <T>(operation: (storage: TaskStorage) => T): T => {

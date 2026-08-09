@@ -3,6 +3,7 @@ export type { StorageErrorCode } from "./errors.js";
 
 export {
   bigTasksTable,
+  contextItemsTable,
   projectsTable,
   subtasksTable,
   taskDependenciesTable,

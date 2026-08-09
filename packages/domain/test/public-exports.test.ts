@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   BudgetPolicySchema,
   ContextItemSchema,
+  ContextScopeSchema,
   DurableTaskSchema,
   ExecutionProviderDescriptorSchema,
   NativeSubagentOwnershipSchema,
   NormalizedUsageSchema,
   ProviderRunReferenceSchema,
   ProviderThreadReferenceSchema,
+  deriveContextScope,
   SubtaskDependencySchema,
   validateBudgetPolicy,
   validateSubtaskDependencies,
@@ -19,6 +21,8 @@ describe("domain package public exports", () => {
   it("exposes the deliberate runtime contract surface", () => {
     expect(DurableTaskSchema).toBeDefined();
     expect(ContextItemSchema).toBeDefined();
+    expect(ContextScopeSchema).toBeDefined();
+    expect(deriveContextScope).toBeTypeOf("function");
     expect(SubtaskDependencySchema).toBeDefined();
     expect(NativeSubagentOwnershipSchema).toBeDefined();
     expect(BudgetPolicySchema).toBeDefined();

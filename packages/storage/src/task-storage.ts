@@ -3,16 +3,23 @@ import { DatabaseSync } from "node:sqlite";
 import {
   BigTaskIdSchema,
   BigTaskSchema,
+  ContextItemIdSchema,
+  ContextItemSchema,
+  ContextScopeSchema,
   ProjectIdSchema,
   ProjectSchema,
   SubtaskDependencySchema,
   SubtaskIdSchema,
   SubtaskSchema,
+  deriveContextScope,
   validateSubtaskDependencies,
 } from "@codex-task-console/domain";
 import type {
   BigTask,
   BigTaskId,
+  ContextItem,
+  ContextItemId,
+  ContextScope,
   DependencySubtask,
   Project,
   ProjectId,
@@ -20,7 +27,7 @@ import type {
   SubtaskDependency,
   SubtaskId,
 } from "@codex-task-console/domain";
-import { and, asc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 
@@ -28,6 +35,7 @@ import { TaskStorageError } from "./errors.js";
 import { defaultMigrationsFolder, runMigrations } from "./migrations.js";
 import {
   bigTasksTable,
+  contextItemsTable,
   projectsTable,
   subtasksTable,
   taskDependenciesTable,
@@ -43,6 +51,7 @@ export interface OpenTaskDatabaseOptions {
 type ProjectRow = typeof projectsTable.$inferSelect;
 type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
+type ContextItemRow = typeof contextItemsTable.$inferSelect;
 
 const invalidInput = (entity: string): TaskStorageError =>
   new TaskStorageError("INVALID_INPUT", `${entity} input does not satisfy the domain contract.`);
@@ -91,6 +100,30 @@ const parseSubtaskId = (input: SubtaskId): SubtaskId => {
   const result = SubtaskIdSchema.safeParse(input);
   if (!result.success) {
     throw invalidInput("Subtask ID");
+  }
+  return result.data;
+};
+
+const parseContextItemId = (input: ContextItemId): ContextItemId => {
+  const result = ContextItemIdSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Context Item ID");
+  }
+  return result.data;
+};
+
+const parseContextItemInput = (input: ContextItem): ContextItem => {
+  const result = ContextItemSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Context Item");
+  }
+  return result.data;
+};
+
+const parseContextScope = (input: ContextScope): ContextScope => {
+  const result = ContextScopeSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Context Scope");
   }
   return result.data;
 };
@@ -178,6 +211,84 @@ const dependencyFromRow = (row: {
     throw malformedStoredData();
   }
   return result.data;
+};
+
+const isCanonicalUtcTimestamp = (value: string): boolean => {
+  const timestamp = new Date(value);
+  return !Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value;
+};
+
+const contextItemFromRow = (row: ContextItemRow): ContextItem => {
+  if (!isCanonicalUtcTimestamp(row.createdAt) || !isCanonicalUtcTimestamp(row.updatedAt)) {
+    throw malformedStoredData();
+  }
+
+  const result = ContextItemSchema.safeParse({
+    id: row.id,
+    projectId: row.projectId,
+    ...(row.bigTaskId === null ? {} : { bigTaskId: row.bigTaskId }),
+    ...(row.subtaskId === null ? {} : { subtaskId: row.subtaskId }),
+    kind: row.kind,
+    status: row.status,
+    authority: row.authority,
+    title: row.title,
+    body: row.body,
+    provenance: {
+      sourceType: row.sourceType,
+      sourceReference: row.sourceReference,
+      effectiveAt: row.effectiveAt,
+      ...(row.supersedesContextItemId === null
+        ? {}
+        : { supersedesContextItemId: row.supersedesContextItemId }),
+    },
+  });
+  if (!result.success) {
+    throw malformedStoredData();
+  }
+  return result.data;
+};
+
+const contextScopesEqual = (left: ContextScope, right: ContextScope): boolean => {
+  switch (left.scopeType) {
+    case "PROJECT":
+      return right.scopeType === "PROJECT" && left.projectId === right.projectId;
+    case "BIG_TASK":
+      return (
+        right.scopeType === "BIG_TASK" &&
+        left.projectId === right.projectId &&
+        left.bigTaskId === right.bigTaskId
+      );
+    case "SUBTASK":
+      return (
+        right.scopeType === "SUBTASK" &&
+        left.projectId === right.projectId &&
+        left.bigTaskId === right.bigTaskId &&
+        left.subtaskId === right.subtaskId
+      );
+  }
+};
+
+const contextScopePredicate = (scope: ContextScope) => {
+  switch (scope.scopeType) {
+    case "PROJECT":
+      return and(
+        eq(contextItemsTable.projectId, scope.projectId),
+        isNull(contextItemsTable.bigTaskId),
+        isNull(contextItemsTable.subtaskId),
+      );
+    case "BIG_TASK":
+      return and(
+        eq(contextItemsTable.projectId, scope.projectId),
+        eq(contextItemsTable.bigTaskId, scope.bigTaskId),
+        isNull(contextItemsTable.subtaskId),
+      );
+    case "SUBTASK":
+      return and(
+        eq(contextItemsTable.projectId, scope.projectId),
+        eq(contextItemsTable.bigTaskId, scope.bigTaskId),
+        eq(contextItemsTable.subtaskId, scope.subtaskId),
+      );
+  }
 };
 
 export class TaskStorage {
@@ -465,6 +576,129 @@ export class TaskStorage {
     return this.#operation(() => this.#listDependencies(bigTaskId));
   }
 
+  createContextItem(input: ContextItem): ContextItem {
+    const contextItem = parseContextItemInput(input);
+    if (contextItem.provenance.supersedesContextItemId !== undefined) {
+      throw invalidInput("Context Item");
+    }
+
+    return this.#operation(() => {
+      this.#validateContextHierarchy(deriveContextScope(contextItem));
+      if (this.#getContextItem(contextItem.id) !== null) {
+        throw new TaskStorageError("CONFLICT", "A Context Item with this ID already exists.");
+      }
+
+      const timestamp = this.#timestamp();
+      this.#insertContextItem(contextItem, timestamp);
+      const stored = this.#getContextItem(contextItem.id);
+      if (stored === null) {
+        throw new TaskStorageError(
+          "STORAGE_OPERATION_FAILED",
+          "The Context Item was not persisted.",
+        );
+      }
+      return stored;
+    });
+  }
+
+  getContextItemById(input: ContextItemId): ContextItem | null {
+    const contextItemId = parseContextItemId(input);
+    return this.#operation(() => this.#getContextItem(contextItemId));
+  }
+
+  listContextItemsByScope(input: ContextScope): readonly ContextItem[] {
+    const scope = parseContextScope(input);
+    return this.#operation(() =>
+      this.#database
+        .select()
+        .from(contextItemsTable)
+        .where(contextScopePredicate(scope))
+        .orderBy(asc(contextItemsTable.effectiveAt), asc(contextItemsTable.id))
+        .all()
+        .map(contextItemFromRow),
+    );
+  }
+
+  supersedeContextItem(input: ContextItem): ContextItem {
+    const replacement = parseContextItemInput(input);
+    const priorContextItemId = replacement.provenance.supersedesContextItemId;
+    if (
+      replacement.status !== "ACTIVE" ||
+      priorContextItemId === undefined ||
+      priorContextItemId === replacement.id
+    ) {
+      throw invalidInput("Context Item supersession");
+    }
+
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const prior = this.#getContextItem(priorContextItemId);
+        if (prior === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The superseded Context Item does not exist.",
+          );
+        }
+        if (prior.status !== "ACTIVE") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "Only an active Context Item can be superseded.",
+          );
+        }
+
+        const priorScope = deriveContextScope(prior);
+        const replacementScope = deriveContextScope(replacement);
+        if (!contextScopesEqual(priorScope, replacementScope)) {
+          throw invalidInput("Context Item supersession scope");
+        }
+        this.#validateContextHierarchy(replacementScope);
+
+        if (this.#getContextItem(replacement.id) !== null) {
+          throw new TaskStorageError("CONFLICT", "A Context Item with this ID already exists.");
+        }
+        const existingReplacement = this.#database
+          .select({ id: contextItemsTable.id })
+          .from(contextItemsTable)
+          .where(eq(contextItemsTable.supersedesContextItemId, prior.id))
+          .get();
+        if (existingReplacement !== undefined) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Context Item has already been superseded.",
+          );
+        }
+
+        const timestamp = this.#timestamp();
+        this.#insertContextItem(replacement, timestamp);
+        const update = this.#database
+          .update(contextItemsTable)
+          .set({ status: "SUPERSEDED", updatedAt: timestamp })
+          .where(
+            and(
+              eq(contextItemsTable.id, prior.id),
+              eq(contextItemsTable.status, "ACTIVE"),
+            ),
+          )
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Context Item could not be superseded.",
+          );
+        }
+
+        const stored = this.#getContextItem(replacement.id);
+        if (stored === null) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The replacement Context Item was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
   runInTransaction<T>(operation: (storage: TaskStorage) => T): T {
     this.#ensureOpen();
     if (this.#sqlite.isTransaction) {
@@ -498,6 +732,70 @@ export class TaskStorage {
       .where(eq(subtasksTable.id, subtaskId))
       .get();
     return row === undefined ? null : subtaskFromRow(row);
+  }
+
+  #getContextItem(contextItemId: ContextItemId): ContextItem | null {
+    const row = this.#database
+      .select()
+      .from(contextItemsTable)
+      .where(eq(contextItemsTable.id, contextItemId))
+      .get();
+    return row === undefined ? null : contextItemFromRow(row);
+  }
+
+  #validateContextHierarchy(scope: ContextScope): void {
+    if (this.#getProject(scope.projectId) === null) {
+      throw new TaskStorageError(
+        "PARENT_NOT_FOUND",
+        "The Context Item Project does not exist.",
+      );
+    }
+    if (scope.scopeType === "PROJECT") {
+      return;
+    }
+
+    const bigTask = this.#getBigTask(scope.bigTaskId);
+    if (bigTask === null || bigTask.projectId !== scope.projectId) {
+      throw new TaskStorageError(
+        "PARENT_NOT_FOUND",
+        "The Context Item Big Task hierarchy does not exist.",
+      );
+    }
+    if (scope.scopeType === "BIG_TASK") {
+      return;
+    }
+
+    const subtask = this.#getSubtask(scope.subtaskId);
+    if (subtask === null || subtask.bigTaskId !== scope.bigTaskId) {
+      throw new TaskStorageError(
+        "PARENT_NOT_FOUND",
+        "The Context Item Subtask hierarchy does not exist.",
+      );
+    }
+  }
+
+  #insertContextItem(contextItem: ContextItem, timestamp: string): void {
+    this.#database
+      .insert(contextItemsTable)
+      .values({
+        id: contextItem.id,
+        projectId: contextItem.projectId,
+        bigTaskId: "bigTaskId" in contextItem ? contextItem.bigTaskId : null,
+        subtaskId: "subtaskId" in contextItem ? contextItem.subtaskId : null,
+        kind: contextItem.kind,
+        status: contextItem.status,
+        authority: contextItem.authority,
+        title: contextItem.title,
+        body: contextItem.body,
+        sourceType: contextItem.provenance.sourceType,
+        sourceReference: contextItem.provenance.sourceReference,
+        effectiveAt: contextItem.provenance.effectiveAt,
+        supersedesContextItemId:
+          contextItem.provenance.supersedesContextItemId ?? null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .run();
   }
 
   #allDependencySubtasks(): readonly DependencySubtask[] {
