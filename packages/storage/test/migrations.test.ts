@@ -27,6 +27,7 @@ describe("database lifecycle and migrations", () => {
     withMemoryStorage((storage) => {
       expect(storage.isOpen).toBe(true);
       expect(storage.listProjects()).toEqual([]);
+      storage.createProject(makeProject());
       expect(
         storage.listContextItemsByScope({
           scopeType: "PROJECT",

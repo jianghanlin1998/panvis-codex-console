@@ -26,6 +26,8 @@ Database constraints protect foreign keys with `RESTRICT` deletes, accepted enum
 
 `listContextItemsByScope` is exact-scope only. Project queries exclude all Big Task and Subtask rows; Big Task queries exclude Subtask rows; Subtask queries require the complete exact hierarchy. Results are ordered by `effectiveAt` ascending and Context Item ID ascending. No inheritance, ancestor merging, ACL evaluation, or semantic retrieval occurs.
 
+Public Context Item reads validate stored rows both structurally and against the durable Project-to-Big-Task-to-Subtask ownership hierarchy before returning them. Missing or mismatched stored ownership fails closed as sanitized malformed stored data. Caller-provided exact scopes must identify a real matching hierarchy and otherwise fail through the sanitized parent-not-found contract.
+
 ## Atomic supersession
 
 Direct creation rejects a supersession pointer. `supersedeContextItem` requires an `ACTIVE` replacement that points to one existing `ACTIVE` prior item at the identical exact scope. In one transaction it revalidates the prior item and hierarchy, inserts the replacement, and changes only the prior status and `updated_at` value.

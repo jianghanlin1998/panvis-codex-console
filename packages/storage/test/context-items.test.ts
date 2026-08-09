@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ContextScopeSchema } from "@codex-task-console/domain";
 import type { ContextItem, ContextScope } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
+import type { TaskStorage } from "../src/index.js";
 import {
   captureTaskStorageError,
   createHierarchy,
@@ -31,6 +32,34 @@ const subtaskScope = (
   subtaskId = "st_a",
 ): ContextScope =>
   ContextScopeSchema.parse({ scopeType: "SUBTASK", projectId, bigTaskId, subtaskId });
+
+const expectValidReadParity = (
+  scope: ContextScope,
+  setup: (storage: TaskStorage) => void,
+): void => {
+  const item = makeContextItem(`ctx_parity_${scope.scopeType.toLowerCase()}`, scope);
+  let memoryResult: readonly ContextItem[] = [];
+  withMemoryStorage((storage) => {
+    setup(storage);
+    storage.createContextItem(item);
+    memoryResult = storage.listContextItemsByScope(scope);
+  });
+
+  withTemporaryDatabasePath((databasePath) => {
+    const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+    setup(storage);
+    storage.createContextItem(item);
+    expect(storage.listContextItemsByScope(scope)).toEqual(memoryResult);
+    storage.close();
+
+    const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+    try {
+      expect(reopened.listContextItemsByScope(scope)).toEqual(memoryResult);
+    } finally {
+      reopened.close();
+    }
+  });
+};
 
 describe("Context Item creation", () => {
   it("round-trips Project, Big Task, and Subtask scoped items", () => {
@@ -243,6 +272,286 @@ describe("exact Context Scope retrieval", () => {
         "ctx_b",
         "ctx_z",
       ]);
+    });
+  });
+
+  it("preserves valid Project read parity in memory, on file, and after reopen", () => {
+    expectValidReadParity(projectScope("prj_parity"), (storage) => {
+      storage.createProject(makeProject("prj_parity", "project-parity"));
+    });
+  });
+
+  it("preserves valid Big Task read parity in memory, on file, and after reopen", () => {
+    expectValidReadParity(bigTaskScope("prj_parity", "bt_parity"), (storage) => {
+      storage.createProject(makeProject("prj_parity", "project-parity"));
+      storage.createBigTask(makeBigTask("bt_parity", "prj_parity"));
+    });
+  });
+
+  it("preserves valid Subtask read parity in memory, on file, and after reopen", () => {
+    expectValidReadParity(
+      subtaskScope("prj_parity", "bt_parity", "st_parity"),
+      (storage) => {
+        storage.createProject(makeProject("prj_parity", "project-parity"));
+        storage.createBigTask(makeBigTask("bt_parity", "prj_parity"));
+        storage.createSubtask(makeSubtask("st_parity", "bt_parity"));
+      },
+    );
+  });
+});
+
+describe("Context Item hierarchy read integrity", () => {
+  it("fails closed after a stored Context Item Project and Big Task relationship is corrupted", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject("prj_rel_a", "project-rel-a"));
+      storage.createProject(makeProject("prj_rel_b", "project-rel-b"));
+      storage.createBigTask(makeBigTask("bt_rel_a", "prj_rel_a"));
+      const item = makeContextItem(
+        "ctx_rel_project_big",
+        bigTaskScope("prj_rel_a", "bt_rel_a"),
+      );
+      storage.createContextItem(item);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE context_items SET project_id = ? WHERE id = ?")
+        .run("prj_rel_b", item.id);
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        const storedError = captureTaskStorageError(() =>
+          reopened.getContextItemById(item.id),
+        );
+        expect(storedError).toMatchObject({
+          code: "MALFORMED_STORED_DATA",
+          message: "Stored task data is malformed.",
+        });
+        expect(storedError.message).not.toMatch(
+          /ctx_rel_project_big|prj_rel_[ab]|bt_rel_a|SQLite|SQL|context_items|project_id|\/Users\//i,
+        );
+
+        const callerError = captureTaskStorageError(() =>
+          reopened.listContextItemsByScope(bigTaskScope("prj_rel_b", "bt_rel_a")),
+        );
+        expect(callerError).toMatchObject({ code: "PARENT_NOT_FOUND" });
+        expect(callerError.message).not.toMatch(
+          /ctx_rel_project_big|prj_rel_[ab]|bt_rel_a|SQLite|SQL|context_items|project_id|\/Users\//i,
+        );
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("fails closed after a stored Context Item Subtask and Big Task relationship is corrupted", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject());
+      storage.createBigTask(makeBigTask("bt_rel_a"));
+      storage.createBigTask(makeBigTask("bt_rel_b"));
+      storage.createSubtask(makeSubtask("st_rel_a", "bt_rel_a"));
+      storage.createSubtask(makeSubtask("st_rel_b", "bt_rel_b"));
+      const item = makeContextItem(
+        "ctx_rel_big_subtask",
+        subtaskScope("prj_console", "bt_rel_a", "st_rel_a"),
+      );
+      storage.createContextItem(item);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE context_items SET subtask_id = ? WHERE id = ?")
+        .run("st_rel_b", item.id);
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expect(
+          captureTaskStorageError(() => reopened.getContextItemById(item.id)),
+        ).toMatchObject({ code: "MALFORMED_STORED_DATA" });
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("fails closed when a stored Big Task parent is moved to another Project", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject("prj_parent_a", "project-parent-a"));
+      storage.createProject(makeProject("prj_parent_b", "project-parent-b"));
+      storage.createBigTask(makeBigTask("bt_parent", "prj_parent_a"));
+      const item = makeContextItem(
+        "ctx_parent_big_task",
+        bigTaskScope("prj_parent_a", "bt_parent"),
+      );
+      storage.createContextItem(item);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE big_tasks SET project_id = ? WHERE id = ?")
+        .run("prj_parent_b", "bt_parent");
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expect(
+          captureTaskStorageError(() => reopened.getContextItemById(item.id)),
+        ).toMatchObject({ code: "MALFORMED_STORED_DATA" });
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("fails closed when a stored Subtask parent is moved to another Big Task", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject());
+      storage.createBigTask(makeBigTask("bt_parent_a"));
+      storage.createBigTask(makeBigTask("bt_parent_b"));
+      storage.createSubtask(makeSubtask("st_parent", "bt_parent_a"));
+      const item = makeContextItem(
+        "ctx_parent_subtask",
+        subtaskScope("prj_console", "bt_parent_a", "st_parent"),
+      );
+      storage.createContextItem(item);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE subtasks SET big_task_id = ? WHERE id = ?")
+        .run("bt_parent_b", "st_parent");
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expect(
+          captureTaskStorageError(() => reopened.getContextItemById(item.id)),
+        ).toMatchObject({ code: "MALFORMED_STORED_DATA" });
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("rejects an exact Big Task scope claimed under the wrong Project", () => {
+    withMemoryStorage((storage) => {
+      storage.createProject(makeProject("prj_scope_a", "project-scope-a"));
+      storage.createProject(makeProject("prj_scope_b", "project-scope-b"));
+      storage.createBigTask(makeBigTask("bt_scope_a", "prj_scope_a"));
+
+      expect(
+        captureTaskStorageError(() =>
+          storage.listContextItemsByScope(bigTaskScope("prj_scope_b", "bt_scope_a")),
+        ),
+      ).toMatchObject({ code: "PARENT_NOT_FOUND" });
+    });
+  });
+
+  it("rejects an exact Project scope that does not exist", () => {
+    withMemoryStorage((storage) => {
+      expect(
+        captureTaskStorageError(() =>
+          storage.listContextItemsByScope(projectScope("prj_missing")),
+        ),
+      ).toMatchObject({ code: "PARENT_NOT_FOUND" });
+    });
+  });
+
+  it("rejects an exact Subtask scope claimed under the wrong Big Task", () => {
+    withMemoryStorage((storage) => {
+      storage.createProject(makeProject());
+      storage.createBigTask(makeBigTask("bt_scope_a"));
+      storage.createBigTask(makeBigTask("bt_scope_b"));
+      storage.createSubtask(makeSubtask("st_scope_b", "bt_scope_b"));
+
+      expect(
+        captureTaskStorageError(() =>
+          storage.listContextItemsByScope(
+            subtaskScope("prj_console", "bt_scope_a", "st_scope_b"),
+          ),
+        ),
+      ).toMatchObject({ code: "PARENT_NOT_FOUND" });
+    });
+  });
+
+  it("rejects an internally valid Subtask hierarchy claimed under another Project", () => {
+    withMemoryStorage((storage) => {
+      storage.createProject(makeProject("prj_scope_a", "project-scope-a"));
+      storage.createProject(makeProject("prj_scope_b", "project-scope-b"));
+      storage.createBigTask(makeBigTask("bt_scope_a", "prj_scope_a"));
+      storage.createSubtask(makeSubtask("st_scope_a", "bt_scope_a"));
+
+      expect(
+        captureTaskStorageError(() =>
+          storage.listContextItemsByScope(
+            subtaskScope("prj_scope_b", "bt_scope_a", "st_scope_a"),
+          ),
+        ),
+      ).toMatchObject({ code: "PARENT_NOT_FOUND" });
+    });
+  });
+
+  it("does not mutate caller-owned exact scope input", () => {
+    withMemoryStorage((storage) => {
+      createHierarchy(storage);
+      const scope = Object.freeze(bigTaskScope());
+      const snapshot = JSON.stringify(scope);
+
+      storage.listContextItemsByScope(scope);
+
+      expect(JSON.stringify(scope)).toBe(snapshot);
+    });
+  });
+
+  it("isolates unrelated valid exact scopes from stored hierarchy corruption", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject("prj_valid", "project-valid"));
+      const validItem = makeContextItem("ctx_valid", projectScope("prj_valid"));
+      storage.createContextItem(validItem);
+
+      storage.createProject(makeProject("prj_corrupt", "project-corrupt"));
+      storage.createBigTask(makeBigTask("bt_corrupt_a", "prj_corrupt"));
+      storage.createBigTask(makeBigTask("bt_corrupt_b", "prj_corrupt"));
+      storage.createSubtask(makeSubtask("st_corrupt_a", "bt_corrupt_a"));
+      storage.createSubtask(makeSubtask("st_corrupt_b", "bt_corrupt_b"));
+      const corruptItem = makeContextItem(
+        "ctx_corrupt",
+        subtaskScope("prj_corrupt", "bt_corrupt_a", "st_corrupt_a"),
+      );
+      storage.createContextItem(corruptItem);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE context_items SET subtask_id = ? WHERE id = ?")
+        .run("st_corrupt_b", corruptItem.id);
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expect(reopened.listContextItemsByScope(projectScope("prj_valid"))).toEqual([
+          validItem,
+        ]);
+        expect(
+          captureTaskStorageError(() => reopened.getContextItemById(corruptItem.id)),
+        ).toMatchObject({ code: "MALFORMED_STORED_DATA" });
+        expect(
+          captureTaskStorageError(() =>
+            reopened.listContextItemsByScope(
+              subtaskScope("prj_corrupt", "bt_corrupt_a", "st_corrupt_b"),
+            ),
+          ),
+        ).toMatchObject({ code: "PARENT_NOT_FOUND" });
+      } finally {
+        reopened.close();
+      }
     });
   });
 });

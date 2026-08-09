@@ -608,15 +608,16 @@ export class TaskStorage {
 
   listContextItemsByScope(input: ContextScope): readonly ContextItem[] {
     const scope = parseContextScope(input);
-    return this.#operation(() =>
-      this.#database
+    return this.#operation(() => {
+      this.#validateContextHierarchy(scope);
+      return this.#database
         .select()
         .from(contextItemsTable)
         .where(contextScopePredicate(scope))
         .orderBy(asc(contextItemsTable.effectiveAt), asc(contextItemsTable.id))
         .all()
-        .map(contextItemFromRow),
-    );
+        .map((row) => this.#contextItemFromRow(row));
+    });
   }
 
   supersedeContextItem(input: ContextItem): ContextItem {
@@ -740,38 +741,63 @@ export class TaskStorage {
       .from(contextItemsTable)
       .where(eq(contextItemsTable.id, contextItemId))
       .get();
-    return row === undefined ? null : contextItemFromRow(row);
+    return row === undefined ? null : this.#contextItemFromRow(row);
   }
 
   #validateContextHierarchy(scope: ContextScope): void {
-    if (this.#getProject(scope.projectId) === null) {
+    const invalidRelationship = this.#invalidContextHierarchyRelationship(scope);
+    if (invalidRelationship === "PROJECT") {
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
         "The Context Item Project does not exist.",
       );
     }
-    if (scope.scopeType === "PROJECT") {
-      return;
-    }
-
-    const bigTask = this.#getBigTask(scope.bigTaskId);
-    if (bigTask === null || bigTask.projectId !== scope.projectId) {
+    if (invalidRelationship === "BIG_TASK") {
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
         "The Context Item Big Task hierarchy does not exist.",
       );
     }
-    if (scope.scopeType === "BIG_TASK") {
-      return;
-    }
-
-    const subtask = this.#getSubtask(scope.subtaskId);
-    if (subtask === null || subtask.bigTaskId !== scope.bigTaskId) {
+    if (invalidRelationship === "SUBTASK") {
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
         "The Context Item Subtask hierarchy does not exist.",
       );
     }
+  }
+
+  #contextItemFromRow(row: ContextItemRow): ContextItem {
+    const contextItem = contextItemFromRow(row);
+    if (
+      this.#invalidContextHierarchyRelationship(deriveContextScope(contextItem)) !== null
+    ) {
+      throw malformedStoredData();
+    }
+    return contextItem;
+  }
+
+  #invalidContextHierarchyRelationship(
+    scope: ContextScope,
+  ): "PROJECT" | "BIG_TASK" | "SUBTASK" | null {
+    if (this.#getProject(scope.projectId) === null) {
+      return "PROJECT";
+    }
+    if (scope.scopeType === "PROJECT") {
+      return null;
+    }
+
+    const bigTask = this.#getBigTask(scope.bigTaskId);
+    if (bigTask === null || bigTask.projectId !== scope.projectId) {
+      return "BIG_TASK";
+    }
+    if (scope.scopeType === "BIG_TASK") {
+      return null;
+    }
+
+    const subtask = this.#getSubtask(scope.subtaskId);
+    return subtask === null || subtask.bigTaskId !== scope.bigTaskId
+      ? "SUBTASK"
+      : null;
   }
 
   #insertContextItem(contextItem: ContextItem, timestamp: string): void {
