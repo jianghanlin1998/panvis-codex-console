@@ -1,0 +1,638 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "248bc959-e47c-442e-8e20-c811d7c11bd0",
+  "prevIds": [
+    "00000000-0000-0000-0000-000000000000"
+  ],
+  "ddl": [
+    {
+      "name": "big_tasks",
+      "entityType": "tables"
+    },
+    {
+      "name": "projects",
+      "entityType": "tables"
+    },
+    {
+      "name": "subtasks",
+      "entityType": "tables"
+    },
+    {
+      "name": "task_dependencies",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "goal",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "rationale",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_in",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_out",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "acceptance_criteria",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "big_tasks"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "slug",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "repository_kind",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "repository_value",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "default_branch",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "max_active_coding_subtasks",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "projects"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "big_task_id",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "goal",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_in",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_out",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "acceptance_criteria",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "untouched_areas",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "start_policy",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "delegation_policy",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recommended_reasoning_level",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prompt_seed",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "subtasks"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "upstream_subtask_id",
+      "entityType": "columns",
+      "table": "task_dependencies"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "downstream_subtask_id",
+      "entityType": "columns",
+      "table": "task_dependencies"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "dependency_type",
+      "entityType": "columns",
+      "table": "task_dependencies"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "task_dependencies"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "projects",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "CASCADE",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_big_tasks_project_id_projects_id_fk",
+      "entityType": "fks",
+      "table": "big_tasks"
+    },
+    {
+      "columns": [
+        "big_task_id"
+      ],
+      "tableTo": "big_tasks",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "CASCADE",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_subtasks_big_task_id_big_tasks_id_fk",
+      "entityType": "fks",
+      "table": "subtasks"
+    },
+    {
+      "columns": [
+        "upstream_subtask_id"
+      ],
+      "tableTo": "subtasks",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "CASCADE",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_task_dependencies_upstream_subtask_id_subtasks_id_fk",
+      "entityType": "fks",
+      "table": "task_dependencies"
+    },
+    {
+      "columns": [
+        "downstream_subtask_id"
+      ],
+      "tableTo": "subtasks",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "CASCADE",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_task_dependencies_downstream_subtask_id_subtasks_id_fk",
+      "entityType": "fks",
+      "table": "task_dependencies"
+    },
+    {
+      "columns": [
+        "upstream_subtask_id",
+        "downstream_subtask_id"
+      ],
+      "nameExplicit": false,
+      "name": "task_dependencies_pk",
+      "entityType": "pks",
+      "table": "task_dependencies"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "big_tasks_pk",
+      "table": "big_tasks",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "projects_pk",
+      "table": "projects",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "subtasks_pk",
+      "table": "subtasks",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "big_tasks_project_id_index",
+      "entityType": "indexes",
+      "table": "big_tasks"
+    },
+    {
+      "columns": [
+        {
+          "value": "slug",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "projects_slug_unique",
+      "entityType": "indexes",
+      "table": "projects"
+    },
+    {
+      "columns": [
+        {
+          "value": "big_task_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "subtasks_big_task_id_index",
+      "entityType": "indexes",
+      "table": "subtasks"
+    },
+    {
+      "columns": [
+        {
+          "value": "upstream_subtask_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "task_dependencies_upstream_index",
+      "entityType": "indexes",
+      "table": "task_dependencies"
+    },
+    {
+      "columns": [
+        {
+          "value": "downstream_subtask_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "task_dependencies_downstream_index",
+      "entityType": "indexes",
+      "table": "task_dependencies"
+    },
+    {
+      "value": "\"status\" in ('IN_PROGRESS', 'DONE')",
+      "name": "big_tasks_status_check",
+      "entityType": "checks",
+      "table": "big_tasks"
+    },
+    {
+      "value": "\"repository_kind\" in ('PATH', 'REFERENCE')",
+      "name": "projects_repository_kind_check",
+      "entityType": "checks",
+      "table": "projects"
+    },
+    {
+      "value": "\"max_active_coding_subtasks\" between 1 and 2",
+      "name": "projects_max_active_coding_subtasks_check",
+      "entityType": "checks",
+      "table": "projects"
+    },
+    {
+      "value": "\"status\" in ('TODO', 'IN_PROGRESS', 'QA_DEBUG', 'DONE', 'DROPPED', 'ARCHIVED')",
+      "name": "subtasks_status_check",
+      "entityType": "checks",
+      "table": "subtasks"
+    },
+    {
+      "value": "\"start_policy\" in ('MANUAL', 'WHEN_READY')",
+      "name": "subtasks_start_policy_check",
+      "entityType": "checks",
+      "table": "subtasks"
+    },
+    {
+      "value": "\"delegation_policy\" in ('NONE', 'READ_ONLY_AUXILIARY', 'REVIEW_ONLY')",
+      "name": "subtasks_delegation_policy_check",
+      "entityType": "checks",
+      "table": "subtasks"
+    },
+    {
+      "value": "\"recommended_reasoning_level\" in ('LOW', 'MEDIUM', 'HIGH', 'XHIGH')",
+      "name": "subtasks_reasoning_level_check",
+      "entityType": "checks",
+      "table": "subtasks"
+    },
+    {
+      "value": "\"upstream_subtask_id\" <> \"downstream_subtask_id\"",
+      "name": "task_dependencies_no_self_check",
+      "entityType": "checks",
+      "table": "task_dependencies"
+    },
+    {
+      "value": "\"dependency_type\" in ('BLOCKING', 'INFORMATIONAL')",
+      "name": "task_dependencies_type_check",
+      "entityType": "checks",
+      "table": "task_dependencies"
+    }
+  ],
+  "renames": []
+}

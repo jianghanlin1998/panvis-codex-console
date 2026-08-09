@@ -1,5 +1,10 @@
 {
   "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@codex-task-console/domain": ["packages/domain/src/index.ts"],
+      "@codex-task-console/storage": ["packages/storage/src/index.ts"]
+    },
     "target": "ES2022",
     "lib": ["ES2022"],
     "module": "NodeNext",

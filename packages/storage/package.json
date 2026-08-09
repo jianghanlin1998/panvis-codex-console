@@ -1,0 +1,29 @@
+{
+  "name": "@codex-task-console/storage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "files": [
+    "dist",
+    "drizzle"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "generate:migrations": "drizzle-kit generate --config=drizzle.config.ts"
+  },
+  "dependencies": {
+    "@codex-task-console/domain": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.4"
+  },
+  "devDependencies": {
+    "drizzle-kit": "1.0.0-rc.4"
+  }
+}

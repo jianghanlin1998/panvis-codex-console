@@ -2,11 +2,11 @@
 
 Codex Task Console is an independent, local-first internal development tool under development. It is not part of the Panvis product code and is not yet authorized as Hanlin's active operating workflow.
 
-The current S0A scope contains only repository foundations and deterministic domain contracts for task hierarchy, context metadata, dependencies, lifecycle transitions, native-subagent ownership boundaries, and centralized usage budgets. It does not provide a working Console application. No ChatGPT Project Instructions or Project Sources have been changed or activated.
+The completed foundation slices currently provide deterministic domain contracts and local embedded storage for Projects, Big Tasks, Subtasks, and Task Dependencies. They do not provide a working Console application. No ChatGPT Project Instructions or Project Sources have been changed or activated.
 
 ## Development
 
-Prerequisites: Node.js 20 or newer and pnpm 11.
+Prerequisites: Node.js 24 or newer and pnpm 11.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -16,4 +16,4 @@ pnpm test
 pnpm build
 ```
 
-Workspace packages are under `packages/`. The deliberate public API for the domain package is exported from `packages/domain/src/index.ts`.
+Workspace packages are under `packages/`. Deliberate public APIs are exported by the domain and storage package entry points. See `docs/S0A_SCOPE.md` and `docs/S0B1_SCOPE.md` for the implemented boundaries.

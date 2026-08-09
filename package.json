@@ -5,16 +5,17 @@
   "type": "module",
   "packageManager": "pnpm@11.16.0",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
-    "build": "tsc -b packages/shared/tsconfig.build.json packages/domain/tsconfig.build.json --pretty false",
+    "build": "tsc -b packages/shared/tsconfig.build.json packages/domain/tsconfig.build.json packages/storage/tsconfig.build.json --pretty false",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "typecheck": "tsc --noEmit --pretty false"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@types/node": "^24.13.3",
     "eslint": "^9.33.0",
     "globals": "^16.3.0",
     "typescript": "^5.9.2",
