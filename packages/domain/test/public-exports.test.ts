@@ -4,7 +4,11 @@ import {
   BudgetPolicySchema,
   ContextItemSchema,
   DurableTaskSchema,
+  ExecutionProviderDescriptorSchema,
   NativeSubagentOwnershipSchema,
+  NormalizedUsageSchema,
+  ProviderRunReferenceSchema,
+  ProviderThreadReferenceSchema,
   SubtaskDependencySchema,
   validateBudgetPolicy,
   validateSubtaskDependencies,
@@ -18,6 +22,10 @@ describe("domain package public exports", () => {
     expect(SubtaskDependencySchema).toBeDefined();
     expect(NativeSubagentOwnershipSchema).toBeDefined();
     expect(BudgetPolicySchema).toBeDefined();
+    expect(ExecutionProviderDescriptorSchema).toBeDefined();
+    expect(ProviderThreadReferenceSchema).toBeDefined();
+    expect(ProviderRunReferenceSchema).toBeDefined();
+    expect(NormalizedUsageSchema).toBeDefined();
     expect(validateSubtaskDependencies).toBeTypeOf("function");
     expect(validateSubtaskTransition).toBeTypeOf("function");
     expect(validateBudgetPolicy).toBeTypeOf("function");

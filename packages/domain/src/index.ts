@@ -104,3 +104,31 @@ export type {
   BudgetPolicyValidationErrorCode,
   BudgetPolicyValidationResult,
 } from "./budgets.js";
+
+export {
+  EXECUTION_PROVIDER_CAPABILITIES,
+  ExecutionProviderCapabilitySchema,
+  ExecutionProviderDescriptorSchema,
+  ExecutionProviderIdSchema,
+  NormalizedUsageSchema,
+  ProviderCapabilitySetSchema,
+  ProviderModelIdSchema,
+  ProviderModelReferenceSchema,
+  ProviderRunIdSchema,
+  ProviderRunReferenceSchema,
+  ProviderThreadIdSchema,
+  ProviderThreadReferenceSchema,
+} from "./execution.js";
+export type {
+  ExecutionProviderCapability,
+  ExecutionProviderDescriptor,
+  ExecutionProviderId,
+  NormalizedUsage,
+  ProviderCapabilitySet,
+  ProviderModelId,
+  ProviderModelReference,
+  ProviderRunId,
+  ProviderRunReference,
+  ProviderThreadId,
+  ProviderThreadReference,
+} from "./execution.js";
