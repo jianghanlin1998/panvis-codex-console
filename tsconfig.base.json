@@ -2,6 +2,7 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
+      "@codex-task-console/codex-adapter": ["packages/codex-adapter/src/index.ts"],
       "@codex-task-console/domain": ["packages/domain/src/index.ts"],
       "@codex-task-console/storage": ["packages/storage/src/index.ts"]
     },

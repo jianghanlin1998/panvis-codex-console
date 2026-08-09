@@ -1,0 +1,2 @@
+{"direction":"client-to-server","message":{"id":3,"method":"turn/start","params":{"threadId":"thread-fixture-1","input":[{"type":"text","text":"Fixture failure request."}]}}}
+{"direction":"server-to-client","message":{"id":3,"error":{"code":-32005,"message":"Sanitized fixture protocol failure."}}}

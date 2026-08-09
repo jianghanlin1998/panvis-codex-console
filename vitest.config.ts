@@ -5,6 +5,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@codex-task-console/codex-adapter": fileURLToPath(
+        new URL("./packages/codex-adapter/src/index.ts", import.meta.url),
+      ),
       "@codex-task-console/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
       ),

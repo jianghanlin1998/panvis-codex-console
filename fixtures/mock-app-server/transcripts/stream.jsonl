@@ -1,0 +1,5 @@
+{"direction":"client-to-server","message":{"id":3,"method":"turn/start","params":{"threadId":"thread-fixture-1","input":[{"type":"text","text":"Fixture request."}]}}}
+{"direction":"server-to-client","message":{"method":"turn/started","params":{"threadId":"thread-fixture-1","turn":{"id":"turn-fixture-1","status":"inProgress"}}}}
+{"direction":"server-to-client","message":{"method":"item/agentMessage/delta","params":{"threadId":"thread-fixture-1","turnId":"turn-fixture-1","itemId":"item-agent-fixture-1","delta":"Deterministic fixture response."}}}
+{"direction":"server-to-client","message":{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-fixture-1","turnId":"turn-fixture-1","tokenUsage":{"last":{"inputTokens":100,"cachedInputTokens":20,"outputTokens":40,"totalTokens":140}}}}}
+{"direction":"server-to-client","message":{"method":"turn/completed","params":{"threadId":"thread-fixture-1","turn":{"id":"turn-fixture-1","status":"completed"}}}}

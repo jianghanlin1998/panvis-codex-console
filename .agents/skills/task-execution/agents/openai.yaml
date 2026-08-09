@@ -1,0 +1,6 @@
+interface:
+  display_name: "Task Execution"
+  short_description: "Execute approved repository task contracts"
+  default_prompt: "Use $task-execution to execute the supplied Task Contract within repository scope and produce the required Handoff."
+policy:
+  allow_implicit_invocation: false

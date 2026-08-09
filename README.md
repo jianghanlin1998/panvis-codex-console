@@ -2,7 +2,7 @@
 
 Codex Task Console is an independent, local-first internal development tool under development. It is not part of the Panvis product code and is not yet authorized as Hanlin's active operating workflow.
 
-The completed foundation slices currently provide deterministic domain contracts and local embedded storage for Projects, Big Tasks, Subtasks, and Task Dependencies. They do not provide a working Console application. No ChatGPT Project Instructions or Project Sources have been changed or activated.
+The completed foundation slices currently provide deterministic domain contracts, local embedded storage for Projects, Big Tasks, Subtasks, and Task Dependencies, and version-specific mock coverage for a narrow Codex App Server protocol subset. They do not provide a working Console application or live App Server integration. No ChatGPT Project Instructions or Project Sources have been changed or activated.
 
 ## Development
 
@@ -16,4 +16,10 @@ pnpm test
 pnpm build
 ```
 
-Workspace packages are under `packages/`. Deliberate public APIs are exported by the domain and storage package entry points. See `docs/S0A_SCOPE.md` and `docs/S0B1_SCOPE.md` for the implemented boundaries.
+To verify the installed Codex protocol generators without starting App Server, provide an explicit temporary or ignored output path:
+
+```sh
+pnpm codex:schema:generate -- /absolute/temporary/path
+```
+
+Workspace packages are under `packages/`. Deliberate public APIs are exported by package entry points. See `docs/S0A_SCOPE.md`, `docs/S0B1_SCOPE.md`, and `docs/S0C_SCOPE.md` for the implemented boundaries.

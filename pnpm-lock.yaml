@@ -30,6 +30,8 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@24.13.3)(jiti@2.7.0)(supports-color@7.2.0)
 
+  packages/codex-adapter: {}
+
   packages/domain:
     dependencies:
       zod:

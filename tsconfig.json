@@ -4,6 +4,7 @@
     "noEmit": true
   },
   "include": [
+    "fixtures/**/*.ts",
     "packages/**/*.ts",
     "vitest.config.ts"
   ],
