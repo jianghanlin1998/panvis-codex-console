@@ -10,7 +10,7 @@ import {
   ContextScopeSchema,
   ProjectSchema,
   SubtaskDependencySchema,
-  SubtaskSchema,
+  SubtaskCreateInputSchema,
 } from "@codex-task-console/domain";
 import type {
   AuditActorType,
@@ -22,7 +22,7 @@ import type {
   ContextScope,
   ContextStatus,
   Project,
-  Subtask,
+  SubtaskCreateInput,
   SubtaskDependency,
 } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
@@ -65,8 +65,8 @@ export const makeSubtask = (
   bigTaskId = "bt_v1",
   status: "TODO" | "IN_PROGRESS" | "QA_DEBUG" | "DONE" | "DROPPED" | "ARCHIVED" =
     "TODO",
-): Subtask =>
-  SubtaskSchema.parse({
+): SubtaskCreateInput =>
+  SubtaskCreateInputSchema.parse({
     recordType: "SUBTASK",
     id,
     bigTaskId,
@@ -77,6 +77,7 @@ export const makeSubtask = (
     acceptanceCriteria: ["Data round-trips"],
     untouchedAreas: ["Panvis"],
     status,
+    maturity: "NOT_STARTED",
     startPolicy: "MANUAL",
     delegationPolicy: "NONE",
     recommendedReasoningLevel: "HIGH",
@@ -87,11 +88,16 @@ export const makeDependency = (
   upstreamSubtaskId: string,
   downstreamSubtaskId: string,
   dependencyType: "BLOCKING" | "INFORMATIONAL" = "BLOCKING",
+  requiredGate: "NONE" | "HARDENED" | "ACCEPTED" =
+    dependencyType === "BLOCKING" ? "ACCEPTED" : "NONE",
+  reason = `Dependency ${upstreamSubtaskId} -> ${downstreamSubtaskId}.`,
 ): SubtaskDependency =>
   SubtaskDependencySchema.parse({
     upstreamSubtaskId,
     downstreamSubtaskId,
     dependencyType,
+    requiredGate,
+    reason,
   });
 
 interface MakeContextItemOptions {

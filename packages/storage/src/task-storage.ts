@@ -12,6 +12,7 @@ import {
   ContextScopeSchema,
   ProjectIdSchema,
   ProjectSchema,
+  SubtaskCreateInputSchema,
   SubtaskDependencySchema,
   SubtaskIdSchema,
   SubtaskSchema,
@@ -32,6 +33,7 @@ import type {
   Project,
   ProjectId,
   Subtask,
+  SubtaskCreateInput,
   SubtaskDependency,
   SubtaskId,
 } from "@codex-task-console/domain";
@@ -84,8 +86,8 @@ const parseBigTaskInput = (input: BigTask): BigTask => {
   return result.data;
 };
 
-const parseSubtaskInput = (input: Subtask): Subtask => {
-  const result = SubtaskSchema.safeParse(input);
+const parseSubtaskInput = (input: SubtaskCreateInput): SubtaskCreateInput => {
+  const result = SubtaskCreateInputSchema.safeParse(input);
   if (!result.success) {
     throw invalidInput("Subtask");
   }
@@ -234,6 +236,7 @@ const subtaskFromRow = (row: SubtaskRow): Subtask => {
     acceptanceCriteria: decodeStringArray(row.acceptanceCriteria),
     untouchedAreas: decodeStringArray(row.untouchedAreas),
     status: row.status,
+    maturity: row.maturity,
     startPolicy: row.startPolicy,
     delegationPolicy: row.delegationPolicy,
     recommendedReasoningLevel: row.recommendedReasoningLevel,
@@ -249,9 +252,18 @@ const dependencyFromRow = (row: {
   readonly upstreamSubtaskId: string;
   readonly downstreamSubtaskId: string;
   readonly dependencyType: string;
+  readonly requiredGate: string;
+  readonly reason: string;
 }): SubtaskDependency => {
   const result = SubtaskDependencySchema.safeParse(row);
-  if (!result.success) {
+  if (
+    !result.success ||
+    result.data.upstreamSubtaskId !== row.upstreamSubtaskId ||
+    result.data.downstreamSubtaskId !== row.downstreamSubtaskId ||
+    result.data.dependencyType !== row.dependencyType ||
+    result.data.requiredGate !== row.requiredGate ||
+    result.data.reason !== row.reason
+  ) {
     throw malformedStoredData();
   }
   return result.data;
@@ -674,7 +686,7 @@ export class TaskStorage {
     );
   }
 
-  createSubtask(input: Subtask): Subtask {
+  createSubtask(input: SubtaskCreateInput): Subtask {
     const subtask = parseSubtaskInput(input);
     return this.#operation(() => {
       if (this.#getBigTask(subtask.bigTaskId) === null) {
@@ -697,6 +709,7 @@ export class TaskStorage {
           acceptanceCriteria: encodeStringArray(subtask.acceptanceCriteria),
           untouchedAreas: encodeStringArray(subtask.untouchedAreas),
           status: subtask.status,
+          maturity: subtask.maturity,
           startPolicy: subtask.startPolicy,
           delegationPolicy: subtask.delegationPolicy,
           recommendedReasoningLevel: subtask.recommendedReasoningLevel,
@@ -786,6 +799,8 @@ export class TaskStorage {
                 upstreamSubtaskId: dependency.upstreamSubtaskId,
                 downstreamSubtaskId: dependency.downstreamSubtaskId,
                 dependencyType: dependency.dependencyType,
+                requiredGate: dependency.requiredGate,
+                reason: dependency.reason,
                 createdAt: timestamp,
               })),
             )
@@ -1387,6 +1402,13 @@ export class TaskStorage {
   }
 
   #allDependencySubtasks(): readonly DependencySubtask[] {
+    const bigTaskIds = new Set(
+      this.#database
+        .select({ id: bigTasksTable.id })
+        .from(bigTasksTable)
+        .all()
+        .map(({ id }) => id),
+    );
     return this.#database
       .select({ id: subtasksTable.id, bigTaskId: subtasksTable.bigTaskId })
       .from(subtasksTable)
@@ -1394,7 +1416,13 @@ export class TaskStorage {
       .map((row) => {
         const id = SubtaskIdSchema.safeParse(row.id);
         const bigTaskId = BigTaskIdSchema.safeParse(row.bigTaskId);
-        if (!id.success || !bigTaskId.success) {
+        if (
+          !id.success ||
+          !bigTaskId.success ||
+          id.data !== row.id ||
+          bigTaskId.data !== row.bigTaskId ||
+          !bigTaskIds.has(row.bigTaskId)
+        ) {
           throw malformedStoredData();
         }
         return { id: id.data, bigTaskId: bigTaskId.data };
@@ -1402,20 +1430,15 @@ export class TaskStorage {
   }
 
   #listDependencies(bigTaskId: BigTaskId): readonly SubtaskDependency[] {
-    return this.#database
+    const dependencies = this.#database
       .select({
         upstreamSubtaskId: taskDependenciesTable.upstreamSubtaskId,
         downstreamSubtaskId: taskDependenciesTable.downstreamSubtaskId,
         dependencyType: taskDependenciesTable.dependencyType,
+        requiredGate: taskDependenciesTable.requiredGate,
+        reason: taskDependenciesTable.reason,
       })
       .from(taskDependenciesTable)
-      .innerJoin(
-        subtasksTable,
-        and(
-          eq(taskDependenciesTable.downstreamSubtaskId, subtasksTable.id),
-          eq(subtasksTable.bigTaskId, bigTaskId),
-        ),
-      )
       .orderBy(
         asc(taskDependenciesTable.upstreamSubtaskId),
         asc(taskDependenciesTable.downstreamSubtaskId),
@@ -1423,6 +1446,17 @@ export class TaskStorage {
       )
       .all()
       .map(dependencyFromRow);
+    const subtasks = this.#allDependencySubtasks();
+    const validation = validateSubtaskDependencies(subtasks, dependencies);
+    if (!validation.valid) {
+      throw malformedStoredData();
+    }
+    const subtasksById = new Map(subtasks.map((subtask) => [subtask.id, subtask]));
+    return dependencies.filter(
+      (dependency) =>
+        subtasksById.get(dependency.upstreamSubtaskId)?.bigTaskId === bigTaskId &&
+        subtasksById.get(dependency.downstreamSubtaskId)?.bigTaskId === bigTaskId,
+    );
   }
 
   #timestamp(): string {

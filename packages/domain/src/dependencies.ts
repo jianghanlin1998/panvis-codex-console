@@ -2,16 +2,35 @@ import { z } from "zod";
 
 import { SubtaskIdSchema } from "./identifiers.js";
 import type { BigTaskId, SubtaskId } from "./identifiers.js";
+import { SubtaskMaturitySchema } from "./tasks.js";
+import type { SubtaskMaturity } from "./tasks.js";
 
 export const DependencyTypeSchema = z.enum(["BLOCKING", "INFORMATIONAL"]);
+export const DependencyRequiredGateSchema = z.enum(["NONE", "HARDENED", "ACCEPTED"]);
 
-export const SubtaskDependencySchema = z
-  .object({
-    upstreamSubtaskId: SubtaskIdSchema,
-    downstreamSubtaskId: SubtaskIdSchema,
-    dependencyType: DependencyTypeSchema,
-  })
-  .strict();
+const dependencyReason = z.string().trim().min(1).max(1_000);
+const dependencyEndpoints = {
+  upstreamSubtaskId: SubtaskIdSchema,
+  downstreamSubtaskId: SubtaskIdSchema,
+  reason: dependencyReason,
+} as const;
+
+export const SubtaskDependencySchema = z.discriminatedUnion("dependencyType", [
+  z
+    .object({
+      ...dependencyEndpoints,
+      dependencyType: z.literal("BLOCKING"),
+      requiredGate: z.enum(["HARDENED", "ACCEPTED"]),
+    })
+    .strict(),
+  z
+    .object({
+      ...dependencyEndpoints,
+      dependencyType: z.literal("INFORMATIONAL"),
+      requiredGate: z.literal("NONE"),
+    })
+    .strict(),
+]);
 
 export const DependencyValidationErrorCodeSchema = z.enum([
   "SELF_DEPENDENCY",
@@ -23,12 +42,17 @@ export const DependencyValidationErrorCodeSchema = z.enum([
 ]);
 
 export type DependencyType = z.infer<typeof DependencyTypeSchema>;
+export type DependencyRequiredGate = z.infer<typeof DependencyRequiredGateSchema>;
 export type SubtaskDependency = z.infer<typeof SubtaskDependencySchema>;
 export type DependencyValidationErrorCode = z.infer<typeof DependencyValidationErrorCodeSchema>;
 
 export interface DependencySubtask {
   readonly id: SubtaskId;
   readonly bigTaskId: BigTaskId;
+}
+
+export interface DependencyReadinessSubtask extends DependencySubtask {
+  readonly maturity: SubtaskMaturity;
 }
 
 export interface DependencyValidationError {
@@ -53,7 +77,7 @@ export const validateSubtaskDependencies = (
   }
 
   const seenEdges = new Set<string>();
-  const graphEdges: SubtaskDependency[] = [];
+  const blockingGraphEdges: SubtaskDependency[] = [];
 
   dependencies.forEach((dependency, edgeIndex) => {
     const { upstreamSubtaskId: upstreamId, downstreamSubtaskId: downstreamId } = dependency;
@@ -108,20 +132,21 @@ export const validateSubtaskDependencies = (
     }
 
     if (
+      dependency.dependencyType === "BLOCKING" &&
       upstream !== undefined &&
       downstream !== undefined &&
       upstream.bigTaskId === downstream.bigTaskId &&
       upstreamId !== downstreamId
     ) {
-      graphEdges.push(dependency);
+      blockingGraphEdges.push(dependency);
     }
   });
 
-  const cycleIds = findCycleMembers(subtasks, graphEdges);
+  const cycleIds = findCycleMembers(subtasks, blockingGraphEdges);
   if (cycleIds.length > 0) {
     errors.push({
       code: "DEPENDENCY_CYCLE",
-      message: "The Subtask dependency graph must be acyclic.",
+      message: "The blocking Subtask dependency graph must be acyclic.",
       subtaskIds: cycleIds,
     });
   }
@@ -178,4 +203,114 @@ const findCycleMembers = (
     .filter(([, degree]) => degree > 0)
     .map(([id]) => id)
     .sort();
+};
+
+export interface DependencyReadinessBlocker {
+  readonly upstreamSubtaskId: SubtaskId;
+  readonly requiredGate: Exclude<DependencyRequiredGate, "NONE">;
+  readonly actualMaturity: SubtaskMaturity;
+  readonly reason: string;
+}
+
+export interface DependencyReadinessResult {
+  readonly valid: boolean;
+  readonly ready: boolean;
+  readonly blockers: readonly DependencyReadinessBlocker[];
+  readonly errors: readonly DependencyValidationError[];
+  readonly errorCodes: readonly DependencyValidationErrorCode[];
+}
+
+const satisfiesRequiredGate = (
+  maturity: SubtaskMaturity,
+  requiredGate: DependencyRequiredGate,
+): boolean => {
+  switch (requiredGate) {
+    case "NONE":
+      return true;
+    case "HARDENED":
+      return maturity === "HARDENED" || maturity === "ACCEPTED";
+    case "ACCEPTED":
+      return maturity === "ACCEPTED";
+  }
+};
+
+export const evaluateSubtaskDependencyReadiness = (
+  subtasks: readonly DependencyReadinessSubtask[],
+  dependencies: readonly SubtaskDependency[],
+  downstreamSubtaskId: SubtaskId,
+): DependencyReadinessResult => {
+  const validation = validateSubtaskDependencies(subtasks, dependencies);
+  const downstreamExists = subtasks.some(({ id }) => id === downstreamSubtaskId);
+  const errors: DependencyValidationError[] = validation.valid
+    ? []
+    : [...validation.errors];
+
+  if (
+    !downstreamExists &&
+    !errors.some(
+      (error) =>
+        error.code === "MISSING_DOWNSTREAM_SUBTASK" &&
+        error.subtaskIds.includes(downstreamSubtaskId),
+    )
+  ) {
+    errors.push({
+      code: "MISSING_DOWNSTREAM_SUBTASK",
+      message: "The downstream Subtask evaluated for readiness does not exist.",
+      subtaskIds: [downstreamSubtaskId],
+    });
+  }
+
+  if (errors.length > 0) {
+    return {
+      valid: false,
+      ready: false,
+      blockers: [],
+      errors,
+      errorCodes: errors.map(({ code }) => code),
+    };
+  }
+
+  const subtasksById = new Map(subtasks.map((subtask) => [subtask.id, subtask]));
+  const blockers = dependencies
+    .filter(
+      (
+        dependency,
+      ): dependency is Extract<
+        SubtaskDependency,
+        { readonly dependencyType: "BLOCKING" }
+      > =>
+        dependency.dependencyType === "BLOCKING" &&
+        dependency.downstreamSubtaskId === downstreamSubtaskId,
+    )
+    .flatMap((dependency): DependencyReadinessBlocker[] => {
+      const upstream = subtasksById.get(dependency.upstreamSubtaskId);
+      if (
+        upstream === undefined ||
+        satisfiesRequiredGate(upstream.maturity, dependency.requiredGate)
+      ) {
+        return [];
+      }
+      return [
+        {
+          upstreamSubtaskId: dependency.upstreamSubtaskId,
+          requiredGate: dependency.requiredGate,
+          actualMaturity: SubtaskMaturitySchema.parse(upstream.maturity),
+          reason: dependency.reason,
+        },
+      ];
+    })
+    .sort(
+      (left, right) =>
+        left.upstreamSubtaskId.localeCompare(right.upstreamSubtaskId) ||
+        left.requiredGate.localeCompare(right.requiredGate) ||
+        left.reason.localeCompare(right.reason),
+    );
+
+  return {
+    valid: true,
+    ready: blockers.length === 0,
+    blockers,
+    errors: [],
+    errorCodes: [],
+  };
 };

@@ -4,6 +4,8 @@ import {
   BigTaskSchema,
   DurableTaskSchema,
   ProjectSchema,
+  SubtaskCreateInputSchema,
+  SubtaskMaturitySchema,
   SubtaskSchema,
 } from "../src/index.js";
 
@@ -41,6 +43,7 @@ const validSubtask = {
   acceptanceCriteria: ["All deterministic tests pass"],
   untouchedAreas: ["Panvis"],
   status: "TODO",
+  maturity: "NOT_STARTED",
   startPolicy: "MANUAL",
   delegationPolicy: "NONE",
   recommendedReasoningLevel: "HIGH",
@@ -58,6 +61,38 @@ describe("task schemas", () => {
 
   it("parses a valid Subtask", () => {
     expect(SubtaskSchema.parse(validSubtask).promptSeed).toBe(validSubtask.promptSeed);
+  });
+
+  it("defines exactly four explicit Subtask maturity values", () => {
+    expect(SubtaskMaturitySchema.options).toEqual([
+      "NOT_STARTED",
+      "IMPLEMENTED",
+      "HARDENED",
+      "ACCEPTED",
+    ]);
+    expect(SubtaskMaturitySchema.safeParse("DONE").success).toBe(false);
+  });
+
+  it("requires explicit maturity independently of board status", () => {
+    const withoutMaturity: Record<string, unknown> = { ...validSubtask };
+    delete withoutMaturity.maturity;
+    expect(SubtaskSchema.safeParse(withoutMaturity).success).toBe(false);
+    expect(SubtaskSchema.parse({ ...validSubtask, status: "DONE" }).maturity).toBe(
+      "NOT_STARTED",
+    );
+    expect(
+      SubtaskSchema.parse({ ...validSubtask, status: "TODO", maturity: "ACCEPTED" })
+        .maturity,
+    ).toBe("ACCEPTED");
+  });
+
+  it("limits the Subtask creation contract to NOT_STARTED maturity", () => {
+    expect(SubtaskCreateInputSchema.parse(validSubtask).maturity).toBe("NOT_STARTED");
+    for (const maturity of ["IMPLEMENTED", "HARDENED", "ACCEPTED"] as const) {
+      expect(
+        SubtaskCreateInputSchema.safeParse({ ...validSubtask, maturity }).success,
+      ).toBe(false);
+    }
   });
 
   it("rejects an invalid task status", () => {

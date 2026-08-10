@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { describe, expect, it } from "vitest";
 
-import type { BigTask, Subtask } from "@codex-task-console/domain";
+import type { BigTask, SubtaskCreateInput } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import {
   fixedClock,
@@ -68,6 +68,13 @@ describe("Big Task storage", () => {
 });
 
 describe("Subtask storage", () => {
+  it("exposes no public maturity mutation API", () => {
+    withMemoryStorage((storage) => {
+      expect("setSubtaskMaturity" in storage).toBe(false);
+      expect("updateSubtaskMaturity" in storage).toBe(false);
+    });
+  });
+
   it("creates and round-trips status, policies, prompt seed, and arrays", () => {
     withMemoryStorage((storage) => {
       storage.createProject(makeProject());
@@ -80,6 +87,7 @@ describe("Subtask storage", () => {
       };
       expect(storage.createSubtask(subtask)).toEqual(subtask);
       expect(storage.getSubtaskById(subtask.id)).toEqual(subtask);
+      expect(subtask.maturity).toBe("NOT_STARTED");
     });
   });
 
@@ -116,7 +124,10 @@ describe("Subtask storage", () => {
     withMemoryStorage((storage) => {
       storage.createProject(makeProject());
       storage.createBigTask(makeBigTask());
-      const invalid = { ...makeSubtask(), startPolicy: "AUTOMATIC" } as unknown as Subtask;
+      const invalid = {
+        ...makeSubtask(),
+        startPolicy: "AUTOMATIC",
+      } as unknown as SubtaskCreateInput;
       let thrown: unknown;
       try {
         storage.createSubtask(invalid);
@@ -125,6 +136,91 @@ describe("Subtask storage", () => {
       }
       expect(thrown).toMatchObject({ code: "INVALID_INPUT" });
       expect(storage.listSubtasksByBigTask(makeBigTask().id)).toEqual([]);
+    });
+  });
+
+  it.each(["IMPLEMENTED", "HARDENED", "ACCEPTED"] as const)(
+    "rejects creation at %s maturity",
+    (maturity) => {
+      withMemoryStorage((storage) => {
+        storage.createProject(makeProject());
+        storage.createBigTask(makeBigTask());
+        const invalid = { ...makeSubtask(), maturity } as unknown as SubtaskCreateInput;
+        expect(() => storage.createSubtask(invalid)).toThrow(
+          expect.objectContaining({ code: "INVALID_INPUT" }),
+        );
+        expect(storage.listSubtasksByBigTask(makeBigTask().id)).toEqual([]);
+      });
+    },
+  );
+
+  it("persists NOT_STARTED maturity through list and repeated reopen", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const first = openTaskDatabase({ databasePath, clock: fixedClock });
+      first.createProject(makeProject());
+      first.createBigTask(makeBigTask());
+      const subtask = makeSubtask("st_maturity");
+      first.createSubtask(subtask);
+      first.close();
+
+      for (let reopenIndex = 0; reopenIndex < 2; reopenIndex += 1) {
+        const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+        try {
+          expect(reopened.getSubtaskById(subtask.id)).toEqual(subtask);
+          expect(reopened.listSubtasksByBigTask(makeBigTask().id)).toEqual([subtask]);
+        } finally {
+          reopened.close();
+        }
+      }
+    });
+  });
+
+  it("fails closed for malformed stored maturity", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject());
+      storage.createBigTask(makeBigTask());
+      storage.createSubtask(makeSubtask());
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA ignore_check_constraints = ON");
+      sqlite.prepare("UPDATE subtasks SET maturity = ? WHERE id = ?").run("DONE", "st_a");
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expect(() => reopened.getSubtaskById(makeSubtask().id)).toThrow(
+          expect.objectContaining({ code: "MALFORMED_STORED_DATA" }),
+        );
+        expect(() => reopened.listSubtasksByBigTask(makeBigTask().id)).toThrow(
+          expect.objectContaining({ code: "MALFORMED_STORED_DATA" }),
+        );
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("enforces the Subtask maturity enum in SQLite", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject());
+      storage.createBigTask(makeBigTask());
+      storage.createSubtask(makeSubtask());
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      try {
+        expect(() =>
+          sqlite.prepare("UPDATE subtasks SET maturity = ? WHERE id = ?").run("DONE", "st_a"),
+        ).toThrow();
+        expect(
+          sqlite.prepare("SELECT maturity FROM subtasks WHERE id = ?").get("st_a"),
+        ).toEqual({ maturity: "NOT_STARTED" });
+      } finally {
+        sqlite.close();
+      }
     });
   });
 

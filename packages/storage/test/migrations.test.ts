@@ -9,7 +9,6 @@ import { ContextScopeSchema } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import {
   captureTaskStorageError,
-  createHierarchy,
   fixedClock,
   makeAuditEvent,
   makeBigTask,
@@ -21,6 +20,14 @@ import {
   withMemoryStorage,
   withTemporaryDatabasePath,
 } from "./fixtures.js";
+import {
+  insertLegacyBigTask,
+  insertLegacyContextItem,
+  insertLegacyDependency,
+  insertLegacyProject,
+  insertLegacySubtask,
+  migratedLegacyDependency,
+} from "./legacy-fixtures.js";
 
 const acceptedS0B1Migration = fileURLToPath(
   new URL("../drizzle/20260809002701_public_mephisto", import.meta.url),
@@ -81,7 +88,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(3);
+        expect(row.count).toBe(4);
       } finally {
         sqlite.close();
       }
@@ -98,7 +105,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(3);
+        expect(row.count).toBe(4);
       } finally {
         sqlite.close();
       }
@@ -130,15 +137,25 @@ describe("database lifecycle and migrations", () => {
         { recursive: true },
       );
 
-      const before = openTaskDatabase({
+      openTaskDatabase({
         databasePath,
         clock: fixedClock,
         migrationsFolder: s0b1Migrations,
-      });
-      createHierarchy(before);
+      }).close();
       const dependency = makeDependency("st_a", "st_b");
-      before.replaceDependenciesForBigTask(makeBigTask().id, [dependency]);
-      before.close();
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = ON");
+      insertLegacyProject(sqlite, makeProject());
+      insertLegacyBigTask(sqlite, makeBigTask());
+      for (const subtask of [
+        makeSubtask("st_a"),
+        makeSubtask("st_b"),
+        makeSubtask("st_c"),
+      ]) {
+        insertLegacySubtask(sqlite, subtask);
+      }
+      insertLegacyDependency(sqlite, dependency);
+      sqlite.close();
 
       const migrated = openTaskDatabase({ databasePath, clock: fixedClock });
       try {
@@ -148,7 +165,7 @@ describe("database lifecycle and migrations", () => {
           makeSubtask("st_a"),
         );
         expect(migrated.listDependenciesForBigTask(makeBigTask().id)).toEqual([
-          dependency,
+          migratedLegacyDependency(dependency),
         ]);
         expect(
           migrated.listContextItemsByScope({
@@ -172,19 +189,17 @@ describe("database lifecycle and migrations", () => {
         { recursive: true },
       );
 
-      const before = openTaskDatabase({
+      openTaskDatabase({
         databasePath,
         clock: fixedClock,
         migrationsFolder: s0b1Migrations,
-      });
+      }).close();
       const projects = Array.from({ length: 4 }, (_, index) =>
         makeProject(`prj_migration_${index}`, `migration-${index}`),
       );
-      projects.forEach((project) => before.createProject(project));
       const bigTasks = Array.from({ length: 10 }, (_, index) =>
         makeBigTask(`bt_migration_${index}`, projects[index % projects.length]!.id),
       );
-      bigTasks.forEach((bigTask) => before.createBigTask(bigTask));
       const subtaskCounts = [10, 2, 2, 2, 2, 2, 2, 1, 1, 1] as const;
       const subtasks = bigTasks.flatMap((bigTask, bigTaskIndex) =>
         Array.from({ length: subtaskCounts[bigTaskIndex]! }, (_, subtaskIndex) =>
@@ -194,7 +209,6 @@ describe("database lifecycle and migrations", () => {
           ),
         ),
       );
-      subtasks.forEach((subtask) => before.createSubtask(subtask));
       const firstTaskSubtasks = subtasks.filter(
         ({ bigTaskId }) => bigTaskId === bigTasks[0]!.id,
       );
@@ -209,15 +223,21 @@ describe("database lifecycle and migrations", () => {
           ),
         )
         .slice(0, 32);
-      before.replaceDependenciesForBigTask(bigTasks[0]!.id, dependencies);
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = ON");
+      projects.forEach((project) => insertLegacyProject(sqlite, project));
+      bigTasks.forEach((bigTask) => insertLegacyBigTask(sqlite, bigTask));
+      subtasks.forEach((subtask) => insertLegacySubtask(sqlite, subtask));
+      dependencies.forEach((dependency) => insertLegacyDependency(sqlite, dependency));
+      sqlite.close();
 
       const semanticState = {
-        projects: before.listProjects(),
-        bigTasks: projects.flatMap(({ id }) => before.listBigTasksByProject(id)),
-        subtasks: bigTasks.flatMap(({ id }) => before.listSubtasksByBigTask(id)),
-        dependencies: bigTasks.flatMap(({ id }) =>
-          before.listDependenciesForBigTask(id),
+        projects,
+        bigTasks: projects.flatMap(({ id }) =>
+          bigTasks.filter(({ projectId }) => projectId === id),
         ),
+        subtasks,
+        dependencies: dependencies.map(migratedLegacyDependency),
       };
       expect(semanticState.projects).toHaveLength(4);
       expect(semanticState.bigTasks).toHaveLength(10);
@@ -226,8 +246,6 @@ describe("database lifecycle and migrations", () => {
       expect(new Set(dependencies.map(({ dependencyType }) => dependencyType))).toEqual(
         new Set(["BLOCKING", "INFORMATIONAL"]),
       );
-      before.close();
-
       const migrated = openTaskDatabase({ databasePath, clock: fixedClock });
       expect(migrated.listProjects()).toEqual(semanticState.projects);
       expect(
@@ -268,12 +286,11 @@ describe("database lifecycle and migrations", () => {
         });
       }
 
-      const before = openTaskDatabase({
+      openTaskDatabase({
         databasePath,
         clock: fixedClock,
         migrationsFolder: s0b2aMigrations,
-      });
-      createHierarchy(before);
+      }).close();
       const dependency = makeDependency("st_a", "st_b");
       const scope = ContextScopeSchema.parse({
         scopeType: "SUBTASK",
@@ -282,16 +299,27 @@ describe("database lifecycle and migrations", () => {
         subtaskId: "st_a",
       });
       const contextItem = makeContextItem("ctx_before_s0b2b", scope);
-      before.replaceDependenciesForBigTask(makeBigTask().id, [dependency]);
-      before.createContextItem(contextItem);
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = ON");
+      insertLegacyProject(sqlite, makeProject());
+      insertLegacyBigTask(sqlite, makeBigTask());
+      for (const subtask of [
+        makeSubtask("st_a"),
+        makeSubtask("st_b"),
+        makeSubtask("st_c"),
+      ]) {
+        insertLegacySubtask(sqlite, subtask);
+      }
+      insertLegacyDependency(sqlite, dependency);
+      insertLegacyContextItem(sqlite, contextItem);
+      sqlite.close();
       const acceptedState = {
-        project: before.getProjectById(makeProject().id),
-        bigTask: before.getBigTaskById(makeBigTask().id),
-        subtasks: before.listSubtasksByBigTask(makeBigTask().id),
-        dependencies: before.listDependenciesForBigTask(makeBigTask().id),
-        contextItem: before.getContextItemById(contextItem.id),
+        project: makeProject(),
+        bigTask: makeBigTask(),
+        subtasks: [makeSubtask("st_a"), makeSubtask("st_b"), makeSubtask("st_c")],
+        dependencies: [migratedLegacyDependency(dependency)],
+        contextItem,
       };
-      before.close();
 
       const migrated = openTaskDatabase({ databasePath, clock: fixedClock });
       expect(migrated.getProjectById(makeProject().id)).toEqual(acceptedState.project);

@@ -6,6 +6,7 @@ import {
   ContextDigestSchema,
   ContextItemSchema,
   ContextScopeSchema,
+  DependencyRequiredGateSchema,
   DurableTaskSchema,
   ExecutionProviderDescriptorSchema,
   NativeSubagentOwnershipSchema,
@@ -14,8 +15,11 @@ import {
   ProviderThreadReferenceSchema,
   deriveContextScope,
   SubtaskDependencySchema,
+  SubtaskMaturitySchema,
+  evaluateSubtaskDependencyReadiness,
   validateBudgetPolicy,
   validateSubtaskDependencies,
+  validateSubtaskMaturityTransition,
   validateSubtaskTransition,
 } from "../src/index.js";
 
@@ -28,6 +32,8 @@ describe("domain package public exports", () => {
     expect(ContextScopeSchema).toBeDefined();
     expect(deriveContextScope).toBeTypeOf("function");
     expect(SubtaskDependencySchema).toBeDefined();
+    expect(SubtaskMaturitySchema).toBeDefined();
+    expect(DependencyRequiredGateSchema).toBeDefined();
     expect(NativeSubagentOwnershipSchema).toBeDefined();
     expect(BudgetPolicySchema).toBeDefined();
     expect(ExecutionProviderDescriptorSchema).toBeDefined();
@@ -35,6 +41,8 @@ describe("domain package public exports", () => {
     expect(ProviderRunReferenceSchema).toBeDefined();
     expect(NormalizedUsageSchema).toBeDefined();
     expect(validateSubtaskDependencies).toBeTypeOf("function");
+    expect(evaluateSubtaskDependencyReadiness).toBeTypeOf("function");
+    expect(validateSubtaskMaturityTransition).toBeTypeOf("function");
     expect(validateSubtaskTransition).toBeTypeOf("function");
     expect(validateBudgetPolicy).toBeTypeOf("function");
   });

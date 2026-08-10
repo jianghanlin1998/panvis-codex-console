@@ -1,12 +1,11 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-10
+Last reconciled: 2026-08-11
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
 - Repo: `jianghanlin1998/panvis-codex-console`
 - Branch: `main`
-- State at S0B2b hardening start: `7c19f5b0871822d22ed93b9903cedcd382db1de4` (`feat(storage): add digest and audit persistence`), clean and synchronized with `origin/main`
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 
 ## Maturity
@@ -15,45 +14,34 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S0C Mock Codex App Server boundary + `$task-execution` Skill: ACCEPTED foundation
 - S0D Provider-neutral execution contracts: ACCEPTED
 - S0B2a Context Item storage: ACCEPTED
-- S0B2b Context Digest + Audit Event persistence: HARDENED
-- S0B2b Comprehensive Hardening: PASS
-- S0B2b independent QA: PENDING
-- S0B2b ACCEPTED: NO
-- Historical S0B2a hierarchy, supersession-history, branched-history, and canonical-storage defects: CLOSED
-
-## Environment Bootstrap
-- Status: IMPLEMENTED
-- Task execution now performs the Node/pnpm preflight before Node-dependent commands.
-- `scripts/runtime-preflight.sh` accepts a compatible direct runtime or derives the bundled Node location relative to the available pnpm wrapper, then validates Node >=24 and pnpm 11.16.0.
-- Fresh Codex chat manual QA: PASS.
-- Hanlin manual QA: NOT REQUIRED for S0B2b hardening.
-- Evidence: runtime preflight ran first, established Node 24.14.0 and pnpm 11.16.0, and the first `pnpm lint` invocation passed without an earlier Node-on-PATH failure.
+- S0B2b Context Digest + Audit Event persistence: ACCEPTED
+- S0B2b Fresh Independent QA: PASS
+- No blocking S0B2b foundation findings remain.
+- S1A Subtask Maturity + Dependency Gate + Readiness Contracts: IMPLEMENTED
+- S1A Comprehensive Hardening: PENDING
+- S1A ACCEPTED: NO
 
 ## Active blockers
-- Product blocker: none for S0B2b Fresh Independent QA.
-- Workflow blocker: none.
+- None for S1A Comprehensive Hardening.
 
 ## Next safe task
-**S0B2b Fresh Independent QA**
+**S1A Comprehensive Hardening**
 
-Dependency:
-- upstream: S0B2b Comprehensive Hardening
-- gate: S0B2b HARDENED required
-- status: SATISFIED
+The Task Control Plane has started at the contract/foundation layer only. No operational lifecycle, maturity mutation, scheduling, worktree, thread, or execution automation exists yet.
 
-Downstream foundation work that relies on Digest or Audit invariants remains gated on S0B2b ACCEPTED.
+Hanlin manual QA: NOT REQUIRED
 
 ## Not operational yet
-- browser Console UI
-- daemon/local service
+- browser Console UI or daemon/local service
+- operational lifecycle or maturity mutation
+- scheduling, concurrency control, or `WHEN_READY` execution
 - live Codex App Server execution
-- real approval UI
 - execution/thread/run persistence
-- Context Engine/JIT compiler
+- Context Engine/JIT compiler or Promoted Context
 - worktree lifecycle automation
-- cloud/shared team state
-- alternate provider support
-- deployment
+- automatic Audit Event emission
+- batch provisioning
+- provider expansion or deployment
 
 ## Update rule
 - Write-enabled implementation, hardening, and repair tasks update this file when operational state changes.

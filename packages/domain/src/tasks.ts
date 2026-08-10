@@ -14,6 +14,12 @@ export const SubtaskStatusSchema = z.enum([
   "DROPPED",
   "ARCHIVED",
 ]);
+export const SubtaskMaturitySchema = z.enum([
+  "NOT_STARTED",
+  "IMPLEMENTED",
+  "HARDENED",
+  "ACCEPTED",
+]);
 export const SubtaskStartPolicySchema = z.enum(["MANUAL", "WHEN_READY"]);
 export const SubtaskDelegationPolicySchema = z.enum([
   "NONE",
@@ -76,6 +82,7 @@ export const SubtaskSchema = z
     acceptanceCriteria: nonEmptyTextList,
     untouchedAreas: z.array(nonEmptyText),
     status: SubtaskStatusSchema,
+    maturity: SubtaskMaturitySchema,
     startPolicy: SubtaskStartPolicySchema,
     delegationPolicy: SubtaskDelegationPolicySchema,
     recommendedReasoningLevel: ReasoningLevelSchema,
@@ -83,6 +90,10 @@ export const SubtaskSchema = z
     promptSeed: nonEmptyText,
   })
   .strict();
+
+export const SubtaskCreateInputSchema = SubtaskSchema.extend({
+  maturity: z.literal("NOT_STARTED"),
+}).strict();
 
 export const DurableTaskSchema = z.discriminatedUnion("recordType", [
   ProjectSchema,
@@ -92,6 +103,7 @@ export const DurableTaskSchema = z.discriminatedUnion("recordType", [
 
 export type BigTaskStatus = z.infer<typeof BigTaskStatusSchema>;
 export type SubtaskStatus = z.infer<typeof SubtaskStatusSchema>;
+export type SubtaskMaturity = z.infer<typeof SubtaskMaturitySchema>;
 export type SubtaskStartPolicy = z.infer<typeof SubtaskStartPolicySchema>;
 export type SubtaskDelegationPolicy = z.infer<typeof SubtaskDelegationPolicySchema>;
 export type ReasoningLevel = z.infer<typeof ReasoningLevelSchema>;
@@ -99,4 +111,5 @@ export type RepositoryReference = z.infer<typeof RepositoryReferenceSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
 export type BigTask = z.infer<typeof BigTaskSchema>;
 export type Subtask = z.infer<typeof SubtaskSchema>;
+export type SubtaskCreateInput = z.infer<typeof SubtaskCreateInputSchema>;
 export type DurableTask = z.infer<typeof DurableTaskSchema>;

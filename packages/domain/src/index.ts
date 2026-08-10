@@ -46,7 +46,9 @@ export {
   ProjectSchema,
   ReasoningLevelSchema,
   RepositoryReferenceSchema,
+  SubtaskCreateInputSchema,
   SubtaskDelegationPolicySchema,
+  SubtaskMaturitySchema,
   SubtaskSchema,
   SubtaskStartPolicySchema,
   SubtaskStatusSchema,
@@ -59,7 +61,9 @@ export type {
   ReasoningLevel,
   RepositoryReference,
   Subtask,
+  SubtaskCreateInput,
   SubtaskDelegationPolicy,
+  SubtaskMaturity,
   SubtaskStartPolicy,
   SubtaskStatus,
 } from "./tasks.js";
@@ -85,12 +89,18 @@ export type {
 } from "./context.js";
 
 export {
+  DependencyRequiredGateSchema,
   DependencyTypeSchema,
   DependencyValidationErrorCodeSchema,
   SubtaskDependencySchema,
+  evaluateSubtaskDependencyReadiness,
   validateSubtaskDependencies,
 } from "./dependencies.js";
 export type {
+  DependencyReadinessBlocker,
+  DependencyReadinessResult,
+  DependencyReadinessSubtask,
+  DependencyRequiredGate,
   DependencySubtask,
   DependencyType,
   DependencyValidationError,
@@ -98,6 +108,12 @@ export type {
   DependencyValidationResult,
   SubtaskDependency,
 } from "./dependencies.js";
+
+export { validateSubtaskMaturityTransition } from "./maturity.js";
+export type {
+  SubtaskMaturityTransitionErrorCode,
+  SubtaskMaturityTransitionResult,
+} from "./maturity.js";
 
 export { TRANSITION_PREREQUISITES, validateSubtaskTransition } from "./transitions.js";
 export type {

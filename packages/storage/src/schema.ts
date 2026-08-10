@@ -73,6 +73,7 @@ export const subtasksTable = sqliteTable(
     acceptanceCriteria: text("acceptance_criteria").notNull(),
     untouchedAreas: text("untouched_areas").notNull(),
     status: text("status").notNull(),
+    maturity: text("maturity").notNull().default("NOT_STARTED"),
     startPolicy: text("start_policy").notNull(),
     delegationPolicy: text("delegation_policy").notNull(),
     recommendedReasoningLevel: text("recommended_reasoning_level").notNull(),
@@ -85,6 +86,10 @@ export const subtasksTable = sqliteTable(
     check(
       "subtasks_status_check",
       sql`${table.status} in ('TODO', 'IN_PROGRESS', 'QA_DEBUG', 'DONE', 'DROPPED', 'ARCHIVED')`,
+    ),
+    check(
+      "subtasks_maturity_check",
+      sql`${table.maturity} in ('NOT_STARTED', 'IMPLEMENTED', 'HARDENED', 'ACCEPTED')`,
     ),
     check("subtasks_start_policy_check", sql`${table.startPolicy} in ('MANUAL', 'WHEN_READY')`),
     check(
@@ -108,6 +113,8 @@ export const taskDependenciesTable = sqliteTable(
       .notNull()
       .references(() => subtasksTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
     dependencyType: text("dependency_type").notNull(),
+    requiredGate: text("required_gate").notNull(),
+    reason: text("reason").notNull(),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
@@ -121,6 +128,19 @@ export const taskDependenciesTable = sqliteTable(
     check(
       "task_dependencies_type_check",
       sql`${table.dependencyType} in ('BLOCKING', 'INFORMATIONAL')`,
+    ),
+    check(
+      "task_dependencies_required_gate_check",
+      sql`${table.requiredGate} in ('NONE', 'HARDENED', 'ACCEPTED')`,
+    ),
+    check(
+      "task_dependencies_type_gate_check",
+      sql`(${table.dependencyType} = 'BLOCKING' and ${table.requiredGate} in ('HARDENED', 'ACCEPTED'))
+        or (${table.dependencyType} = 'INFORMATIONAL' and ${table.requiredGate} = 'NONE')`,
+    ),
+    check(
+      "task_dependencies_reason_length_check",
+      sql`length(trim(${table.reason})) between 1 and 1000`,
     ),
   ],
 );
