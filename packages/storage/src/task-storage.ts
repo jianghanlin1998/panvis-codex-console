@@ -245,7 +245,27 @@ const contextItemFromRow = (row: ContextItemRow): ContextItem => {
   if (!result.success) {
     throw malformedStoredData();
   }
-  return result.data;
+
+  const contextItem = result.data;
+  if (
+    contextItem.id !== row.id ||
+    contextItem.projectId !== row.projectId ||
+    ("bigTaskId" in contextItem ? contextItem.bigTaskId : null) !== row.bigTaskId ||
+    ("subtaskId" in contextItem ? contextItem.subtaskId : null) !== row.subtaskId ||
+    contextItem.kind !== row.kind ||
+    contextItem.status !== row.status ||
+    contextItem.authority !== row.authority ||
+    contextItem.title !== row.title ||
+    contextItem.body !== row.body ||
+    contextItem.provenance.sourceType !== row.sourceType ||
+    contextItem.provenance.sourceReference !== row.sourceReference ||
+    contextItem.provenance.effectiveAt !== row.effectiveAt ||
+    (contextItem.provenance.supersedesContextItemId ?? null) !==
+      row.supersedesContextItemId
+  ) {
+    throw malformedStoredData();
+  }
+  return contextItem;
 };
 
 const contextScopesEqual = (left: ContextScope, right: ContextScope): boolean => {
@@ -800,6 +820,7 @@ export class TaskStorage {
       if (predecessorIds.has(prior.id)) {
         throw malformedStoredData();
       }
+      this.#validateContextPredecessorSuccessorIdentity(current, prior);
       this.#validateContextSupersessionEdge(current, prior);
       predecessorIds.add(prior.id);
       current = prior;
@@ -844,6 +865,23 @@ export class TaskStorage {
         deriveContextScope(successor),
         deriveContextScope(prior),
       )
+    ) {
+      throw malformedStoredData();
+    }
+  }
+
+  #validateContextPredecessorSuccessorIdentity(
+    current: ContextItem,
+    prior: ContextItem,
+  ): void {
+    const directSuccessors = this.#database
+      .select({ id: contextItemsTable.id })
+      .from(contextItemsTable)
+      .where(eq(contextItemsTable.supersedesContextItemId, prior.id))
+      .all();
+    if (
+      directSuccessors.length !== 1 ||
+      directSuccessors[0]?.id !== current.id
     ) {
       throw malformedStoredData();
     }

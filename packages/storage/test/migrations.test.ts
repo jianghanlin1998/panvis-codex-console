@@ -11,6 +11,7 @@ import {
   createHierarchy,
   fixedClock,
   makeBigTask,
+  makeContextItem,
   makeDependency,
   makeProject,
   makeSubtask,
@@ -149,6 +150,102 @@ describe("database lifecycle and migrations", () => {
         ).toEqual([]);
       } finally {
         migrated.close();
+      }
+    });
+  });
+
+  it("preserves a non-trivial S0B1 graph and supports Context Items after migration", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const s0b1Migrations = join(dirname(databasePath), "s0b1-migrations-large");
+      mkdirSync(s0b1Migrations);
+      cpSync(
+        acceptedS0B1Migration,
+        join(s0b1Migrations, basename(acceptedS0B1Migration)),
+        { recursive: true },
+      );
+
+      const before = openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: s0b1Migrations,
+      });
+      const projects = Array.from({ length: 4 }, (_, index) =>
+        makeProject(`prj_migration_${index}`, `migration-${index}`),
+      );
+      projects.forEach((project) => before.createProject(project));
+      const bigTasks = Array.from({ length: 10 }, (_, index) =>
+        makeBigTask(`bt_migration_${index}`, projects[index % projects.length]!.id),
+      );
+      bigTasks.forEach((bigTask) => before.createBigTask(bigTask));
+      const subtaskCounts = [10, 2, 2, 2, 2, 2, 2, 1, 1, 1] as const;
+      const subtasks = bigTasks.flatMap((bigTask, bigTaskIndex) =>
+        Array.from({ length: subtaskCounts[bigTaskIndex]! }, (_, subtaskIndex) =>
+          makeSubtask(
+            `st_migration_${bigTaskIndex}_${subtaskIndex}`,
+            bigTask.id,
+          ),
+        ),
+      );
+      subtasks.forEach((subtask) => before.createSubtask(subtask));
+      const firstTaskSubtasks = subtasks.filter(
+        ({ bigTaskId }) => bigTaskId === bigTasks[0]!.id,
+      );
+      const dependencies = firstTaskSubtasks
+        .flatMap((upstream, upstreamIndex) =>
+          firstTaskSubtasks.slice(upstreamIndex + 1).map((downstream, offset) =>
+            makeDependency(
+              upstream.id,
+              downstream.id,
+              (upstreamIndex + offset) % 2 === 0 ? "BLOCKING" : "INFORMATIONAL",
+            ),
+          ),
+        )
+        .slice(0, 32);
+      before.replaceDependenciesForBigTask(bigTasks[0]!.id, dependencies);
+
+      const semanticState = {
+        projects: before.listProjects(),
+        bigTasks: projects.flatMap(({ id }) => before.listBigTasksByProject(id)),
+        subtasks: bigTasks.flatMap(({ id }) => before.listSubtasksByBigTask(id)),
+        dependencies: bigTasks.flatMap(({ id }) =>
+          before.listDependenciesForBigTask(id),
+        ),
+      };
+      expect(semanticState.projects).toHaveLength(4);
+      expect(semanticState.bigTasks).toHaveLength(10);
+      expect(semanticState.subtasks).toHaveLength(25);
+      expect(semanticState.dependencies).toHaveLength(32);
+      expect(new Set(dependencies.map(({ dependencyType }) => dependencyType))).toEqual(
+        new Set(["BLOCKING", "INFORMATIONAL"]),
+      );
+      before.close();
+
+      const migrated = openTaskDatabase({ databasePath, clock: fixedClock });
+      expect(migrated.listProjects()).toEqual(semanticState.projects);
+      expect(
+        projects.flatMap(({ id }) => migrated.listBigTasksByProject(id)),
+      ).toEqual(semanticState.bigTasks);
+      expect(
+        bigTasks.flatMap(({ id }) => migrated.listSubtasksByBigTask(id)),
+      ).toEqual(semanticState.subtasks);
+      expect(
+        bigTasks.flatMap(({ id }) => migrated.listDependenciesForBigTask(id)),
+      ).toEqual(semanticState.dependencies);
+      expect(migrated.isForeignKeyEnforcementEnabled()).toBe(true);
+      const contextItem = makeContextItem("ctx_after_large_migration", {
+        scopeType: "PROJECT",
+        projectId: projects[0]!.id,
+      });
+      expect(migrated.createContextItem(contextItem)).toEqual(contextItem);
+      migrated.close();
+
+      const rerun = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expect(rerun.listProjects()).toEqual(semanticState.projects);
+        expect(rerun.getContextItemById(contextItem.id)).toEqual(contextItem);
+        expect(rerun.isForeignKeyEnforcementEnabled()).toBe(true);
+      } finally {
+        rerun.close();
       }
     });
   });

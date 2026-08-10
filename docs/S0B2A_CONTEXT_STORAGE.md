@@ -10,6 +10,8 @@ S0B2a persists compact authoritative Context Items at one exact durable scope. C
 - Oversized values are rejected without truncation.
 - Existing kind, status, authority, and source-type enums remain unchanged.
 
+JavaScript domain limits count UTF-16 code units, while SQLite `length()` counts Unicode code points and its one-argument `trim()` removes spaces rather than every JavaScript whitespace character. The service contract is authoritative: public reads revalidate the domain limits and require stored identifiers, compact text, source references, and effective times to already equal their canonical parsed values. A directly corrupted row that SQLite can represent but the service would normalize or reject therefore fails closed instead of returning altered evidence.
+
 `ContextScope` is a closed discriminated union:
 
 - `PROJECT` contains `projectId` only.

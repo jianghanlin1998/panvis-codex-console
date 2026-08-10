@@ -275,6 +275,86 @@ describe("exact Context Scope retrieval", () => {
     });
   });
 
+  it("preserves Unicode and internal whitespace while enforcing compact and time boundaries", () => {
+    withMemoryStorage((storage) => {
+      createHierarchy(storage);
+      const unicodeInput = {
+        ...makeContextItem("ctx_unicode"),
+        title: "  English 中文 日本語 café 🚀  ",
+        body: "第一行\nSecond\tligne 🚀",
+        provenance: {
+          ...makeContextItem("ctx_unicode").provenance,
+          sourceReference: "  repo#混合-évidence-🚀  ",
+          effectiveAt: "2026-08-09T09:00:00.000+09:00",
+        },
+      } as ContextItem;
+      expect(storage.createContextItem(unicodeInput)).toEqual({
+        ...unicodeInput,
+        title: "English 中文 日本語 café 🚀",
+        provenance: {
+          ...unicodeInput.provenance,
+          sourceReference: "repo#混合-évidence-🚀",
+          effectiveAt: "2026-08-09T00:00:00.000Z",
+        },
+      });
+
+      const exactMaximum = {
+        ...makeContextItem("ctx_exact_maximum"),
+        title: "x".repeat(256),
+        body: "y".repeat(4_000),
+        provenance: {
+          ...makeContextItem("ctx_exact_maximum").provenance,
+          sourceReference: "z".repeat(2_048),
+        },
+      } as ContextItem;
+      expect(storage.createContextItem(exactMaximum)).toEqual(exactMaximum);
+      expect(
+        storage.createContextItem({
+          ...makeContextItem("ctx_emoji_boundary"),
+          title: "🚀".repeat(128),
+        }),
+      ).toMatchObject({ id: "ctx_emoji_boundary" });
+
+      [
+        { ...makeContextItem("ctx_title_over"), title: "x".repeat(257) },
+        { ...makeContextItem("ctx_body_over"), body: "x".repeat(4_001) },
+        {
+          ...makeContextItem("ctx_source_over"),
+          provenance: {
+            ...makeContextItem("ctx_source_over").provenance,
+            sourceReference: "x".repeat(2_049),
+          },
+        },
+        { ...makeContextItem("ctx_emoji_over"), title: "🚀".repeat(129) },
+        { ...makeContextItem("ctx_whitespace_only"), body: " \t\n " },
+      ].forEach((invalid) => {
+        expect(captureTaskStorageError(() => storage.createContextItem(invalid))).toMatchObject({
+          code: "INVALID_INPUT",
+        });
+        expect(storage.getContextItemById(invalid.id)).toBeNull();
+      });
+
+      const later = makeContextItem("ctx_time_z", bigTaskScope(), {
+        effectiveAt: "2026-08-09T01:00:00.000Z",
+      });
+      const tiedOffset = makeContextItem("ctx_time_b", bigTaskScope(), {
+        effectiveAt: "2026-08-09T09:00:00.000+09:00",
+      });
+      const tiedNegativeOffset = makeContextItem("ctx_time_a", bigTaskScope(), {
+        effectiveAt: "2026-08-08T19:00:00.000-05:00",
+      });
+      [later, tiedOffset, tiedNegativeOffset].forEach((item) =>
+        storage.createContextItem(item),
+      );
+      expect(
+        storage
+          .listContextItemsByScope(bigTaskScope())
+          .filter(({ id }) => id.startsWith("ctx_time_"))
+          .map(({ id }) => id),
+      ).toEqual(["ctx_time_a", "ctx_time_b", "ctx_time_z"]);
+    });
+  });
+
   it("preserves valid Project read parity in memory, on file, and after reopen", () => {
     expectValidReadParity(projectScope("prj_parity"), (storage) => {
       storage.createProject(makeProject("prj_parity", "project-parity"));
@@ -554,9 +634,107 @@ describe("Context Item hierarchy read integrity", () => {
       }
     });
   });
+
+  it("isolates a valid Project scope from multiple differently corrupted rows", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject("prj_matrix_valid", "matrix-valid"));
+      const valid = makeContextItem(
+        "ctx_matrix_valid",
+        projectScope("prj_matrix_valid"),
+      );
+      storage.createContextItem(valid);
+
+      storage.createProject(makeProject("prj_matrix_a", "matrix-a"));
+      storage.createProject(makeProject("prj_matrix_b", "matrix-b"));
+      storage.createBigTask(makeBigTask("bt_matrix_a", "prj_matrix_a"));
+      storage.createBigTask(makeBigTask("bt_matrix_b", "prj_matrix_b"));
+      storage.createSubtask(makeSubtask("st_matrix_a", "bt_matrix_a"));
+      storage.createSubtask(makeSubtask("st_matrix_b", "bt_matrix_b"));
+      const corruptProject = makeContextItem(
+        "ctx_matrix_project",
+        bigTaskScope("prj_matrix_a", "bt_matrix_a"),
+      );
+      const corruptSubtask = makeContextItem(
+        "ctx_matrix_subtask",
+        subtaskScope("prj_matrix_a", "bt_matrix_a", "st_matrix_a"),
+      );
+      storage.createContextItem(corruptProject);
+      storage.createContextItem(corruptSubtask);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE context_items SET project_id = ? WHERE id = ?")
+        .run("prj_matrix_b", corruptProject.id);
+      sqlite
+        .prepare("UPDATE context_items SET subtask_id = ? WHERE id = ?")
+        .run("st_matrix_b", corruptSubtask.id);
+      sqlite.close();
+
+      for (let reopenIndex = 0; reopenIndex < 2; reopenIndex += 1) {
+        const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+        try {
+          expect(reopened.listContextItemsByScope(projectScope("prj_matrix_valid"))).toEqual([
+            valid,
+          ]);
+          [corruptProject.id, corruptSubtask.id].forEach((id) => {
+            const error = captureTaskStorageError(() =>
+              reopened.getContextItemById(id),
+            );
+            expect(error).toMatchObject({ code: "MALFORMED_STORED_DATA" });
+            expect(error.message).not.toMatch(
+              /ctx_matrix|prj_matrix|bt_matrix|st_matrix|SQLite|SQL|context_items/i,
+            );
+          });
+        } finally {
+          reopened.close();
+        }
+      }
+    });
+  });
 });
 
 describe("stored Context Item safety", () => {
+  it.each([
+    ["title", " Context ctx_canonical "],
+    ["body", "\tCompact body for ctx_canonical.\n"],
+    ["body", "\t\n "],
+    ["source_reference", " repository#ctx_canonical "],
+    ["effective_at", "2026-08-09T09:00:00.000+09:00"],
+  ] as const)("fails closed when stored %s is valid only after normalization", (column, value) => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createHierarchy(storage);
+      const item = makeContextItem("ctx_canonical");
+      storage.createContextItem(item);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.prepare(`UPDATE context_items SET ${column} = ? WHERE id = ?`).run(value, item.id);
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        const error = captureTaskStorageError(() =>
+          reopened.getContextItemById(item.id),
+        );
+        expect(error).toMatchObject({
+          code: "MALFORMED_STORED_DATA",
+          message: "Stored task data is malformed.",
+        });
+        expect(error.message).not.toContain(value);
+        expect(
+          captureTaskStorageError(() =>
+            reopened.listContextItemsByScope(bigTaskScope()),
+          ),
+        ).toMatchObject({ code: "MALFORMED_STORED_DATA" });
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
   it("returns a sanitized error for malformed stored Context Item data", () => {
     withTemporaryDatabasePath((databasePath) => {
       const storage = openTaskDatabase({ databasePath, clock: fixedClock });
@@ -650,6 +828,62 @@ describe("stored Context Item safety", () => {
         expect(() =>
           sqlite.prepare("DELETE FROM context_items WHERE id = ?").run(prior.id),
         ).toThrow();
+      } finally {
+        sqlite.close();
+      }
+    });
+  });
+
+  it("enforces the complete direct SQLite rejection matrix without row mutation", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createHierarchy(storage);
+      const item = makeContextItem("ctx_constraint_matrix", subtaskScope());
+      storage.createContextItem(item);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      try {
+        sqlite.exec("PRAGMA foreign_keys = ON");
+        const rowBefore = sqlite
+          .prepare("SELECT * FROM context_items WHERE id = ?")
+          .get(item.id);
+        const rejectedMutations = [
+          ["UPDATE context_items SET kind = ? WHERE id = ?", "UNKNOWN_KIND"],
+          ["UPDATE context_items SET status = ? WHERE id = ?", "CURRENT"],
+          ["UPDATE context_items SET authority = ? WHERE id = ?", "MODEL"],
+          ["UPDATE context_items SET source_type = ? WHERE id = ?", "PRIVATE"],
+          ["UPDATE context_items SET title = ? WHERE id = ?", ""],
+          ["UPDATE context_items SET title = ? WHERE id = ?", "   "],
+          ["UPDATE context_items SET title = ? WHERE id = ?", "x".repeat(257)],
+          ["UPDATE context_items SET body = ? WHERE id = ?", ""],
+          ["UPDATE context_items SET body = ? WHERE id = ?", "   "],
+          ["UPDATE context_items SET body = ? WHERE id = ?", "x".repeat(4_001)],
+          ["UPDATE context_items SET source_reference = ? WHERE id = ?", ""],
+          ["UPDATE context_items SET source_reference = ? WHERE id = ?", "   "],
+          [
+            "UPDATE context_items SET source_reference = ? WHERE id = ?",
+            "x".repeat(2_049),
+          ],
+          ["UPDATE context_items SET project_id = ? WHERE id = ?", "prj_missing"],
+          ["UPDATE context_items SET big_task_id = ? WHERE id = ?", "bt_missing"],
+          ["UPDATE context_items SET subtask_id = ? WHERE id = ?", "st_missing"],
+        ] as const;
+
+        rejectedMutations.forEach(([sql, invalidValue]) => {
+          expect(() => sqlite.prepare(sql).run(invalidValue, item.id)).toThrow();
+          expect(
+            sqlite.prepare("SELECT * FROM context_items WHERE id = ?").get(item.id),
+          ).toEqual(rowBefore);
+        });
+        expect(() =>
+          sqlite
+            .prepare("UPDATE context_items SET big_task_id = NULL WHERE id = ?")
+            .run(item.id),
+        ).toThrow();
+        expect(
+          sqlite.prepare("SELECT * FROM context_items WHERE id = ?").get(item.id),
+        ).toEqual(rowBefore);
       } finally {
         sqlite.close();
       }

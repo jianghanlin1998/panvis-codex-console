@@ -53,6 +53,35 @@ const snapshotContextRows = (databasePath: string): readonly unknown[] => {
   }
 };
 
+const injectDirectSuccessorBranch = (
+  databasePath: string,
+  priorId: string,
+  sourceSuccessorId: string,
+  branchId: string,
+): void => {
+  const sqlite = new DatabaseSync(databasePath);
+  try {
+    sqlite.exec("DROP INDEX context_items_supersedes_unique");
+    sqlite
+      .prepare(`
+        INSERT INTO context_items (
+          id, project_id, big_task_id, subtask_id, kind, status, authority,
+          title, body, source_type, source_reference, effective_at,
+          supersedes_context_item_id, created_at, updated_at
+        )
+        SELECT
+          ?, project_id, big_task_id, subtask_id, kind, status, authority,
+          title, body, source_type, source_reference, effective_at,
+          ?, created_at, updated_at
+        FROM context_items
+        WHERE id = ?
+      `)
+      .run(branchId, priorId, sourceSuccessorId);
+  } finally {
+    sqlite.close();
+  }
+};
+
 const createScopeHierarchy = (storage: TaskStorage, scope: ContextScope): void => {
   storage.createProject(
     makeProject(scope.projectId, scope.projectId.replaceAll("_", "-")),
@@ -304,6 +333,152 @@ describe("atomic Context Item supersession", () => {
     });
   });
 
+  it("leaves stored state byte-for-byte unchanged across the rejection matrix", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createHierarchy(storage);
+      storage.createProject(makeProject("prj_atomic_other", "atomic-other"));
+      storage.createBigTask(makeBigTask("bt_atomic_other", "prj_atomic_other"));
+      const prior = makeContextItem("ctx_atomic_prior");
+      storage.createContextItem(prior);
+      const invalidPriors = ["PROPOSED", "REJECTED", "RESOLVED", "SUPERSEDED"].map(
+        (status) => {
+          const item = makeContextItem(
+            `ctx_atomic_prior_${status.toLowerCase()}`,
+            bigTaskScope(),
+            { status: status as ContextStatus },
+          );
+          storage.createContextItem(item);
+          return item;
+        },
+      );
+      const duplicate = makeContextItem("ctx_atomic_duplicate");
+      storage.createContextItem(duplicate);
+
+      const expectAtomicRejection = (operation: () => unknown): void => {
+        const before = snapshotContextRows(databasePath);
+        captureTaskStorageError(operation);
+        expect(snapshotContextRows(databasePath)).toEqual(before);
+      };
+
+      ["PROPOSED", "REJECTED", "RESOLVED", "SUPERSEDED"].forEach((status) => {
+        expectAtomicRejection(() =>
+          storage.supersedeContextItem(
+            makeContextItem(
+              `ctx_atomic_replacement_${status.toLowerCase()}`,
+              bigTaskScope(),
+              {
+                status: status as ContextStatus,
+                supersedesContextItemId: prior.id,
+              },
+            ),
+          ),
+        );
+      });
+      invalidPriors.forEach((invalidPrior) => {
+        expectAtomicRejection(() =>
+          storage.supersedeContextItem(
+            makeContextItem(
+              `ctx_atomic_from_${invalidPrior.status.toLowerCase()}`,
+              bigTaskScope(),
+              { supersedesContextItemId: invalidPrior.id },
+            ),
+          ),
+        );
+      });
+      expectAtomicRejection(() =>
+        storage.supersedeContextItem(makeContextItem("ctx_atomic_missing_pointer")),
+      );
+      expectAtomicRejection(() =>
+        storage.supersedeContextItem(
+          makeContextItem("ctx_atomic_self", bigTaskScope(), {
+            supersedesContextItemId: ContextItemIdSchema.parse("ctx_atomic_self"),
+          }),
+        ),
+      );
+      expectAtomicRejection(() =>
+        storage.supersedeContextItem(
+          makeContextItem("ctx_atomic_missing_prior", bigTaskScope(), {
+            supersedesContextItemId: ContextItemIdSchema.parse("ctx_atomic_absent"),
+          }),
+        ),
+      );
+      expectAtomicRejection(() =>
+        storage.supersedeContextItem(
+          makeContextItem(
+            "ctx_atomic_wrong_scope",
+            bigTaskScope("prj_atomic_other", "bt_atomic_other"),
+            { supersedesContextItemId: prior.id },
+          ),
+        ),
+      );
+      expectAtomicRejection(() =>
+        storage.supersedeContextItem(
+          makeContextItem(duplicate.id, bigTaskScope(), {
+            supersedesContextItemId: prior.id,
+          }),
+        ),
+      );
+
+      const successful = makeContextItem("ctx_atomic_success", bigTaskScope(), {
+        supersedesContextItemId: prior.id,
+      });
+      storage.supersedeContextItem(successful);
+      expectAtomicRejection(() =>
+        storage.supersedeContextItem(
+          makeContextItem("ctx_atomic_branch", bigTaskScope(), {
+            supersedesContextItemId: prior.id,
+          }),
+        ),
+      );
+      storage.close();
+    });
+  });
+
+  it("rolls back the replacement insert when the prior update aborts", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createHierarchy(storage);
+      const prior = makeContextItem("ctx_update_abort_prior");
+      storage.createContextItem(prior);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec(`
+        CREATE TRIGGER abort_context_status_update
+        BEFORE UPDATE OF status ON context_items
+        WHEN OLD.id = 'ctx_update_abort_prior'
+        BEGIN
+          SELECT RAISE(ABORT, 'private update-stage detail');
+        END
+      `);
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        const before = snapshotContextRows(databasePath);
+        const replacement = makeContextItem(
+          "ctx_update_abort_replacement",
+          bigTaskScope(),
+          { supersedesContextItemId: prior.id },
+        );
+        const error = captureTaskStorageError(() =>
+          reopened.supersedeContextItem(replacement),
+        );
+        expect(error).toMatchObject({
+          code: "TRANSACTION_FAILED",
+          message: "The transaction failed and was rolled back.",
+        });
+        expect(error.message).not.toMatch(/private|trigger|SQLite|SQL|context_items/i);
+        expect(snapshotContextRows(databasePath)).toEqual(before);
+        expect(reopened.getContextItemById(prior.id)).toEqual(prior);
+        expect(reopened.getContextItemById(replacement.id)).toBeNull();
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
   it("preserves an A to B to C supersession chain", () => {
     withMemoryStorage((storage) => {
       createHierarchy(storage);
@@ -326,6 +501,75 @@ describe("atomic Context Item supersession", () => {
 });
 
 describe("stored Context Item supersession read integrity", () => {
+  it("fails closed from the predecessor and both direct successors of a branch", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = bigTaskScope("prj_branch_direct", "bt_branch_direct");
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const [prior, successor] = createContextChain(
+        storage,
+        "ctx_branch_direct",
+        scope,
+        2,
+      );
+      storage.close();
+
+      const branchId = ContextItemIdSchema.parse("ctx_branch_direct_sibling");
+      injectDirectSuccessorBranch(
+        databasePath,
+        prior!.id,
+        successor!.id,
+        branchId,
+      );
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        [prior!.id, successor!.id, branchId].forEach((id) => {
+          expectMalformedStoredData(() => reopened.getContextItemById(id));
+        });
+        expectMalformedStoredData(() => reopened.listContextItemsByScope(scope));
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("detects a middle branch from every descendant through repeated reopen", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = subtaskScope(
+        "prj_branch_deep",
+        "bt_branch_deep",
+        "st_branch_deep",
+      );
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const chain = createContextChain(storage, "ctx_branch_deep", scope, 5);
+      storage.close();
+
+      const branchId = ContextItemIdSchema.parse("ctx_branch_deep_sibling");
+      injectDirectSuccessorBranch(
+        databasePath,
+        chain[1]!.id,
+        chain[2]!.id,
+        branchId,
+      );
+      const corruptedRows = snapshotContextRows(databasePath);
+
+      for (let reopenCount = 0; reopenCount < 2; reopenCount += 1) {
+        const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+        try {
+          [...chain.map(({ id }) => id), branchId].forEach((id) => {
+            expectMalformedStoredData(() => reopened.getContextItemById(id));
+          });
+          expectMalformedStoredData(() => reopened.listContextItemsByScope(scope));
+        } finally {
+          reopened.close();
+        }
+      }
+      expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+
   it("fails closed on a historical cross-scope pointer without poisoning the foreign scope", () => {
     withTemporaryDatabasePath((databasePath) => {
       const scopeA = bigTaskScope("prj_edge_a", "bt_edge_a");
@@ -411,6 +655,40 @@ describe("stored Context Item supersession read integrity", () => {
         reopened.close();
       }
       expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+
+  it("fails closed instead of normalizing a stored predecessor identifier", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = projectScope("prj_noncanonical_pointer");
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const [prior, replacement] = createContextChain(
+        storage,
+        "ctx_noncanonical_pointer",
+        scope,
+        2,
+      );
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = OFF");
+      sqlite
+        .prepare(
+          "UPDATE context_items SET supersedes_context_item_id = ? WHERE id = ?",
+        )
+        .run(` ${prior!.id} `, replacement!.id);
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expectMalformedStoredData(() =>
+          reopened.getContextItemById(replacement!.id),
+        );
+        expectMalformedStoredData(() => reopened.listContextItemsByScope(scope));
+      } finally {
+        reopened.close();
+      }
     });
   });
 
@@ -681,14 +959,83 @@ describe("stored Context Item supersession read integrity", () => {
     });
   });
 
-  it("preserves valid chain lengths 1, 2, 3, and 10 at every exact scope after reopen", () => {
+  it.each([
+    [
+      "missing middle node",
+      (sqlite: DatabaseSync, chain: readonly ContextItem[]) => {
+        sqlite.exec("PRAGMA foreign_keys = OFF");
+        sqlite.prepare("DELETE FROM context_items WHERE id = ?").run(chain[1]!.id);
+      },
+    ],
+    [
+      "malformed middle node",
+      (sqlite: DatabaseSync, chain: readonly ContextItem[]) => {
+        sqlite
+          .prepare("UPDATE context_items SET source_reference = ? WHERE id = ?")
+          .run(" middle source ", chain[2]!.id);
+      },
+    ],
+    [
+      "status-invalid old ancestor",
+      (sqlite: DatabaseSync, chain: readonly ContextItem[]) => {
+        sqlite
+          .prepare("UPDATE context_items SET status = ? WHERE id = ?")
+          .run("PROPOSED", chain[1]!.id);
+      },
+    ],
+    [
+      "combined hierarchy and history corruption",
+      (sqlite: DatabaseSync, chain: readonly ContextItem[]) => {
+        sqlite
+          .prepare("UPDATE context_items SET project_id = ? WHERE id = ?")
+          .run("prj_deep_foreign", chain[1]!.id);
+        sqlite
+          .prepare("UPDATE context_items SET status = ? WHERE id = ?")
+          .run("RESOLVED", chain[2]!.id);
+      },
+    ],
+  ] as const)("fails a long-chain tip on a %s", (_label, corrupt) => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = subtaskScope("prj_deep", "bt_deep", "st_deep");
+      const unrelatedScope = projectScope("prj_deep_foreign");
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      createScopeHierarchy(storage, unrelatedScope);
+      const chain = createContextChain(storage, "ctx_deep", scope, 6);
+      const unrelated = makeContextItem("ctx_deep_unrelated", unrelatedScope);
+      storage.createContextItem(unrelated);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      corrupt(sqlite, chain);
+      sqlite.close();
+      const corruptedRows = snapshotContextRows(databasePath);
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expectMalformedStoredData(() =>
+          reopened.getContextItemById(chain.at(-1)!.id),
+        );
+        expectMalformedStoredData(() => reopened.listContextItemsByScope(scope));
+        expect(reopened.getContextItemById(unrelated.id)).toEqual(unrelated);
+        expect(reopened.listContextItemsByScope(unrelatedScope)).toEqual([
+          unrelated,
+        ]);
+      } finally {
+        reopened.close();
+      }
+      expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+
+  it("preserves valid chain lengths 1, 2, 4, 9, 17, and 25 at every exact scope after reopen", () => {
     withTemporaryDatabasePath((databasePath) => {
       const cases: readonly {
         readonly scope: ContextScope;
         readonly length: number;
         readonly prefix: string;
       }[] = ["PROJECT", "BIG_TASK", "SUBTASK"].flatMap((scopeType) =>
-        [1, 2, 3, 10].map((length) => {
+        [1, 2, 4, 9, 17, 25].map((length) => {
           const suffix = `${scopeType.toLowerCase()}_${length}`;
           const projectId = `prj_chain_${suffix}`;
           const scope =
