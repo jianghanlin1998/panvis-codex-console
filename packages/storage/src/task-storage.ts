@@ -767,6 +767,12 @@ export class TaskStorage {
   }
 
   #contextItemFromRow(row: ContextItemRow): ContextItem {
+    const contextItem = this.#contextItemWithoutSupersessionValidation(row);
+    this.#validateContextSupersessionIntegrity(contextItem);
+    return contextItem;
+  }
+
+  #contextItemWithoutSupersessionValidation(row: ContextItemRow): ContextItem {
     const contextItem = contextItemFromRow(row);
     if (
       this.#invalidContextHierarchyRelationship(deriveContextScope(contextItem)) !== null
@@ -774,6 +780,73 @@ export class TaskStorage {
       throw malformedStoredData();
     }
     return contextItem;
+  }
+
+  #validateContextSupersessionIntegrity(startingContextItem: ContextItem): void {
+    const predecessorIds = new Set<string>([startingContextItem.id]);
+    let current = startingContextItem;
+
+    while (current.provenance.supersedesContextItemId !== undefined) {
+      const priorRow = this.#database
+        .select()
+        .from(contextItemsTable)
+        .where(eq(contextItemsTable.id, current.provenance.supersedesContextItemId))
+        .get();
+      if (priorRow === undefined) {
+        throw malformedStoredData();
+      }
+
+      const prior = this.#contextItemWithoutSupersessionValidation(priorRow);
+      if (predecessorIds.has(prior.id)) {
+        throw malformedStoredData();
+      }
+      this.#validateContextSupersessionEdge(current, prior);
+      predecessorIds.add(prior.id);
+      current = prior;
+    }
+
+    const successorIds = new Set<string>([startingContextItem.id]);
+    current = startingContextItem;
+
+    while (true) {
+      const successorRows = this.#database
+        .select()
+        .from(contextItemsTable)
+        .where(eq(contextItemsTable.supersedesContextItemId, current.id))
+        .all();
+      if (successorRows.length === 0) {
+        return;
+      }
+      if (successorRows.length !== 1) {
+        throw malformedStoredData();
+      }
+
+      const successor = this.#contextItemWithoutSupersessionValidation(
+        successorRows[0]!,
+      );
+      if (successorIds.has(successor.id)) {
+        throw malformedStoredData();
+      }
+      this.#validateContextSupersessionEdge(successor, current);
+      successorIds.add(successor.id);
+      current = successor;
+    }
+  }
+
+  #validateContextSupersessionEdge(
+    successor: ContextItem,
+    prior: ContextItem,
+  ): void {
+    if (
+      prior.status !== "SUPERSEDED" ||
+      (successor.status !== "ACTIVE" && successor.status !== "SUPERSEDED") ||
+      !contextScopesEqual(
+        deriveContextScope(successor),
+        deriveContextScope(prior),
+      )
+    ) {
+      throw malformedStoredData();
+    }
   }
 
   #invalidContextHierarchyRelationship(
