@@ -95,4 +95,31 @@ describe("transactions and relational integrity", () => {
       expect(storage.getSubtaskById(makeSubtask().id)).toBeNull();
     });
   });
+
+  it("serializes two BEGIN IMMEDIATE writers without sleeps or retries", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      openTaskDatabase({ databasePath, clock: fixedClock }).close();
+      const first = new DatabaseSync(databasePath);
+      const second = new DatabaseSync(databasePath);
+      try {
+        first.exec("PRAGMA busy_timeout = 0");
+        second.exec("PRAGMA busy_timeout = 0");
+        first.exec("BEGIN IMMEDIATE");
+        expect(() => second.exec("BEGIN IMMEDIATE")).toThrow();
+        first.exec("ROLLBACK");
+
+        expect(() => second.exec("BEGIN IMMEDIATE")).not.toThrow();
+        second.exec("ROLLBACK");
+      } finally {
+        if (first.isTransaction) {
+          first.exec("ROLLBACK");
+        }
+        if (second.isTransaction) {
+          second.exec("ROLLBACK");
+        }
+        first.close();
+        second.close();
+      }
+    });
+  });
 });

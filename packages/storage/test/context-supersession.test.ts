@@ -501,6 +501,199 @@ describe("atomic Context Item supersession", () => {
 });
 
 describe("stored Context Item supersession read integrity", () => {
+  it("fails every public read path when a two-node linked history has no ACTIVE tip", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = projectScope("prj_no_active_two");
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const chain = createContextChain(storage, "ctx_no_active_two", scope, 2);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE context_items SET status = ? WHERE id = ?")
+        .run("SUPERSEDED", chain[1]!.id);
+      sqlite.close();
+      const corruptedRows = snapshotContextRows(databasePath);
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        chain.forEach(({ id }) => {
+          const error = captureTaskStorageError(() =>
+            reopened.getContextItemById(id),
+          );
+          expect(error).toMatchObject({
+            code: "MALFORMED_STORED_DATA",
+            message: "Stored task data is malformed.",
+          });
+          expect(error.message).not.toMatch(
+            /ctx_no_active|prj_no_active|SQLite|SQL|context_items|status|\/Users\//i,
+          );
+        });
+        expectMalformedStoredData(() =>
+          reopened.listContextItemsByScope(scope),
+        );
+      } finally {
+        reopened.close();
+      }
+      expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+
+  it("rejects a ten-node no-active-tip chain from root, middle, tip, and list after two reopens", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = bigTaskScope("prj_no_active_long", "bt_no_active_long");
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const chain = createContextChain(storage, "ctx_no_active_long", scope, 10);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE context_items SET status = ? WHERE id = ?")
+        .run("SUPERSEDED", chain.at(-1)!.id);
+      sqlite.close();
+      const corruptedRows = snapshotContextRows(databasePath);
+
+      for (let reopenCount = 0; reopenCount < 2; reopenCount += 1) {
+        const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+        try {
+          [chain[0]!, chain[5]!, chain[9]!].forEach(({ id }) => {
+            expectMalformedStoredData(() => reopened.getContextItemById(id));
+          });
+          expectMalformedStoredData(() =>
+            reopened.listContextItemsByScope(scope),
+          );
+        } finally {
+          reopened.close();
+        }
+      }
+      expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+
+  it("rejects an observable linked prefix after its ACTIVE tip is deleted", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = subtaskScope(
+        "prj_missing_tip",
+        "bt_missing_tip",
+        "st_missing_tip",
+      );
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const chain = createContextChain(storage, "ctx_missing_tip", scope, 6);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = OFF");
+      sqlite
+        .prepare("DELETE FROM context_items WHERE id = ?")
+        .run(chain.at(-1)!.id);
+      sqlite.close();
+      const corruptedRows = snapshotContextRows(databasePath);
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        [chain[0]!, chain[2]!, chain[4]!].forEach(({ id }) => {
+          expectMalformedStoredData(() => reopened.getContextItemById(id));
+        });
+        expectMalformedStoredData(() =>
+          reopened.listContextItemsByScope(scope),
+        );
+      } finally {
+        reopened.close();
+      }
+      expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+
+  it("rejects both fragments after a middle node is deleted", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = projectScope("prj_missing_middle_repair");
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const chain = createContextChain(
+        storage,
+        "ctx_missing_middle_repair",
+        scope,
+        5,
+      );
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = OFF");
+      sqlite.prepare("DELETE FROM context_items WHERE id = ?").run(chain[2]!.id);
+      sqlite.close();
+      const corruptedRows = snapshotContextRows(databasePath);
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        [chain[0]!, chain[1]!, chain[3]!, chain[4]!].forEach(({ id }) => {
+          expectMalformedStoredData(() => reopened.getContextItemById(id));
+        });
+        expectMalformedStoredData(() =>
+          reopened.listContextItemsByScope(scope),
+        );
+      } finally {
+        reopened.close();
+      }
+      expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+
+  it.each([
+    "ACTIVE",
+    "SUPERSEDED",
+    "PROPOSED",
+    "REJECTED",
+    "RESOLVED",
+  ] as const)("enforces %s as a linked terminal status", (status) => {
+    withTemporaryDatabasePath((databasePath) => {
+      const scope = bigTaskScope(
+        `prj_terminal_${status.toLowerCase()}`,
+        `bt_terminal_${status.toLowerCase()}`,
+      );
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      createScopeHierarchy(storage, scope);
+      const chain = createContextChain(
+        storage,
+        `ctx_terminal_${status.toLowerCase()}`,
+        scope,
+        3,
+      );
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite
+        .prepare("UPDATE context_items SET status = ? WHERE id = ?")
+        .run(status, chain.at(-1)!.id);
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        if (status === "ACTIVE") {
+          expect(reopened.getContextItemById(chain[0]!.id)).toEqual(chain[0]);
+          expect(reopened.getContextItemById(chain.at(-1)!.id)).toEqual(
+            chain.at(-1),
+          );
+          expect(reopened.listContextItemsByScope(scope)).toEqual(chain);
+        } else {
+          expectMalformedStoredData(() =>
+            reopened.getContextItemById(chain[0]!.id),
+          );
+          expectMalformedStoredData(() =>
+            reopened.getContextItemById(chain.at(-1)!.id),
+          );
+          expectMalformedStoredData(() =>
+            reopened.listContextItemsByScope(scope),
+          );
+        }
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
   it("fails closed from the predecessor and both direct successors of a branch", () => {
     withTemporaryDatabasePath((databasePath) => {
       const scope = bigTaskScope("prj_branch_direct", "bt_branch_direct");
@@ -1028,14 +1221,14 @@ describe("stored Context Item supersession read integrity", () => {
     });
   });
 
-  it("preserves valid chain lengths 1, 2, 4, 9, 17, and 25 at every exact scope after reopen", () => {
+  it("preserves valid chain lengths 1, 2, 4, 5, 9, 13, 17, and 25 at every exact scope after reopen", () => {
     withTemporaryDatabasePath((databasePath) => {
       const cases: readonly {
         readonly scope: ContextScope;
         readonly length: number;
         readonly prefix: string;
       }[] = ["PROJECT", "BIG_TASK", "SUBTASK"].flatMap((scopeType) =>
-        [1, 2, 4, 9, 17, 25].map((length) => {
+        [1, 2, 4, 5, 9, 13, 17, 25].map((length) => {
           const suffix = `${scopeType.toLowerCase()}_${length}`;
           const projectId = `prj_chain_${suffix}`;
           const scope =
@@ -1145,6 +1338,201 @@ describe("stored Context Item supersession read integrity", () => {
         reopened.close();
       }
       expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+    });
+  });
+});
+
+describe("additional adversarial active-tip variations", () => {
+  it("fails closed across ten distinct topology, scope, time, entry, and reopen variations", () => {
+    const variations = [
+      {
+        label: "project_short_root",
+        scopeType: "PROJECT",
+        length: 3,
+        readIndex: 0,
+        terminalStatus: "SUPERSEDED",
+        timeOrder: "ASC",
+        reopenCount: 1,
+      },
+      {
+        label: "big_desc_middle",
+        scopeType: "BIG_TASK",
+        length: 4,
+        readIndex: 2,
+        terminalStatus: "PROPOSED",
+        timeOrder: "DESC",
+        reopenCount: 1,
+      },
+      {
+        label: "sub_tied_tip_twice",
+        scopeType: "SUBTASK",
+        length: 6,
+        readIndex: 5,
+        terminalStatus: "REJECTED",
+        timeOrder: "TIED",
+        reopenCount: 2,
+      },
+      {
+        label: "project_zigzag_inner",
+        scopeType: "PROJECT",
+        length: 7,
+        readIndex: 2,
+        terminalStatus: "RESOLVED",
+        timeOrder: "ZIGZAG",
+        reopenCount: 1,
+      },
+      {
+        label: "big_desc_unrelated",
+        scopeType: "BIG_TASK",
+        length: 9,
+        readIndex: 7,
+        terminalStatus: "SUPERSEDED",
+        timeOrder: "DESC",
+        reopenCount: 1,
+        includeUnrelated: true,
+      },
+      {
+        label: "sub_long_three_reopens",
+        scopeType: "SUBTASK",
+        length: 12,
+        readIndex: 6,
+        terminalStatus: "PROPOSED",
+        timeOrder: "ASC",
+        reopenCount: 3,
+      },
+      {
+        label: "project_deleted_tip_tied",
+        scopeType: "PROJECT",
+        length: 6,
+        readIndex: 4,
+        deleteIndex: 5,
+        timeOrder: "TIED",
+        reopenCount: 1,
+      },
+      {
+        label: "big_deleted_early_downstream",
+        scopeType: "BIG_TASK",
+        length: 6,
+        readIndex: 2,
+        deleteIndex: 1,
+        timeOrder: "ZIGZAG",
+        reopenCount: 1,
+      },
+      {
+        label: "sub_deleted_middle_prefix",
+        scopeType: "SUBTASK",
+        length: 9,
+        readIndex: 0,
+        deleteIndex: 4,
+        timeOrder: "DESC",
+        reopenCount: 1,
+      },
+      {
+        label: "project_deleted_long_tip_isolated",
+        scopeType: "PROJECT",
+        length: 14,
+        readIndex: 7,
+        deleteIndex: 13,
+        timeOrder: "ASC",
+        reopenCount: 2,
+        includeUnrelated: true,
+      },
+    ] as const;
+
+    variations.forEach((variation, variationIndex) => {
+      withTemporaryDatabasePath((databasePath) => {
+        const suffix = `adv_${variationIndex}`;
+        const projectId = `prj_${suffix}`;
+        const scope: ContextScope =
+          variation.scopeType === "PROJECT"
+            ? projectScope(projectId)
+            : variation.scopeType === "BIG_TASK"
+              ? bigTaskScope(projectId, `bt_${suffix}`)
+              : subtaskScope(projectId, `bt_${suffix}`, `st_${suffix}`);
+        const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+        createScopeHierarchy(storage, scope);
+        const chain = createContextChain(
+          storage,
+          `ctx_${variation.label}`,
+          scope,
+          variation.length,
+        );
+
+        const unrelatedScope = projectScope(`prj_${suffix}_valid`);
+        const unrelated = makeContextItem(
+          `ctx_${suffix}_valid`,
+          unrelatedScope,
+          { status: "SUPERSEDED" },
+        );
+        if ("includeUnrelated" in variation && variation.includeUnrelated) {
+          createScopeHierarchy(storage, unrelatedScope);
+          storage.createContextItem(unrelated);
+        }
+        storage.close();
+
+        const sqlite = new DatabaseSync(databasePath);
+        const updateEffectiveAt = sqlite.prepare(
+          "UPDATE context_items SET effective_at = ? WHERE id = ?",
+        );
+        chain.forEach(({ id }, index) => {
+          const minute =
+            variation.timeOrder === "ASC"
+              ? index
+              : variation.timeOrder === "DESC"
+                ? 59 - index
+                : variation.timeOrder === "TIED"
+                  ? 30
+                  : index % 2 === 0
+                    ? index
+                    : 59 - index;
+          updateEffectiveAt.run(
+            `2026-08-09T02:${String(minute).padStart(2, "0")}:00.000Z`,
+            id,
+          );
+        });
+        if ("terminalStatus" in variation) {
+          sqlite
+            .prepare("UPDATE context_items SET status = ? WHERE id = ?")
+            .run(variation.terminalStatus, chain.at(-1)!.id);
+        } else {
+          sqlite.exec("PRAGMA foreign_keys = OFF");
+          sqlite
+            .prepare("DELETE FROM context_items WHERE id = ?")
+            .run(chain[variation.deleteIndex]!.id);
+        }
+        sqlite.close();
+        const corruptedRows = snapshotContextRows(databasePath);
+
+        for (
+          let reopenIndex = 0;
+          reopenIndex < variation.reopenCount;
+          reopenIndex += 1
+        ) {
+          const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+          try {
+            expectMalformedStoredData(() =>
+              reopened.getContextItemById(chain[variation.readIndex]!.id),
+            );
+            expectMalformedStoredData(() =>
+              reopened.listContextItemsByScope(scope),
+            );
+            if (
+              "includeUnrelated" in variation &&
+              variation.includeUnrelated
+            ) {
+              expect(reopened.getContextItemById(unrelated.id)).toEqual(
+                unrelated,
+              );
+              expect(reopened.listContextItemsByScope(unrelatedScope)).toEqual([
+                unrelated,
+              ]);
+            }
+          } finally {
+            reopened.close();
+          }
+        }
+        expect(snapshotContextRows(databasePath)).toEqual(corruptedRows);
+      });
     });
   });
 });

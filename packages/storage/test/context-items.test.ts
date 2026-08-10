@@ -735,6 +735,42 @@ describe("stored Context Item safety", () => {
     });
   });
 
+  it.each(["created_at", "updated_at"] as const)(
+    "fails both public read paths when stored %s is non-canonical",
+    (column) => {
+      withTemporaryDatabasePath((databasePath) => {
+        const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+        createHierarchy(storage);
+        const item = makeContextItem(`ctx_noncanonical_${column}`);
+        storage.createContextItem(item);
+        storage.close();
+
+        const sqlite = new DatabaseSync(databasePath);
+        sqlite
+          .prepare(`UPDATE context_items SET ${column} = ? WHERE id = ?`)
+          .run("2026-08-09T09:00:00.000+09:00", item.id);
+        sqlite.close();
+
+        const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+        try {
+          expect(
+            captureTaskStorageError(() => reopened.getContextItemById(item.id)),
+          ).toMatchObject({
+            code: "MALFORMED_STORED_DATA",
+            message: "Stored task data is malformed.",
+          });
+          expect(
+            captureTaskStorageError(() =>
+              reopened.listContextItemsByScope(bigTaskScope()),
+            ),
+          ).toMatchObject({ code: "MALFORMED_STORED_DATA" });
+        } finally {
+          reopened.close();
+        }
+      });
+    },
+  );
+
   it("returns a sanitized error for malformed stored Context Item data", () => {
     withTemporaryDatabasePath((databasePath) => {
       const storage = openTaskDatabase({ databasePath, clock: fixedClock });

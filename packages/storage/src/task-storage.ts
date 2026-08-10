@@ -804,6 +804,8 @@ export class TaskStorage {
 
   #validateContextSupersessionIntegrity(startingContextItem: ContextItem): void {
     const predecessorIds = new Set<string>([startingContextItem.id]);
+    let isLinked =
+      startingContextItem.provenance.supersedesContextItemId !== undefined;
     let current = startingContextItem;
 
     while (current.provenance.supersedesContextItemId !== undefined) {
@@ -836,12 +838,16 @@ export class TaskStorage {
         .where(eq(contextItemsTable.supersedesContextItemId, current.id))
         .all();
       if (successorRows.length === 0) {
+        if (isLinked && current.status !== "ACTIVE") {
+          throw malformedStoredData();
+        }
         return;
       }
       if (successorRows.length !== 1) {
         throw malformedStoredData();
       }
 
+      isLinked = true;
       const successor = this.#contextItemWithoutSupersessionValidation(
         successorRows[0]!,
       );
