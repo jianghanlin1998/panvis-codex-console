@@ -6,7 +6,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 ## Repository
 - Repo: `jianghanlin1998/panvis-codex-console`
 - Branch: `main`
-- State at S0B2b task start: `bf1ef8d0a6743f7a88a420a24f869ad515021bfc` (`chore(dev): harden Codex runtime bootstrap`), clean and synchronized with `origin/main`
+- State at S0B2b hardening start: `7c19f5b0871822d22ed93b9903cedcd382db1de4` (`feat(storage): add digest and audit persistence`), clean and synchronized with `origin/main`
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 
 ## Maturity
@@ -15,8 +15,10 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S0C Mock Codex App Server boundary + `$task-execution` Skill: ACCEPTED foundation
 - S0D Provider-neutral execution contracts: ACCEPTED
 - S0B2a Context Item storage: ACCEPTED
-- S0B2b Context Digest + Audit Event persistence: IMPLEMENTED
-- S0B2b independent acceptance: not yet
+- S0B2b Context Digest + Audit Event persistence: HARDENED
+- S0B2b Comprehensive Hardening: PASS
+- S0B2b independent QA: PENDING
+- S0B2b ACCEPTED: NO
 - Historical S0B2a hierarchy, supersession-history, branched-history, and canonical-storage defects: CLOSED
 
 ## Environment Bootstrap
@@ -24,19 +26,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Task execution now performs the Node/pnpm preflight before Node-dependent commands.
 - `scripts/runtime-preflight.sh` accepts a compatible direct runtime or derives the bundled Node location relative to the available pnpm wrapper, then validates Node >=24 and pnpm 11.16.0.
 - Fresh Codex chat manual QA: PASS.
+- Hanlin manual QA: NOT REQUIRED for S0B2b hardening.
 - Evidence: runtime preflight ran first, established Node 24.14.0 and pnpm 11.16.0, and the first `pnpm lint` invocation passed without an earlier Node-on-PATH failure.
 
 ## Active blockers
-- Product blocker: none for S0B2b Comprehensive Hardening.
+- Product blocker: none for S0B2b Fresh Independent QA.
 - Workflow blocker: none.
 
 ## Next safe task
-**S0B2b Comprehensive Hardening**
+**S0B2b Fresh Independent QA**
 
 Dependency:
-- upstream: S0B2a Context Item storage
-- gate: S0B2a ACCEPTED required
+- upstream: S0B2b Comprehensive Hardening
+- gate: S0B2b HARDENED required
 - status: SATISFIED
+
+Downstream foundation work that relies on Digest or Audit invariants remains gated on S0B2b ACCEPTED.
 
 ## Not operational yet
 - browser Console UI

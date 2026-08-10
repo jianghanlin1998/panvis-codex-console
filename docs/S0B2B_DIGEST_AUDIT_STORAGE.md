@@ -22,6 +22,10 @@ The forward migration adds only `context_digests` and `audit_events`. Foreign ke
 
 Every public read reconstructs the strict domain object, requires stored values to already be canonical, and verifies the complete Project-to-Big-Task-to-Subtask ownership hierarchy. Stored structural, canonical, or hierarchy corruption fails closed as sanitized `MALFORMED_STORED_DATA`. Caller-provided missing or mismatched hierarchy follows the existing sanitized parent-not-found contract.
 
+Persisted duplicate Digests at one exact scope invalidate that scope as current state even when each row is individually canonical. Digest lookup by ID and by scope, creation prechecks, and replacement therefore fail closed rather than selecting one duplicate as trustworthy; unrelated valid Digest scopes remain usable.
+
+Audit append-only behavior is a storage-service API boundary: callers can append, get by ID, and list exact scope, but cannot update or delete through the service. Direct local SQL mutation is outside that boundary and is not a cryptographic tamper model; malformed or noncanonical persisted rows still fail closed on public reads.
+
 ## Deferred work
 
 Digest generation and history, semantic retrieval, Context Packets, inheritance, ACL evaluation, Promoted Context, search/FTS, artifacts and Handoffs, automatic audit emission, event subscribers, execution persistence, live Codex integration, worktrees, UI/daemon work, provider expansion, and deployment remain deferred.

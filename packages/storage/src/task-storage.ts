@@ -1151,7 +1151,20 @@ export class TaskStorage {
       .from(contextDigestsTable)
       .where(eq(contextDigestsTable.id, contextDigestId))
       .get();
-    return row === undefined ? null : this.#contextDigestFromRow(row);
+    if (row === undefined) {
+      return null;
+    }
+
+    const contextDigest = this.#contextDigestFromRow(row);
+    const scopeRows = this.#database
+      .select({ id: contextDigestsTable.id })
+      .from(contextDigestsTable)
+      .where(contextDigestScopePredicate(contextDigest.scope))
+      .all();
+    if (scopeRows.length !== 1 || scopeRows[0]?.id !== row.id) {
+      throw malformedStoredData();
+    }
+    return contextDigest;
   }
 
   #getContextDigestByScope(scope: ContextScope): ContextDigest | null {
