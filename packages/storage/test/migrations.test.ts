@@ -5,12 +5,15 @@ import { basename, dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { ContextScopeSchema } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import {
   captureTaskStorageError,
   createHierarchy,
   fixedClock,
+  makeAuditEvent,
   makeBigTask,
+  makeContextDigest,
   makeContextItem,
   makeDependency,
   makeProject,
@@ -21,6 +24,9 @@ import {
 
 const acceptedS0B1Migration = fileURLToPath(
   new URL("../drizzle/20260809002701_public_mephisto", import.meta.url),
+);
+const acceptedS0B2aMigration = fileURLToPath(
+  new URL("../drizzle/20260809150746_groovy_iron_monger", import.meta.url),
 );
 
 describe("database lifecycle and migrations", () => {
@@ -51,7 +57,9 @@ describe("database lifecycle and migrations", () => {
           .map((row) => (row as { readonly name: string }).name);
         expect(tables).toEqual([
           "__drizzle_migrations",
+          "audit_events",
           "big_tasks",
+          "context_digests",
           "context_items",
           "projects",
           "subtasks",
@@ -73,7 +81,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(2);
+        expect(row.count).toBe(3);
       } finally {
         sqlite.close();
       }
@@ -90,7 +98,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(2);
+        expect(row.count).toBe(3);
       } finally {
         sqlite.close();
       }
@@ -246,6 +254,72 @@ describe("database lifecycle and migrations", () => {
         expect(rerun.isForeignKeyEnforcementEnabled()).toBe(true);
       } finally {
         rerun.close();
+      }
+    });
+  });
+
+  it("preserves accepted S0B2a data and enables Digest and Audit writes after migration", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const s0b2aMigrations = join(dirname(databasePath), "s0b2a-migrations");
+      mkdirSync(s0b2aMigrations);
+      for (const migration of [acceptedS0B1Migration, acceptedS0B2aMigration]) {
+        cpSync(migration, join(s0b2aMigrations, basename(migration)), {
+          recursive: true,
+        });
+      }
+
+      const before = openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: s0b2aMigrations,
+      });
+      createHierarchy(before);
+      const dependency = makeDependency("st_a", "st_b");
+      const scope = ContextScopeSchema.parse({
+        scopeType: "SUBTASK",
+        projectId: "prj_console",
+        bigTaskId: "bt_v1",
+        subtaskId: "st_a",
+      });
+      const contextItem = makeContextItem("ctx_before_s0b2b", scope);
+      before.replaceDependenciesForBigTask(makeBigTask().id, [dependency]);
+      before.createContextItem(contextItem);
+      const acceptedState = {
+        project: before.getProjectById(makeProject().id),
+        bigTask: before.getBigTaskById(makeBigTask().id),
+        subtasks: before.listSubtasksByBigTask(makeBigTask().id),
+        dependencies: before.listDependenciesForBigTask(makeBigTask().id),
+        contextItem: before.getContextItemById(contextItem.id),
+      };
+      before.close();
+
+      const migrated = openTaskDatabase({ databasePath, clock: fixedClock });
+      expect(migrated.getProjectById(makeProject().id)).toEqual(acceptedState.project);
+      expect(migrated.getBigTaskById(makeBigTask().id)).toEqual(acceptedState.bigTask);
+      expect(migrated.listSubtasksByBigTask(makeBigTask().id)).toEqual(
+        acceptedState.subtasks,
+      );
+      expect(migrated.listDependenciesForBigTask(makeBigTask().id)).toEqual(
+        acceptedState.dependencies,
+      );
+      expect(migrated.getContextItemById(contextItem.id)).toEqual(
+        acceptedState.contextItem,
+      );
+      const digest = makeContextDigest("dgt_after_s0b2a", scope);
+      const auditEvent = makeAuditEvent("aud_after_s0b2a", scope);
+      expect(migrated.createContextDigest(digest)).toEqual(digest);
+      expect(migrated.appendAuditEvent(auditEvent)).toEqual(auditEvent);
+      expect(migrated.isForeignKeyEnforcementEnabled()).toBe(true);
+      migrated.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      try {
+        expect(reopened.getContextItemById(contextItem.id)).toEqual(contextItem);
+        expect(reopened.getContextDigestByScope(scope)).toEqual(digest);
+        expect(reopened.listAuditEventsByScope(scope)).toEqual([auditEvent]);
+        expect(reopened.isForeignKeyEnforcementEnabled()).toBe(true);
+      } finally {
+        reopened.close();
       }
     });
   });

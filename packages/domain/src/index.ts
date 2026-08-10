@@ -1,19 +1,43 @@
 export {
+  AuditEventIdSchema,
   BigTaskIdSchema,
   ChatThreadIdSchema,
+  ContextDigestIdSchema,
   ContextItemIdSchema,
   ExecutionRunIdSchema,
   ProjectIdSchema,
   SubtaskIdSchema,
 } from "./identifiers.js";
 export type {
+  AuditEventId,
   BigTaskId,
   ChatThreadId,
+  ContextDigestId,
   ContextItemId,
   ExecutionRunId,
   ProjectId,
   SubtaskId,
 } from "./identifiers.js";
+
+export {
+  ContextDigestProvenanceSchema,
+  ContextDigestSchema,
+} from "./context-digest.js";
+export type {
+  ContextDigest,
+  ContextDigestProvenance,
+} from "./context-digest.js";
+
+export {
+  AuditActorTypeSchema,
+  AuditEventSchema,
+  AuditEventTypeSchema,
+} from "./audit.js";
+export type {
+  AuditActorType,
+  AuditEvent,
+  AuditEventType,
+} from "./audit.js";
 
 export {
   BigTaskSchema,

@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  AuditEventSchema,
   BigTaskSchema,
+  ContextDigestSchema,
   ContextItemSchema,
   ContextScopeSchema,
   ProjectSchema,
@@ -11,7 +13,10 @@ import {
   SubtaskSchema,
 } from "@codex-task-console/domain";
 import type {
+  AuditActorType,
+  AuditEvent,
   BigTask,
+  ContextDigest,
   ContextItem,
   ContextItemId,
   ContextScope,
@@ -124,6 +129,65 @@ export const makeContextItem = (
         ? {}
         : { supersedesContextItemId: options.supersedesContextItemId }),
     },
+  });
+
+interface MakeContextDigestOptions {
+  readonly body?: string;
+  readonly effectiveAt?: string;
+  readonly sourceReference?: string;
+}
+
+export const makeContextDigest = (
+  id = "dgt_current",
+  scope: ContextScope = ContextScopeSchema.parse({
+    scopeType: "BIG_TASK",
+    projectId: "prj_console",
+    bigTaskId: "bt_v1",
+  }),
+  options: MakeContextDigestOptions = {},
+): ContextDigest =>
+  ContextDigestSchema.parse({
+    id,
+    scope,
+    body: options.body ?? `Compact digest for ${id}.`,
+    provenance: {
+      sourceType: "SYSTEM",
+      sourceReference: options.sourceReference ?? `digest-source#${id}`,
+      effectiveAt: options.effectiveAt ?? FIXED_TIME,
+    },
+  });
+
+interface MakeAuditEventOptions {
+  readonly actorType?: AuditActorType;
+  readonly eventType?: string;
+  readonly occurredAt?: string;
+  readonly actorReference?: string;
+  readonly subjectReference?: string;
+  readonly summary?: string;
+}
+
+export const makeAuditEvent = (
+  id = "aud_task_created",
+  scope: ContextScope = ContextScopeSchema.parse({
+    scopeType: "BIG_TASK",
+    projectId: "prj_console",
+    bigTaskId: "bt_v1",
+  }),
+  options: MakeAuditEventOptions = {},
+): AuditEvent =>
+  AuditEventSchema.parse({
+    id,
+    scope,
+    eventType: options.eventType ?? "TASK_CREATED",
+    actorType: options.actorType ?? "CODEX",
+    ...(options.actorReference === undefined
+      ? { actorReference: "codex-session-1" }
+      : { actorReference: options.actorReference }),
+    summary: options.summary ?? `Audit summary for ${id}.`,
+    ...(options.subjectReference === undefined
+      ? { subjectReference: scope.scopeType === "PROJECT" ? scope.projectId : scope.bigTaskId }
+      : { subjectReference: options.subjectReference }),
+    occurredAt: options.occurredAt ?? FIXED_TIME,
   });
 
 export const withMemoryStorage = <T>(operation: (storage: TaskStorage) => T): T => {

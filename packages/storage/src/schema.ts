@@ -200,3 +200,126 @@ export const contextItemsTable = sqliteTable(
     ),
   ],
 );
+
+export const contextDigestsTable = sqliteTable(
+  "context_digests",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    bigTaskId: text("big_task_id").references(() => bigTasksTable.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    subtaskId: text("subtask_id").references(() => subtasksTable.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    body: text("body").notNull(),
+    sourceType: text("source_type").notNull(),
+    sourceReference: text("source_reference").notNull(),
+    effectiveAt: text("effective_at").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("context_digests_project_id_index").on(table.projectId),
+    index("context_digests_big_task_id_index").on(table.bigTaskId),
+    index("context_digests_subtask_id_index").on(table.subtaskId),
+    uniqueIndex("context_digests_project_scope_unique")
+      .on(table.projectId)
+      .where(sql`${table.bigTaskId} is null and ${table.subtaskId} is null`),
+    uniqueIndex("context_digests_big_task_scope_unique")
+      .on(table.projectId, table.bigTaskId)
+      .where(sql`${table.bigTaskId} is not null and ${table.subtaskId} is null`),
+    uniqueIndex("context_digests_subtask_scope_unique")
+      .on(table.projectId, table.bigTaskId, table.subtaskId)
+      .where(
+        sql`${table.bigTaskId} is not null and ${table.subtaskId} is not null`,
+      ),
+    check(
+      "context_digests_scope_check",
+      sql`(${table.bigTaskId} is null and ${table.subtaskId} is null)
+        or (${table.bigTaskId} is not null and ${table.subtaskId} is null)
+        or (${table.bigTaskId} is not null and ${table.subtaskId} is not null)`,
+    ),
+    check(
+      "context_digests_source_type_check",
+      sql`${table.sourceType} in ('CHAT_MESSAGE', 'REPO', 'HANDOFF', 'IMPORT', 'MANUAL', 'SYSTEM')`,
+    ),
+    check(
+      "context_digests_body_length_check",
+      sql`length(trim(${table.body})) between 1 and 8000`,
+    ),
+    check(
+      "context_digests_source_reference_length_check",
+      sql`length(trim(${table.sourceReference})) between 1 and 2048`,
+    ),
+  ],
+);
+
+export const auditEventsTable = sqliteTable(
+  "audit_events",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    bigTaskId: text("big_task_id").references(() => bigTasksTable.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    subtaskId: text("subtask_id").references(() => subtasksTable.id, {
+      onDelete: "restrict",
+      onUpdate: "cascade",
+    }),
+    eventType: text("event_type").notNull(),
+    actorType: text("actor_type").notNull(),
+    actorReference: text("actor_reference"),
+    summary: text("summary").notNull(),
+    subjectReference: text("subject_reference"),
+    occurredAt: text("occurred_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("audit_events_project_id_index").on(table.projectId),
+    index("audit_events_big_task_id_index").on(table.bigTaskId),
+    index("audit_events_subtask_id_index").on(table.subtaskId),
+    index("audit_events_scope_occurred_at_id_index").on(
+      table.projectId,
+      table.bigTaskId,
+      table.subtaskId,
+      table.occurredAt,
+      table.id,
+    ),
+    check(
+      "audit_events_scope_check",
+      sql`(${table.bigTaskId} is null and ${table.subtaskId} is null)
+        or (${table.bigTaskId} is not null and ${table.subtaskId} is null)
+        or (${table.bigTaskId} is not null and ${table.subtaskId} is not null)`,
+    ),
+    check(
+      "audit_events_event_type_check",
+      sql`length(trim(${table.eventType})) between 1 and 64
+        and ${table.eventType} glob '[A-Z]*'
+        and ${table.eventType} not glob '*[^A-Z0-9_]*'`,
+    ),
+    check(
+      "audit_events_actor_type_check",
+      sql`${table.actorType} in ('HUMAN', 'CODEX', 'SYSTEM')`,
+    ),
+    check(
+      "audit_events_actor_reference_length_check",
+      sql`${table.actorReference} is null or length(trim(${table.actorReference})) between 1 and 256`,
+    ),
+    check(
+      "audit_events_summary_length_check",
+      sql`length(trim(${table.summary})) between 1 and 1000`,
+    ),
+    check(
+      "audit_events_subject_reference_length_check",
+      sql`${table.subjectReference} is null or length(trim(${table.subjectReference})) between 1 and 512`,
+    ),
+  ],
+);

@@ -1,8 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  AuditEventIdSchema,
+  AuditEventSchema,
   BigTaskIdSchema,
   BigTaskSchema,
+  ContextDigestIdSchema,
+  ContextDigestSchema,
   ContextItemIdSchema,
   ContextItemSchema,
   ContextScopeSchema,
@@ -15,8 +19,12 @@ import {
   validateSubtaskDependencies,
 } from "@codex-task-console/domain";
 import type {
+  AuditEvent,
+  AuditEventId,
   BigTask,
   BigTaskId,
+  ContextDigest,
+  ContextDigestId,
   ContextItem,
   ContextItemId,
   ContextScope,
@@ -34,7 +42,9 @@ import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { TaskStorageError } from "./errors.js";
 import { defaultMigrationsFolder, runMigrations } from "./migrations.js";
 import {
+  auditEventsTable,
   bigTasksTable,
+  contextDigestsTable,
   contextItemsTable,
   projectsTable,
   subtasksTable,
@@ -52,6 +62,8 @@ type ProjectRow = typeof projectsTable.$inferSelect;
 type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
 type ContextItemRow = typeof contextItemsTable.$inferSelect;
+type ContextDigestRow = typeof contextDigestsTable.$inferSelect;
+type AuditEventRow = typeof auditEventsTable.$inferSelect;
 
 const invalidInput = (entity: string): TaskStorageError =>
   new TaskStorageError("INVALID_INPUT", `${entity} input does not satisfy the domain contract.`);
@@ -116,6 +128,38 @@ const parseContextItemInput = (input: ContextItem): ContextItem => {
   const result = ContextItemSchema.safeParse(input);
   if (!result.success) {
     throw invalidInput("Context Item");
+  }
+  return result.data;
+};
+
+const parseContextDigestId = (input: ContextDigestId): ContextDigestId => {
+  const result = ContextDigestIdSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Context Digest ID");
+  }
+  return result.data;
+};
+
+const parseContextDigestInput = (input: ContextDigest): ContextDigest => {
+  const result = ContextDigestSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Context Digest");
+  }
+  return result.data;
+};
+
+const parseAuditEventId = (input: AuditEventId): AuditEventId => {
+  const result = AuditEventIdSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Audit Event ID");
+  }
+  return result.data;
+};
+
+const parseAuditEventInput = (input: AuditEvent): AuditEvent => {
+  const result = AuditEventSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Audit Event");
   }
   return result.data;
 };
@@ -268,6 +312,121 @@ const contextItemFromRow = (row: ContextItemRow): ContextItem => {
   return contextItem;
 };
 
+const scopeMatchesStoredValues = (
+  scope: ContextScope,
+  projectId: string,
+  bigTaskId: string | null,
+  subtaskId: string | null,
+): boolean =>
+  scope.projectId === projectId &&
+  (scope.scopeType === "PROJECT" ? null : scope.bigTaskId) === bigTaskId &&
+  (scope.scopeType === "SUBTASK" ? scope.subtaskId : null) === subtaskId;
+
+const scopeFromStoredValues = (
+  projectId: string,
+  bigTaskId: string | null,
+  subtaskId: string | null,
+): ContextScope => {
+  if (bigTaskId === null && subtaskId !== null) {
+    throw malformedStoredData();
+  }
+  const result = ContextScopeSchema.safeParse(
+    bigTaskId === null
+      ? { scopeType: "PROJECT", projectId }
+      : subtaskId === null
+        ? { scopeType: "BIG_TASK", projectId, bigTaskId }
+        : { scopeType: "SUBTASK", projectId, bigTaskId, subtaskId },
+  );
+  if (
+    !result.success ||
+    !scopeMatchesStoredValues(result.data, projectId, bigTaskId, subtaskId)
+  ) {
+    throw malformedStoredData();
+  }
+  return result.data;
+};
+
+const contextDigestFromRow = (row: ContextDigestRow): ContextDigest => {
+  if (
+    !isCanonicalUtcTimestamp(row.createdAt) ||
+    !isCanonicalUtcTimestamp(row.updatedAt)
+  ) {
+    throw malformedStoredData();
+  }
+  const scope = scopeFromStoredValues(row.projectId, row.bigTaskId, row.subtaskId);
+  const result = ContextDigestSchema.safeParse({
+    id: row.id,
+    scope,
+    body: row.body,
+    provenance: {
+      sourceType: row.sourceType,
+      sourceReference: row.sourceReference,
+      effectiveAt: row.effectiveAt,
+    },
+  });
+  if (!result.success) {
+    throw malformedStoredData();
+  }
+  const contextDigest = result.data;
+  if (
+    contextDigest.id !== row.id ||
+    !scopeMatchesStoredValues(
+      contextDigest.scope,
+      row.projectId,
+      row.bigTaskId,
+      row.subtaskId,
+    ) ||
+    contextDigest.body !== row.body ||
+    contextDigest.provenance.sourceType !== row.sourceType ||
+    contextDigest.provenance.sourceReference !== row.sourceReference ||
+    contextDigest.provenance.effectiveAt !== row.effectiveAt
+  ) {
+    throw malformedStoredData();
+  }
+  return contextDigest;
+};
+
+const auditEventFromRow = (row: AuditEventRow): AuditEvent => {
+  if (!isCanonicalUtcTimestamp(row.createdAt)) {
+    throw malformedStoredData();
+  }
+  const scope = scopeFromStoredValues(row.projectId, row.bigTaskId, row.subtaskId);
+  const result = AuditEventSchema.safeParse({
+    id: row.id,
+    scope,
+    eventType: row.eventType,
+    actorType: row.actorType,
+    ...(row.actorReference === null ? {} : { actorReference: row.actorReference }),
+    summary: row.summary,
+    ...(row.subjectReference === null
+      ? {}
+      : { subjectReference: row.subjectReference }),
+    occurredAt: row.occurredAt,
+  });
+  if (!result.success) {
+    throw malformedStoredData();
+  }
+  const auditEvent = result.data;
+  if (
+    auditEvent.id !== row.id ||
+    !scopeMatchesStoredValues(
+      auditEvent.scope,
+      row.projectId,
+      row.bigTaskId,
+      row.subtaskId,
+    ) ||
+    auditEvent.eventType !== row.eventType ||
+    auditEvent.actorType !== row.actorType ||
+    (auditEvent.actorReference ?? null) !== row.actorReference ||
+    auditEvent.summary !== row.summary ||
+    (auditEvent.subjectReference ?? null) !== row.subjectReference ||
+    auditEvent.occurredAt !== row.occurredAt
+  ) {
+    throw malformedStoredData();
+  }
+  return auditEvent;
+};
+
 const contextScopesEqual = (left: ContextScope, right: ContextScope): boolean => {
   switch (left.scopeType) {
     case "PROJECT":
@@ -307,6 +466,52 @@ const contextScopePredicate = (scope: ContextScope) => {
         eq(contextItemsTable.projectId, scope.projectId),
         eq(contextItemsTable.bigTaskId, scope.bigTaskId),
         eq(contextItemsTable.subtaskId, scope.subtaskId),
+      );
+  }
+};
+
+const contextDigestScopePredicate = (scope: ContextScope) => {
+  switch (scope.scopeType) {
+    case "PROJECT":
+      return and(
+        eq(contextDigestsTable.projectId, scope.projectId),
+        isNull(contextDigestsTable.bigTaskId),
+        isNull(contextDigestsTable.subtaskId),
+      );
+    case "BIG_TASK":
+      return and(
+        eq(contextDigestsTable.projectId, scope.projectId),
+        eq(contextDigestsTable.bigTaskId, scope.bigTaskId),
+        isNull(contextDigestsTable.subtaskId),
+      );
+    case "SUBTASK":
+      return and(
+        eq(contextDigestsTable.projectId, scope.projectId),
+        eq(contextDigestsTable.bigTaskId, scope.bigTaskId),
+        eq(contextDigestsTable.subtaskId, scope.subtaskId),
+      );
+  }
+};
+
+const auditEventScopePredicate = (scope: ContextScope) => {
+  switch (scope.scopeType) {
+    case "PROJECT":
+      return and(
+        eq(auditEventsTable.projectId, scope.projectId),
+        isNull(auditEventsTable.bigTaskId),
+        isNull(auditEventsTable.subtaskId),
+      );
+    case "BIG_TASK":
+      return and(
+        eq(auditEventsTable.projectId, scope.projectId),
+        eq(auditEventsTable.bigTaskId, scope.bigTaskId),
+        isNull(auditEventsTable.subtaskId),
+      );
+    case "SUBTASK":
+      return and(
+        eq(auditEventsTable.projectId, scope.projectId),
+        eq(auditEventsTable.bigTaskId, scope.bigTaskId),
+        eq(auditEventsTable.subtaskId, scope.subtaskId),
       );
   }
 };
@@ -603,7 +808,7 @@ export class TaskStorage {
     }
 
     return this.#operation(() => {
-      this.#validateContextHierarchy(deriveContextScope(contextItem));
+      this.#validateExactScopeHierarchy(deriveContextScope(contextItem), "Context Item");
       if (this.#getContextItem(contextItem.id) !== null) {
         throw new TaskStorageError("CONFLICT", "A Context Item with this ID already exists.");
       }
@@ -629,7 +834,7 @@ export class TaskStorage {
   listContextItemsByScope(input: ContextScope): readonly ContextItem[] {
     const scope = parseContextScope(input);
     return this.#operation(() => {
-      this.#validateContextHierarchy(scope);
+      this.#validateExactScopeHierarchy(scope, "Context Item");
       return this.#database
         .select()
         .from(contextItemsTable)
@@ -672,7 +877,7 @@ export class TaskStorage {
         if (!contextScopesEqual(priorScope, replacementScope)) {
           throw invalidInput("Context Item supersession scope");
         }
-        this.#validateContextHierarchy(replacementScope);
+        this.#validateExactScopeHierarchy(replacementScope, "Context Item");
 
         if (this.#getContextItem(replacement.id) !== null) {
           throw new TaskStorageError("CONFLICT", "A Context Item with this ID already exists.");
@@ -720,6 +925,182 @@ export class TaskStorage {
     );
   }
 
+  createContextDigest(input: ContextDigest): ContextDigest {
+    const contextDigest = parseContextDigestInput(input);
+    return this.#operation(() => {
+      this.#validateExactScopeHierarchy(contextDigest.scope, "Context Digest");
+      if (this.#getContextDigest(contextDigest.id) !== null) {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "A Context Digest with this ID already exists.",
+        );
+      }
+      if (this.#getContextDigestByScope(contextDigest.scope) !== null) {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "A Context Digest already exists at this exact scope.",
+        );
+      }
+
+      const timestamp = this.#timestamp();
+      this.#database
+        .insert(contextDigestsTable)
+        .values({
+          id: contextDigest.id,
+          projectId: contextDigest.scope.projectId,
+          bigTaskId:
+            contextDigest.scope.scopeType === "PROJECT"
+              ? null
+              : contextDigest.scope.bigTaskId,
+          subtaskId:
+            contextDigest.scope.scopeType === "SUBTASK"
+              ? contextDigest.scope.subtaskId
+              : null,
+          body: contextDigest.body,
+          sourceType: contextDigest.provenance.sourceType,
+          sourceReference: contextDigest.provenance.sourceReference,
+          effectiveAt: contextDigest.provenance.effectiveAt,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .run();
+      const stored = this.#getContextDigest(contextDigest.id);
+      if (stored === null) {
+        throw new TaskStorageError(
+          "STORAGE_OPERATION_FAILED",
+          "The Context Digest was not persisted.",
+        );
+      }
+      return stored;
+    });
+  }
+
+  getContextDigestById(input: ContextDigestId): ContextDigest | null {
+    const contextDigestId = parseContextDigestId(input);
+    return this.#operation(() => this.#getContextDigest(contextDigestId));
+  }
+
+  getContextDigestByScope(input: ContextScope): ContextDigest | null {
+    const scope = parseContextScope(input);
+    return this.#operation(() => {
+      this.#validateExactScopeHierarchy(scope, "Context Digest");
+      return this.#getContextDigestByScope(scope);
+    });
+  }
+
+  replaceContextDigest(input: ContextDigest): ContextDigest {
+    const replacement = parseContextDigestInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const existing = this.#getContextDigest(replacement.id);
+        if (existing === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The Context Digest does not exist.",
+          );
+        }
+        if (!contextScopesEqual(existing.scope, replacement.scope)) {
+          throw invalidInput("Context Digest replacement scope");
+        }
+        this.#validateExactScopeHierarchy(replacement.scope, "Context Digest");
+        const currentAtScope = this.#getContextDigestByScope(replacement.scope);
+        if (currentAtScope === null || currentAtScope.id !== existing.id) {
+          throw malformedStoredData();
+        }
+
+        const update = this.#database
+          .update(contextDigestsTable)
+          .set({
+            body: replacement.body,
+            sourceType: replacement.provenance.sourceType,
+            sourceReference: replacement.provenance.sourceReference,
+            effectiveAt: replacement.provenance.effectiveAt,
+            updatedAt: this.#timestamp(),
+          })
+          .where(eq(contextDigestsTable.id, replacement.id))
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Context Digest could not be replaced.",
+          );
+        }
+
+        const stored = this.#getContextDigest(replacement.id);
+        if (stored === null) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The replacement Context Digest was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  appendAuditEvent(input: AuditEvent): AuditEvent {
+    const auditEvent = parseAuditEventInput(input);
+    return this.#operation(() => {
+      this.#validateExactScopeHierarchy(auditEvent.scope, "Audit Event");
+      if (this.#getAuditEvent(auditEvent.id) !== null) {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "An Audit Event with this ID already exists.",
+        );
+      }
+
+      this.#database
+        .insert(auditEventsTable)
+        .values({
+          id: auditEvent.id,
+          projectId: auditEvent.scope.projectId,
+          bigTaskId:
+            auditEvent.scope.scopeType === "PROJECT"
+              ? null
+              : auditEvent.scope.bigTaskId,
+          subtaskId:
+            auditEvent.scope.scopeType === "SUBTASK"
+              ? auditEvent.scope.subtaskId
+              : null,
+          eventType: auditEvent.eventType,
+          actorType: auditEvent.actorType,
+          actorReference: auditEvent.actorReference ?? null,
+          summary: auditEvent.summary,
+          subjectReference: auditEvent.subjectReference ?? null,
+          occurredAt: auditEvent.occurredAt,
+          createdAt: this.#timestamp(),
+        })
+        .run();
+      const stored = this.#getAuditEvent(auditEvent.id);
+      if (stored === null) {
+        throw new TaskStorageError(
+          "STORAGE_OPERATION_FAILED",
+          "The Audit Event was not persisted.",
+        );
+      }
+      return stored;
+    });
+  }
+
+  getAuditEventById(input: AuditEventId): AuditEvent | null {
+    const auditEventId = parseAuditEventId(input);
+    return this.#operation(() => this.#getAuditEvent(auditEventId));
+  }
+
+  listAuditEventsByScope(input: ContextScope): readonly AuditEvent[] {
+    const scope = parseContextScope(input);
+    return this.#operation(() => {
+      this.#validateExactScopeHierarchy(scope, "Audit Event");
+      return this.#database
+        .select()
+        .from(auditEventsTable)
+        .where(auditEventScopePredicate(scope))
+        .orderBy(asc(auditEventsTable.occurredAt), asc(auditEventsTable.id))
+        .all()
+        .map((row) => this.#auditEventFromRow(row));
+    });
+  }
+
   runInTransaction<T>(operation: (storage: TaskStorage) => T): T {
     this.#ensureOpen();
     if (this.#sqlite.isTransaction) {
@@ -764,26 +1145,77 @@ export class TaskStorage {
     return row === undefined ? null : this.#contextItemFromRow(row);
   }
 
-  #validateContextHierarchy(scope: ContextScope): void {
-    const invalidRelationship = this.#invalidContextHierarchyRelationship(scope);
+  #getContextDigest(contextDigestId: ContextDigestId): ContextDigest | null {
+    const row = this.#database
+      .select()
+      .from(contextDigestsTable)
+      .where(eq(contextDigestsTable.id, contextDigestId))
+      .get();
+    return row === undefined ? null : this.#contextDigestFromRow(row);
+  }
+
+  #getContextDigestByScope(scope: ContextScope): ContextDigest | null {
+    const rows = this.#database
+      .select()
+      .from(contextDigestsTable)
+      .where(contextDigestScopePredicate(scope))
+      .all();
+    if (rows.length > 1) {
+      throw malformedStoredData();
+    }
+    return rows[0] === undefined ? null : this.#contextDigestFromRow(rows[0]);
+  }
+
+  #getAuditEvent(auditEventId: AuditEventId): AuditEvent | null {
+    const row = this.#database
+      .select()
+      .from(auditEventsTable)
+      .where(eq(auditEventsTable.id, auditEventId))
+      .get();
+    return row === undefined ? null : this.#auditEventFromRow(row);
+  }
+
+  #validateExactScopeHierarchy(
+    scope: ContextScope,
+    entity: "Context Item" | "Context Digest" | "Audit Event",
+  ): void {
+    const invalidRelationship = this.#invalidExactScopeHierarchyRelationship(scope);
     if (invalidRelationship === "PROJECT") {
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
-        "The Context Item Project does not exist.",
+        `The ${entity} Project does not exist.`,
       );
     }
     if (invalidRelationship === "BIG_TASK") {
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
-        "The Context Item Big Task hierarchy does not exist.",
+        `The ${entity} Big Task hierarchy does not exist.`,
       );
     }
     if (invalidRelationship === "SUBTASK") {
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
-        "The Context Item Subtask hierarchy does not exist.",
+        `The ${entity} Subtask hierarchy does not exist.`,
       );
     }
+  }
+
+  #contextDigestFromRow(row: ContextDigestRow): ContextDigest {
+    const contextDigest = contextDigestFromRow(row);
+    if (
+      this.#invalidExactScopeHierarchyRelationship(contextDigest.scope) !== null
+    ) {
+      throw malformedStoredData();
+    }
+    return contextDigest;
+  }
+
+  #auditEventFromRow(row: AuditEventRow): AuditEvent {
+    const auditEvent = auditEventFromRow(row);
+    if (this.#invalidExactScopeHierarchyRelationship(auditEvent.scope) !== null) {
+      throw malformedStoredData();
+    }
+    return auditEvent;
   }
 
   #contextItemFromRow(row: ContextItemRow): ContextItem {
@@ -795,7 +1227,7 @@ export class TaskStorage {
   #contextItemWithoutSupersessionValidation(row: ContextItemRow): ContextItem {
     const contextItem = contextItemFromRow(row);
     if (
-      this.#invalidContextHierarchyRelationship(deriveContextScope(contextItem)) !== null
+      this.#invalidExactScopeHierarchyRelationship(deriveContextScope(contextItem)) !== null
     ) {
       throw malformedStoredData();
     }
@@ -893,7 +1325,7 @@ export class TaskStorage {
     }
   }
 
-  #invalidContextHierarchyRelationship(
+  #invalidExactScopeHierarchyRelationship(
     scope: ContextScope,
   ): "PROJECT" | "BIG_TASK" | "SUBTASK" | null {
     if (this.#getProject(scope.projectId) === null) {

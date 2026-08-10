@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AuditEventSchema,
   BudgetPolicySchema,
+  ContextDigestSchema,
   ContextItemSchema,
   ContextScopeSchema,
   DurableTaskSchema,
@@ -20,6 +22,8 @@ import {
 describe("domain package public exports", () => {
   it("exposes the deliberate runtime contract surface", () => {
     expect(DurableTaskSchema).toBeDefined();
+    expect(AuditEventSchema).toBeDefined();
+    expect(ContextDigestSchema).toBeDefined();
     expect(ContextItemSchema).toBeDefined();
     expect(ContextScopeSchema).toBeDefined();
     expect(deriveContextScope).toBeTypeOf("function");
