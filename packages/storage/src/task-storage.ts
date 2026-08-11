@@ -966,6 +966,7 @@ export class TaskStorage {
             "The Implementation Checkpoint does not belong to the target Subtask.",
           );
         }
+        this.#assertNoNoncanonicalCheckpointSubtaskAliases(target.id);
         const existingTargetCheckpoint = this.#database
           .select({ id: subtaskImplementationCheckpointsTable.id })
           .from(subtaskImplementationCheckpointsTable)
@@ -1069,6 +1070,7 @@ export class TaskStorage {
           );
         }
         this.#validateStoredSubtaskHierarchy(subtask);
+        this.#assertNoNoncanonicalCheckpointSubtaskAliases(subtaskId);
         return this.#database
           .select()
           .from(subtaskImplementationCheckpointsTable)
@@ -1617,6 +1619,23 @@ export class TaskStorage {
     return row === undefined
       ? null
       : this.#subtaskImplementationCheckpointFromRow(row);
+  }
+
+  #assertNoNoncanonicalCheckpointSubtaskAliases(subtaskId: SubtaskId): void {
+    const storedSubtaskIds = this.#database
+      .select({ subtaskId: subtaskImplementationCheckpointsTable.subtaskId })
+      .from(subtaskImplementationCheckpointsTable)
+      .all();
+    for (const { subtaskId: storedSubtaskId } of storedSubtaskIds) {
+      const result = SubtaskIdSchema.safeParse(storedSubtaskId);
+      if (
+        result.success &&
+        result.data === subtaskId &&
+        storedSubtaskId !== subtaskId
+      ) {
+        throw malformedStoredData();
+      }
+    }
   }
 
   #subtaskImplementationCheckpointFromRow(

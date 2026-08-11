@@ -26,11 +26,13 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1B1 ACCEPTED: YES
 - S1B2a Durable Implementation Completion Transition: HARDENED
 - S1B2a Comprehensive Hardening: PASS
-- S1B2a Fresh Independent QA: PENDING
+- S1B2a Fresh Independent QA: FAIL
+- CTC-S1B2A-QA-001: REPAIRED
+- S1B2a Focused Fresh Re-QA: PENDING
 - S1B2a ACCEPTED: NO
 
 ## Next safe task
-**S1B2a Fresh Independent QA**
+**S1B2a Focused Fresh Re-QA**
 
 The Task Control Plane remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. No scheduling, worktree, thread, or execution automation exists yet.
 
