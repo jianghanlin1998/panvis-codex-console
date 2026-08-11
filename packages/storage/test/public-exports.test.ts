@@ -8,6 +8,7 @@ import {
   openTaskDatabase,
   projectsTable,
   STORAGE_ERROR_CODES,
+  subtaskImplementationCheckpointsTable,
   subtasksTable,
   taskDependenciesTable,
   TaskStorage,
@@ -27,5 +28,6 @@ describe("storage package public exports", () => {
     expect(contextItemsTable).toBeDefined();
     expect(subtasksTable).toBeDefined();
     expect(taskDependenciesTable).toBeDefined();
+    expect(subtaskImplementationCheckpointsTable).toBeDefined();
   });
 });

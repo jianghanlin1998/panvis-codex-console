@@ -13,6 +13,9 @@ import {
   NormalizedUsageSchema,
   ProviderRunReferenceSchema,
   ProviderThreadReferenceSchema,
+  RepositoryCommitShaSchema,
+  SubtaskImplementationCheckpointIdSchema,
+  SubtaskImplementationCheckpointSchema,
   deriveContextScope,
   SubtaskDependencySchema,
   SubtaskMaturitySchema,
@@ -40,6 +43,9 @@ describe("domain package public exports", () => {
     expect(ProviderThreadReferenceSchema).toBeDefined();
     expect(ProviderRunReferenceSchema).toBeDefined();
     expect(NormalizedUsageSchema).toBeDefined();
+    expect(RepositoryCommitShaSchema).toBeDefined();
+    expect(SubtaskImplementationCheckpointIdSchema).toBeDefined();
+    expect(SubtaskImplementationCheckpointSchema).toBeDefined();
     expect(validateSubtaskDependencies).toBeTypeOf("function");
     expect(evaluateSubtaskDependencyReadiness).toBeTypeOf("function");
     expect(validateSubtaskMaturityTransition).toBeTypeOf("function");

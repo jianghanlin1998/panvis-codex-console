@@ -145,6 +145,56 @@ export const taskDependenciesTable = sqliteTable(
   ],
 );
 
+export const subtaskImplementationCheckpointsTable = sqliteTable(
+  "subtask_implementation_checkpoints",
+  {
+    id: text("id").primaryKey(),
+    subtaskId: text("subtask_id")
+      .notNull()
+      .references(() => subtasksTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    repositoryCommitSha: text("repository_commit_sha").notNull(),
+    actorType: text("actor_type").notNull(),
+    actorReference: text("actor_reference"),
+    sourceReference: text("source_reference").notNull(),
+    summary: text("summary").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("subtask_implementation_checkpoints_subtask_index").on(table.subtaskId),
+    index("subtask_implementation_checkpoints_subtask_order_index").on(
+      table.subtaskId,
+      table.occurredAt,
+      table.id,
+    ),
+    check(
+      "subtask_implementation_checkpoints_id_check",
+      sql`length(${table.id}) between 5 and 128 and ${table.id} glob 'icp_*'`,
+    ),
+    check(
+      "subtask_implementation_checkpoints_sha_check",
+      sql`length(${table.repositoryCommitSha}) in (40, 64)
+        and ${table.repositoryCommitSha} not glob '*[^0-9a-f]*'`,
+    ),
+    check(
+      "subtask_implementation_checkpoints_actor_type_check",
+      sql`${table.actorType} in ('HUMAN', 'CODEX', 'SYSTEM')`,
+    ),
+    check(
+      "subtask_implementation_checkpoints_actor_reference_length_check",
+      sql`${table.actorReference} is null or length(trim(${table.actorReference})) between 1 and 256`,
+    ),
+    check(
+      "subtask_implementation_checkpoints_source_reference_length_check",
+      sql`length(trim(${table.sourceReference})) between 1 and 2048`,
+    ),
+    check(
+      "subtask_implementation_checkpoints_summary_length_check",
+      sql`length(trim(${table.summary})) between 1 and 1000`,
+    ),
+  ],
+);
+
 export const contextItemsTable = sqliteTable(
   "context_items",
   {

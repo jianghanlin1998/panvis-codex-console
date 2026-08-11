@@ -19,6 +19,8 @@ export const ExecutionRunIdSchema = identifierSchema<"ExecutionRunId">("run");
 export const ContextItemIdSchema = identifierSchema<"ContextItemId">("ctx");
 export const ContextDigestIdSchema = identifierSchema<"ContextDigestId">("dgt");
 export const AuditEventIdSchema = identifierSchema<"AuditEventId">("aud");
+export const SubtaskImplementationCheckpointIdSchema =
+  identifierSchema<"SubtaskImplementationCheckpointId">("icp");
 
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
 export type BigTaskId = z.infer<typeof BigTaskIdSchema>;
@@ -28,3 +30,6 @@ export type ExecutionRunId = z.infer<typeof ExecutionRunIdSchema>;
 export type ContextItemId = z.infer<typeof ContextItemIdSchema>;
 export type ContextDigestId = z.infer<typeof ContextDigestIdSchema>;
 export type AuditEventId = z.infer<typeof AuditEventIdSchema>;
+export type SubtaskImplementationCheckpointId = z.infer<
+  typeof SubtaskImplementationCheckpointIdSchema
+>;

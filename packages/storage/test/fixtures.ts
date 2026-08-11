@@ -11,6 +11,7 @@ import {
   ProjectSchema,
   SubtaskDependencySchema,
   SubtaskCreateInputSchema,
+  SubtaskImplementationCheckpointSchema,
 } from "@codex-task-console/domain";
 import type {
   AuditActorType,
@@ -24,6 +25,7 @@ import type {
   Project,
   SubtaskCreateInput,
   SubtaskDependency,
+  SubtaskImplementationCheckpoint,
 } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import type { TaskStorage } from "../src/index.js";
@@ -193,6 +195,33 @@ export const makeAuditEvent = (
     ...(options.subjectReference === undefined
       ? { subjectReference: scope.scopeType === "PROJECT" ? scope.projectId : scope.bigTaskId }
       : { subjectReference: options.subjectReference }),
+    occurredAt: options.occurredAt ?? FIXED_TIME,
+  });
+
+interface MakeImplementationCheckpointOptions {
+  readonly actorType?: AuditActorType;
+  readonly actorReference?: string;
+  readonly repositoryCommitSha?: string;
+  readonly sourceReference?: string;
+  readonly summary?: string;
+  readonly occurredAt?: string;
+}
+
+export const makeImplementationCheckpoint = (
+  id = "icp_initial_implementation",
+  subtaskId = "st_a",
+  options: MakeImplementationCheckpointOptions = {},
+): SubtaskImplementationCheckpoint =>
+  SubtaskImplementationCheckpointSchema.parse({
+    id,
+    subtaskId,
+    repositoryCommitSha: options.repositoryCommitSha ?? "a".repeat(40),
+    actorType: options.actorType ?? "CODEX",
+    ...(options.actorReference === undefined
+      ? { actorReference: "codex-task-1" }
+      : { actorReference: options.actorReference }),
+    sourceReference: options.sourceReference ?? "task://s1b2a",
+    summary: options.summary ?? "Initial implementation completed.",
     occurredAt: options.occurredAt ?? FIXED_TIME,
   });
 

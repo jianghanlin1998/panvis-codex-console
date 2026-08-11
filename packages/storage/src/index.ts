@@ -7,9 +7,14 @@ export {
   contextDigestsTable,
   contextItemsTable,
   projectsTable,
+  subtaskImplementationCheckpointsTable,
   subtasksTable,
   taskDependenciesTable,
 } from "./schema.js";
 
 export { openTaskDatabase, TaskStorage } from "./task-storage.js";
-export type { OpenTaskDatabaseOptions } from "./task-storage.js";
+export type {
+  CompleteSubtaskImplementationInput,
+  CompleteSubtaskImplementationResult,
+  OpenTaskDatabaseOptions,
+} from "./task-storage.js";

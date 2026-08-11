@@ -12,6 +12,8 @@ import {
   ContextScopeSchema,
   ProjectIdSchema,
   ProjectSchema,
+  SubtaskImplementationCheckpointIdSchema,
+  SubtaskImplementationCheckpointSchema,
   SubtaskCreateInputSchema,
   SubtaskDependencySchema,
   SubtaskIdSchema,
@@ -19,6 +21,8 @@ import {
   deriveContextScope,
   evaluateSubtaskDependencyReadiness,
   validateSubtaskDependencies,
+  validateSubtaskMaturityTransition,
+  validateSubtaskTransition,
 } from "@codex-task-console/domain";
 import type {
   AuditEvent,
@@ -38,6 +42,8 @@ import type {
   SubtaskCreateInput,
   SubtaskDependency,
   SubtaskId,
+  SubtaskImplementationCheckpoint,
+  SubtaskImplementationCheckpointId,
 } from "@codex-task-console/domain";
 import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
@@ -51,6 +57,7 @@ import {
   contextDigestsTable,
   contextItemsTable,
   projectsTable,
+  subtaskImplementationCheckpointsTable,
   subtasksTable,
   taskDependenciesTable,
 } from "./schema.js";
@@ -62,12 +69,24 @@ export interface OpenTaskDatabaseOptions {
   readonly migrationsFolder?: string;
 }
 
+export interface CompleteSubtaskImplementationInput {
+  readonly subtaskId: SubtaskId;
+  readonly checkpoint: SubtaskImplementationCheckpoint;
+}
+
+export interface CompleteSubtaskImplementationResult {
+  readonly subtask: Subtask;
+  readonly checkpoint: SubtaskImplementationCheckpoint;
+}
+
 type ProjectRow = typeof projectsTable.$inferSelect;
 type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
 type ContextItemRow = typeof contextItemsTable.$inferSelect;
 type ContextDigestRow = typeof contextDigestsTable.$inferSelect;
 type AuditEventRow = typeof auditEventsTable.$inferSelect;
+type SubtaskImplementationCheckpointRow =
+  typeof subtaskImplementationCheckpointsTable.$inferSelect;
 
 const invalidInput = (entity: string): TaskStorageError =>
   new TaskStorageError("INVALID_INPUT", `${entity} input does not satisfy the domain contract.`);
@@ -174,6 +193,45 @@ const parseAuditEventInput = (input: AuditEvent): AuditEvent => {
     throw invalidInput("Audit Event");
   }
   return result.data;
+};
+
+const parseSubtaskImplementationCheckpointId = (
+  input: SubtaskImplementationCheckpointId,
+): SubtaskImplementationCheckpointId => {
+  const result = SubtaskImplementationCheckpointIdSchema.safeParse(input);
+  if (!result.success || result.data !== input) {
+    throw invalidInput("Subtask Implementation Checkpoint ID");
+  }
+  return result.data;
+};
+
+const parseCompleteSubtaskImplementationInput = (
+  input: CompleteSubtaskImplementationInput,
+): CompleteSubtaskImplementationInput => {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw invalidInput("Subtask implementation completion");
+  }
+  const inputRecord = input as unknown as Record<string, unknown>;
+  const keys = Object.keys(inputRecord).sort();
+  if (keys.length !== 2 || keys[0] !== "checkpoint" || keys[1] !== "subtaskId") {
+    throw invalidInput("Subtask implementation completion");
+  }
+
+  const subtaskId = parseCanonicalSubtaskId(inputRecord.subtaskId as SubtaskId);
+  const checkpointResult = SubtaskImplementationCheckpointSchema.safeParse(
+    inputRecord.checkpoint,
+  );
+  if (!checkpointResult.success) {
+    throw invalidInput("Subtask Implementation Checkpoint");
+  }
+  const checkpointInput = inputRecord.checkpoint as Record<string, unknown>;
+  if (
+    checkpointResult.data.id !== checkpointInput.id ||
+    checkpointResult.data.subtaskId !== checkpointInput.subtaskId
+  ) {
+    throw invalidInput("Subtask Implementation Checkpoint");
+  }
+  return { subtaskId, checkpoint: checkpointResult.data };
 };
 
 const parseContextScope = (input: ContextScope): ContextScope => {
@@ -496,6 +554,44 @@ const auditEventFromRow = (row: AuditEventRow): AuditEvent => {
   return auditEvent;
 };
 
+const subtaskImplementationCheckpointFromRow = (
+  row: SubtaskImplementationCheckpointRow,
+): SubtaskImplementationCheckpoint => {
+  if (
+    !isCanonicalUtcTimestamp(row.occurredAt) ||
+    !isCanonicalUtcTimestamp(row.createdAt)
+  ) {
+    throw malformedStoredData();
+  }
+  const result = SubtaskImplementationCheckpointSchema.safeParse({
+    id: row.id,
+    subtaskId: row.subtaskId,
+    repositoryCommitSha: row.repositoryCommitSha,
+    actorType: row.actorType,
+    ...(row.actorReference === null ? {} : { actorReference: row.actorReference }),
+    sourceReference: row.sourceReference,
+    summary: row.summary,
+    occurredAt: row.occurredAt,
+  });
+  if (!result.success) {
+    throw malformedStoredData();
+  }
+  const checkpoint = result.data;
+  if (
+    checkpoint.id !== row.id ||
+    checkpoint.subtaskId !== row.subtaskId ||
+    checkpoint.repositoryCommitSha !== row.repositoryCommitSha ||
+    checkpoint.actorType !== row.actorType ||
+    (checkpoint.actorReference ?? null) !== row.actorReference ||
+    checkpoint.sourceReference !== row.sourceReference ||
+    checkpoint.summary !== row.summary ||
+    checkpoint.occurredAt !== row.occurredAt
+  ) {
+    throw malformedStoredData();
+  }
+  return checkpoint;
+};
+
 const contextScopesEqual = (left: ContextScope, right: ContextScope): boolean => {
   switch (left.scopeType) {
     case "PROJECT":
@@ -799,6 +895,175 @@ export class TaskStorage {
         .all()
         .map(subtaskFromRow),
     );
+  }
+
+  completeSubtaskImplementation(
+    input: CompleteSubtaskImplementationInput,
+  ): CompleteSubtaskImplementationResult {
+    const { subtaskId, checkpoint } =
+      parseCompleteSubtaskImplementationInput(input);
+    return this.#operation(() =>
+      this.#atomicImplementationCompletion(() => {
+        const targetRow = this.#database
+          .select()
+          .from(subtasksTable)
+          .where(eq(subtasksTable.id, subtaskId))
+          .get();
+        if (targetRow === undefined) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The Subtask does not exist.",
+          );
+        }
+        const target = subtaskFromRow(targetRow);
+        if (
+          !isCanonicalUtcTimestamp(targetRow.createdAt) ||
+          !isCanonicalUtcTimestamp(targetRow.updatedAt)
+        ) {
+          throw malformedStoredData();
+        }
+        this.#validateStoredSubtaskHierarchy(target);
+
+        if (target.status !== "IN_PROGRESS") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Subtask is not in the required implementation stage.",
+          );
+        }
+        if (target.maturity !== "NOT_STARTED") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Subtask is not at the required initial maturity.",
+          );
+        }
+
+        const statusTransition = validateSubtaskTransition(
+          "IN_PROGRESS",
+          "QA_DEBUG",
+          { implementationCheckpointPresent: true },
+        );
+        if (!statusTransition.allowed) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Subtask implementation transition is not allowed.",
+            statusTransition.errorCodes,
+          );
+        }
+        const maturityTransition = validateSubtaskMaturityTransition(
+          "NOT_STARTED",
+          "IMPLEMENTED",
+        );
+        if (!maturityTransition.allowed) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Subtask maturity transition is not allowed.",
+            maturityTransition.errorCodes,
+          );
+        }
+        if (checkpoint.subtaskId !== target.id) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Implementation Checkpoint does not belong to the target Subtask.",
+          );
+        }
+        if (this.#getSubtaskImplementationCheckpoint(checkpoint.id) !== null) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "A Subtask Implementation Checkpoint with this ID already exists.",
+          );
+        }
+
+        this.#database
+          .insert(subtaskImplementationCheckpointsTable)
+          .values({
+            id: checkpoint.id,
+            subtaskId: checkpoint.subtaskId,
+            repositoryCommitSha: checkpoint.repositoryCommitSha,
+            actorType: checkpoint.actorType,
+            actorReference: checkpoint.actorReference ?? null,
+            sourceReference: checkpoint.sourceReference,
+            summary: checkpoint.summary,
+            occurredAt: checkpoint.occurredAt,
+            createdAt: this.#timestamp(),
+          })
+          .run();
+
+        const update = this.#database
+          .update(subtasksTable)
+          .set({
+            status: "QA_DEBUG",
+            maturity: "IMPLEMENTED",
+            updatedAt: this.#monotonicTimestampAfter(targetRow.updatedAt),
+          })
+          .where(
+            and(
+              eq(subtasksTable.id, target.id),
+              eq(subtasksTable.status, "IN_PROGRESS"),
+              eq(subtasksTable.maturity, "NOT_STARTED"),
+              eq(subtasksTable.updatedAt, targetRow.updatedAt),
+            ),
+          )
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Subtask implementation completion could not be persisted.",
+          );
+        }
+
+        const storedSubtask = this.#getSubtask(target.id);
+        const storedCheckpoint = this.#getSubtaskImplementationCheckpoint(
+          checkpoint.id,
+        );
+        if (
+          storedSubtask === null ||
+          storedSubtask.status !== "QA_DEBUG" ||
+          storedSubtask.maturity !== "IMPLEMENTED" ||
+          storedCheckpoint === null
+        ) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The Subtask implementation completion was not persisted.",
+          );
+        }
+        return { subtask: storedSubtask, checkpoint: storedCheckpoint };
+      }),
+    );
+  }
+
+  getSubtaskImplementationCheckpointById(
+    input: SubtaskImplementationCheckpointId,
+  ): SubtaskImplementationCheckpoint | null {
+    const checkpointId = parseSubtaskImplementationCheckpointId(input);
+    return this.#operation(() =>
+      this.#getSubtaskImplementationCheckpoint(checkpointId),
+    );
+  }
+
+  listSubtaskImplementationCheckpoints(
+    input: SubtaskId,
+  ): readonly SubtaskImplementationCheckpoint[] {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    return this.#operation(() => {
+      const subtask = this.#getSubtask(subtaskId);
+      if (subtask === null) {
+        throw new TaskStorageError(
+          "PARENT_NOT_FOUND",
+          "The Subtask does not exist.",
+        );
+      }
+      this.#validateStoredSubtaskHierarchy(subtask);
+      return this.#database
+        .select()
+        .from(subtaskImplementationCheckpointsTable)
+        .where(eq(subtaskImplementationCheckpointsTable.subtaskId, subtaskId))
+        .orderBy(
+          asc(subtaskImplementationCheckpointsTable.occurredAt),
+          asc(subtaskImplementationCheckpointsTable.id),
+        )
+        .all()
+        .map((row) => this.#subtaskImplementationCheckpointFromRow(row));
+    });
   }
 
   replaceDependenciesForBigTask(
@@ -1201,7 +1466,7 @@ export class TaskStorage {
             sourceType: replacement.provenance.sourceType,
             sourceReference: replacement.provenance.sourceReference,
             effectiveAt: replacement.provenance.effectiveAt,
-            updatedAt: this.#contextDigestReplacementTimestamp(
+            updatedAt: this.#monotonicTimestampAfter(
               currentTimestampRow.updatedAt,
             ),
           })
@@ -1322,6 +1587,38 @@ export class TaskStorage {
       .where(eq(subtasksTable.id, subtaskId))
       .get();
     return row === undefined ? null : subtaskFromRow(row);
+  }
+
+  #getSubtaskImplementationCheckpoint(
+    checkpointId: SubtaskImplementationCheckpointId,
+  ): SubtaskImplementationCheckpoint | null {
+    const row = this.#database
+      .select()
+      .from(subtaskImplementationCheckpointsTable)
+      .where(eq(subtaskImplementationCheckpointsTable.id, checkpointId))
+      .get();
+    return row === undefined
+      ? null
+      : this.#subtaskImplementationCheckpointFromRow(row);
+  }
+
+  #subtaskImplementationCheckpointFromRow(
+    row: SubtaskImplementationCheckpointRow,
+  ): SubtaskImplementationCheckpoint {
+    const checkpoint = subtaskImplementationCheckpointFromRow(row);
+    const subtask = this.#getSubtask(checkpoint.subtaskId);
+    if (subtask === null) {
+      throw malformedStoredData();
+    }
+    this.#validateStoredSubtaskHierarchy(subtask);
+    return checkpoint;
+  }
+
+  #validateStoredSubtaskHierarchy(subtask: Subtask): void {
+    const bigTask = this.#getBigTask(subtask.bigTaskId);
+    if (bigTask === null || this.#getProject(bigTask.projectId) === null) {
+      throw malformedStoredData();
+    }
   }
 
   #getContextItem(contextItemId: ContextItemId): ContextItem | null {
@@ -1691,7 +1988,7 @@ export class TaskStorage {
     return timestamp.toISOString();
   }
 
-  #contextDigestReplacementTimestamp(previousUpdatedAt: string): string {
+  #monotonicTimestampAfter(previousUpdatedAt: string): string {
     const currentTimestamp = this.#timestamp();
     const previousTime = new Date(previousUpdatedAt).getTime();
     const currentTime = new Date(currentTimestamp).getTime();
@@ -1760,6 +2057,45 @@ export class TaskStorage {
         throw error;
       }
       throw new TaskStorageError("TRANSACTION_FAILED", "The transaction failed and was rolled back.");
+    }
+  }
+
+  #atomicImplementationCompletion<T>(operation: () => T): T {
+    if (!this.#sqlite.isTransaction) {
+      return this.#atomic(operation);
+    }
+
+    const savepoint = "subtask_implementation_completion";
+    try {
+      this.#sqlite.exec(`SAVEPOINT ${savepoint}`);
+    } catch {
+      throw new TaskStorageError(
+        "TRANSACTION_FAILED",
+        "The implementation completion transaction could not start.",
+      );
+    }
+
+    try {
+      const result = operation();
+      this.#sqlite.exec(`RELEASE ${savepoint}`);
+      return result;
+    } catch (error) {
+      try {
+        this.#sqlite.exec(`ROLLBACK TO ${savepoint}`);
+        this.#sqlite.exec(`RELEASE ${savepoint}`);
+      } catch {
+        throw new TaskStorageError(
+          "TRANSACTION_FAILED",
+          "The implementation completion transaction rollback failed.",
+        );
+      }
+      if (error instanceof TaskStorageError) {
+        throw error;
+      }
+      throw new TaskStorageError(
+        "TRANSACTION_FAILED",
+        "The implementation completion transaction failed and was rolled back.",
+      );
     }
   }
 

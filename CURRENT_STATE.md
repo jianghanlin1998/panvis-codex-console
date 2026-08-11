@@ -20,24 +20,24 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1A Subtask Maturity + Dependency Gate + Readiness Contracts: ACCEPTED
 - S1A Comprehensive Hardening: PASS
 - S1A Fresh Independent QA: PASS
-- S1B1 Persisted Readiness Snapshot: HARDENED
+- S1B1 Persisted Readiness Snapshot: ACCEPTED
 - S1B1 Comprehensive Hardening: PASS
-- S1B1 Fresh Independent QA: PENDING
-- S1B1 ACCEPTED: NO
-
-## Active blockers
-- S1B1 acceptance remains gated on fresh independent no-write QA.
+- S1B1 Fresh Independent QA: PASS
+- S1B1 ACCEPTED: YES
+- S1B2a Durable Implementation Completion Transition: IMPLEMENTED
+- S1B2a Comprehensive Hardening: PENDING
+- S1B2a ACCEPTED: NO
 
 ## Next safe task
-**S1B1 Fresh Independent QA**
+**S1B2a Comprehensive Hardening**
 
-The Task Control Plane remains non-operational. No mutation, scheduling, worktree, thread, or execution automation exists yet.
+The Task Control Plane remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. No scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 
 ## Not operational yet
 - browser Console UI or daemon/local service
-- operational lifecycle or maturity mutation
+- TODO -> IN_PROGRESS start orchestration, repair/re-entry, or later maturity mutation
 - scheduling, concurrency control, or `WHEN_READY` execution
 - live Codex App Server execution
 - execution/thread/run persistence

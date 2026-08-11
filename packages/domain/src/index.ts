@@ -7,6 +7,7 @@ export {
   ExecutionRunIdSchema,
   ProjectIdSchema,
   SubtaskIdSchema,
+  SubtaskImplementationCheckpointIdSchema,
 } from "./identifiers.js";
 export type {
   AuditEventId,
@@ -17,7 +18,17 @@ export type {
   ExecutionRunId,
   ProjectId,
   SubtaskId,
+  SubtaskImplementationCheckpointId,
 } from "./identifiers.js";
+
+export {
+  RepositoryCommitShaSchema,
+  SubtaskImplementationCheckpointSchema,
+} from "./implementation-checkpoint.js";
+export type {
+  RepositoryCommitSha,
+  SubtaskImplementationCheckpoint,
+} from "./implementation-checkpoint.js";
 
 export {
   ContextDigestProvenanceSchema,
