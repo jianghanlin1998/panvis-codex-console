@@ -17,6 +17,7 @@ import {
   SubtaskIdSchema,
   SubtaskSchema,
   deriveContextScope,
+  evaluateSubtaskDependencyReadiness,
   validateSubtaskDependencies,
 } from "@codex-task-console/domain";
 import type {
@@ -29,6 +30,7 @@ import type {
   ContextItem,
   ContextItemId,
   ContextScope,
+  DependencyReadinessResult,
   DependencySubtask,
   Project,
   ProjectId,
@@ -116,6 +118,14 @@ const parseSubtaskId = (input: SubtaskId): SubtaskId => {
     throw invalidInput("Subtask ID");
   }
   return result.data;
+};
+
+const parseCanonicalSubtaskId = (input: SubtaskId): SubtaskId => {
+  const subtaskId = parseSubtaskId(input);
+  if (subtaskId !== input) {
+    throw invalidInput("Subtask ID");
+  }
+  return subtaskId;
 };
 
 const parseContextItemId = (input: ContextItemId): ContextItemId => {
@@ -814,6 +824,100 @@ export class TaskStorage {
   listDependenciesForBigTask(input: BigTaskId): readonly SubtaskDependency[] {
     const bigTaskId = parseBigTaskId(input);
     return this.#operation(() => this.#listDependencies(bigTaskId));
+  }
+
+  evaluateStoredSubtaskDependencyReadiness(
+    input: SubtaskId,
+  ): DependencyReadinessResult {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const target = this.#getSubtask(subtaskId);
+        if (target === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The Subtask does not exist.",
+          );
+        }
+
+        const bigTask = this.#getBigTask(target.bigTaskId);
+        if (
+          bigTask === null ||
+          this.#getProject(bigTask.projectId) === null
+        ) {
+          throw malformedStoredData();
+        }
+
+        const targetSubtaskIds = this.#database
+          .select({ id: subtasksTable.id })
+          .from(subtasksTable)
+          .where(eq(subtasksTable.bigTaskId, target.bigTaskId));
+        const dependencyRows = this.#database
+          .select({
+            upstreamSubtaskId: taskDependenciesTable.upstreamSubtaskId,
+            downstreamSubtaskId: taskDependenciesTable.downstreamSubtaskId,
+            dependencyType: taskDependenciesTable.dependencyType,
+            requiredGate: taskDependenciesTable.requiredGate,
+            reason: taskDependenciesTable.reason,
+          })
+          .from(taskDependenciesTable)
+          .where(
+            or(
+              inArray(
+                taskDependenciesTable.upstreamSubtaskId,
+                targetSubtaskIds,
+              ),
+              inArray(
+                taskDependenciesTable.downstreamSubtaskId,
+                targetSubtaskIds,
+              ),
+            ),
+          )
+          .orderBy(
+            asc(taskDependenciesTable.upstreamSubtaskId),
+            asc(taskDependenciesTable.downstreamSubtaskId),
+            asc(taskDependenciesTable.dependencyType),
+          )
+          .all();
+        const dependencies = dependencyRows.map(dependencyFromRow);
+        const referencedSubtaskIds = [
+          ...new Set(
+            dependencies.flatMap((dependency) => [
+              dependency.upstreamSubtaskId,
+              dependency.downstreamSubtaskId,
+            ]),
+          ),
+        ];
+        const relevantSubtaskPredicate =
+          referencedSubtaskIds.length === 0
+            ? eq(subtasksTable.bigTaskId, target.bigTaskId)
+            : or(
+                eq(subtasksTable.bigTaskId, target.bigTaskId),
+                inArray(subtasksTable.id, referencedSubtaskIds),
+              );
+        const subtasks = this.#database
+          .select()
+          .from(subtasksTable)
+          .where(relevantSubtaskPredicate)
+          .orderBy(asc(subtasksTable.createdAt), asc(subtasksTable.id))
+          .all()
+          .map(subtaskFromRow);
+
+        const result = evaluateSubtaskDependencyReadiness(
+          subtasks.map(({ id, bigTaskId, maturity }) => ({
+            id,
+            bigTaskId,
+            maturity,
+          })),
+          dependencies,
+          subtaskId,
+        );
+        if (!result.valid) {
+          throw malformedStoredData();
+        }
+        return result;
+      }),
+    );
   }
 
   createContextItem(input: ContextItem): ContextItem {
@@ -1600,6 +1704,46 @@ export class TaskStorage {
         throw error;
       }
       throw new TaskStorageError("TRANSACTION_FAILED", "The transaction failed and was rolled back.");
+    }
+  }
+
+  #readSnapshot<T>(operation: () => T): T {
+    const ownsTransaction = !this.#sqlite.isTransaction;
+    if (ownsTransaction) {
+      try {
+        this.#sqlite.exec("BEGIN");
+      } catch {
+        throw new TaskStorageError(
+          "TRANSACTION_FAILED",
+          "The read transaction could not start.",
+        );
+      }
+    }
+
+    try {
+      const result = operation();
+      if (ownsTransaction) {
+        this.#sqlite.exec("COMMIT");
+      }
+      return result;
+    } catch (error) {
+      if (ownsTransaction && this.#sqlite.isTransaction) {
+        try {
+          this.#sqlite.exec("ROLLBACK");
+        } catch {
+          throw new TaskStorageError(
+            "TRANSACTION_FAILED",
+            "The read transaction rollback failed.",
+          );
+        }
+      }
+      if (error instanceof TaskStorageError) {
+        throw error;
+      }
+      throw new TaskStorageError(
+        "TRANSACTION_FAILED",
+        "The read transaction failed and was rolled back.",
+      );
     }
   }
 }
