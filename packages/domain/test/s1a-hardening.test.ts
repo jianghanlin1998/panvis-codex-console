@@ -297,26 +297,32 @@ describe("S1A dependency boundary and graph hardening", () => {
 });
 
 describe("S1A readiness campaigns", () => {
-  it("filters and orders exactly 20 direct unsatisfied blockers", () => {
+  it("filters and orders exactly 0, 1, 2, 5, and 20 direct unsatisfied blockers", () => {
     const downstream = subtask("st_downstream");
     const upstreams = Array.from({ length: 24 }, (_, index) =>
       subtask(`st_up_${index.toString().padStart(2, "0")}`, index < 20 ? "IMPLEMENTED" : "ACCEPTED"));
-    const edges = upstreams.map((upstream, index) =>
-      dependency(
-        upstream.id,
-        index === 23 ? "st_elsewhere" : downstream.id,
-        index === 22 ? "INFORMATIONAL" : "BLOCKING",
-        index === 22 ? "NONE" : index % 2 === 0 ? "HARDENED" : "ACCEPTED",
-        `Evidence ${index}.`,
-      ));
-    const result = evaluateSubtaskDependencyReadiness(
-      [...upstreams, downstream, subtask("st_elsewhere")],
-      edges,
-      downstream.id,
-    );
-    expect(result).toMatchObject({ valid: true, ready: false });
-    expect(result.blockers).toHaveLength(20);
-    expect(result.blockers).toEqual(oracleBlockers([...upstreams, downstream, subtask("st_elsewhere")], edges, downstream.id));
+    const elsewhere = subtask("st_elsewhere");
+    for (const blockerCount of [0, 1, 2, 5, 20]) {
+      const edges = [
+        ...upstreams.slice(0, blockerCount).map((upstream, index) =>
+          dependency(
+            upstream.id,
+            downstream.id,
+            "BLOCKING",
+            index % 2 === 0 ? "HARDENED" : "ACCEPTED",
+            `Evidence ${index}.`,
+          )),
+        dependency(upstreams[20]!.id, downstream.id, "BLOCKING", "HARDENED", "Satisfied."),
+        dependency(upstreams[21]!.id, downstream.id, "INFORMATIONAL", "NONE", "Context."),
+        dependency(downstream.id, elsewhere.id, "BLOCKING", "HARDENED", "Outgoing."),
+        dependency(upstreams[23]!.id, elsewhere.id, "BLOCKING", "ACCEPTED", "Other target."),
+      ];
+      const tasks = [...upstreams, downstream, elsewhere];
+      const result = evaluateSubtaskDependencyReadiness(tasks, edges, downstream.id);
+      expect(result).toMatchObject({ valid: true, ready: blockerCount === 0 });
+      expect(result.blockers).toHaveLength(blockerCount);
+      expect(result.blockers).toEqual(oracleBlockers(tasks, edges, downstream.id));
+    }
   });
 
   it("is input-order and locale independent for Unicode and punctuation identifiers", () => {
