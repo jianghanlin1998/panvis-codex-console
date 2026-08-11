@@ -212,7 +212,21 @@ const projectFromRow = (row: ProjectRow): Project => {
   if (!result.success) {
     throw malformedStoredData();
   }
-  return result.data;
+  const project = result.data;
+  if (
+    project.id !== row.id ||
+    project.name !== row.name ||
+    project.slug !== row.slug ||
+    project.repository.kind !== row.repositoryKind ||
+    (project.repository.kind === "PATH"
+      ? project.repository.path
+      : project.repository.reference) !== row.repositoryValue ||
+    project.defaultBranch !== row.defaultBranch ||
+    project.maxActiveCodingSubtasks !== row.maxActiveCodingSubtasks
+  ) {
+    throw malformedStoredData();
+  }
+  return project;
 };
 
 const bigTaskFromRow = (row: BigTaskRow): BigTask => {
@@ -231,7 +245,21 @@ const bigTaskFromRow = (row: BigTaskRow): BigTask => {
   if (!result.success) {
     throw malformedStoredData();
   }
-  return result.data;
+  const bigTask = result.data;
+  if (
+    bigTask.id !== row.id ||
+    bigTask.projectId !== row.projectId ||
+    bigTask.title !== row.title ||
+    bigTask.goal !== row.goal ||
+    bigTask.rationale !== row.rationale ||
+    encodeStringArray(bigTask.scopeIn) !== row.scopeIn ||
+    encodeStringArray(bigTask.scopeOut) !== row.scopeOut ||
+    encodeStringArray(bigTask.acceptanceCriteria) !== row.acceptanceCriteria ||
+    bigTask.status !== row.status
+  ) {
+    throw malformedStoredData();
+  }
+  return bigTask;
 };
 
 const subtaskFromRow = (row: SubtaskRow): Subtask => {
@@ -255,7 +283,26 @@ const subtaskFromRow = (row: SubtaskRow): Subtask => {
   if (!result.success) {
     throw malformedStoredData();
   }
-  return result.data;
+  const subtask = result.data;
+  if (
+    subtask.id !== row.id ||
+    subtask.bigTaskId !== row.bigTaskId ||
+    subtask.title !== row.title ||
+    subtask.goal !== row.goal ||
+    encodeStringArray(subtask.scopeIn) !== row.scopeIn ||
+    encodeStringArray(subtask.scopeOut) !== row.scopeOut ||
+    encodeStringArray(subtask.acceptanceCriteria) !== row.acceptanceCriteria ||
+    encodeStringArray(subtask.untouchedAreas) !== row.untouchedAreas ||
+    subtask.status !== row.status ||
+    subtask.maturity !== row.maturity ||
+    subtask.startPolicy !== row.startPolicy ||
+    subtask.delegationPolicy !== row.delegationPolicy ||
+    subtask.recommendedReasoningLevel !== row.recommendedReasoningLevel ||
+    subtask.promptSeed !== row.promptSeed
+  ) {
+    throw malformedStoredData();
+  }
+  return subtask;
 };
 
 const dependencyFromRow = (row: {
@@ -880,25 +927,34 @@ export class TaskStorage {
           )
           .all();
         const dependencies = dependencyRows.map(dependencyFromRow);
-        const referencedSubtaskIds = [
-          ...new Set(
-            dependencies.flatMap((dependency) => [
-              dependency.upstreamSubtaskId,
-              dependency.downstreamSubtaskId,
-            ]),
+        const relevantDependencyPredicate = or(
+          inArray(
+            taskDependenciesTable.upstreamSubtaskId,
+            targetSubtaskIds,
           ),
-        ];
-        const relevantSubtaskPredicate =
-          referencedSubtaskIds.length === 0
-            ? eq(subtasksTable.bigTaskId, target.bigTaskId)
-            : or(
-                eq(subtasksTable.bigTaskId, target.bigTaskId),
-                inArray(subtasksTable.id, referencedSubtaskIds),
-              );
+          inArray(
+            taskDependenciesTable.downstreamSubtaskId,
+            targetSubtaskIds,
+          ),
+        );
+        const referencedUpstreamSubtaskIds = this.#database
+          .select({ id: taskDependenciesTable.upstreamSubtaskId })
+          .from(taskDependenciesTable)
+          .where(relevantDependencyPredicate);
+        const referencedDownstreamSubtaskIds = this.#database
+          .select({ id: taskDependenciesTable.downstreamSubtaskId })
+          .from(taskDependenciesTable)
+          .where(relevantDependencyPredicate);
         const subtasks = this.#database
           .select()
           .from(subtasksTable)
-          .where(relevantSubtaskPredicate)
+          .where(
+            or(
+              eq(subtasksTable.bigTaskId, target.bigTaskId),
+              inArray(subtasksTable.id, referencedUpstreamSubtaskIds),
+              inArray(subtasksTable.id, referencedDownstreamSubtaskIds),
+            ),
+          )
           .orderBy(asc(subtasksTable.createdAt), asc(subtasksTable.id))
           .all()
           .map(subtaskFromRow);

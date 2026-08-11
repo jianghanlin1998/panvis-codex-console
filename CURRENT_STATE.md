@@ -20,15 +20,16 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1A Subtask Maturity + Dependency Gate + Readiness Contracts: ACCEPTED
 - S1A Comprehensive Hardening: PASS
 - S1A Fresh Independent QA: PASS
-- S1B1 Persisted Readiness Snapshot: IMPLEMENTED
-- S1B1 Comprehensive Hardening: PENDING
+- S1B1 Persisted Readiness Snapshot: HARDENED
+- S1B1 Comprehensive Hardening: PASS
+- S1B1 Fresh Independent QA: PENDING
 - S1B1 ACCEPTED: NO
 
 ## Active blockers
-- S1B1 acceptance remains gated on Comprehensive Hardening and independent QA.
+- S1B1 acceptance remains gated on fresh independent no-write QA.
 
 ## Next safe task
-**S1B1 Comprehensive Hardening**
+**S1B1 Fresh Independent QA**
 
 The Task Control Plane remains non-operational. No mutation, scheduling, worktree, thread, or execution automation exists yet.
 
