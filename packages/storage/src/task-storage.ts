@@ -966,7 +966,20 @@ export class TaskStorage {
             "The Implementation Checkpoint does not belong to the target Subtask.",
           );
         }
-        if (this.#getSubtaskImplementationCheckpoint(checkpoint.id) !== null) {
+        const existingTargetCheckpoint = this.#database
+          .select({ id: subtaskImplementationCheckpointsTable.id })
+          .from(subtaskImplementationCheckpointsTable)
+          .where(eq(subtaskImplementationCheckpointsTable.subtaskId, target.id))
+          .get();
+        if (existingTargetCheckpoint !== undefined) {
+          throw malformedStoredData();
+        }
+        const existingCheckpointId = this.#database
+          .select({ id: subtaskImplementationCheckpointsTable.id })
+          .from(subtaskImplementationCheckpointsTable)
+          .where(eq(subtaskImplementationCheckpointsTable.id, checkpoint.id))
+          .get();
+        if (existingCheckpointId !== undefined) {
           throw new TaskStorageError(
             "CONFLICT",
             "A Subtask Implementation Checkpoint with this ID already exists.",
@@ -1036,7 +1049,9 @@ export class TaskStorage {
   ): SubtaskImplementationCheckpoint | null {
     const checkpointId = parseSubtaskImplementationCheckpointId(input);
     return this.#operation(() =>
-      this.#getSubtaskImplementationCheckpoint(checkpointId),
+      this.#readSnapshot(() =>
+        this.#getSubtaskImplementationCheckpoint(checkpointId),
+      ),
     );
   }
 
@@ -1044,26 +1059,28 @@ export class TaskStorage {
     input: SubtaskId,
   ): readonly SubtaskImplementationCheckpoint[] {
     const subtaskId = parseCanonicalSubtaskId(input);
-    return this.#operation(() => {
-      const subtask = this.#getSubtask(subtaskId);
-      if (subtask === null) {
-        throw new TaskStorageError(
-          "PARENT_NOT_FOUND",
-          "The Subtask does not exist.",
-        );
-      }
-      this.#validateStoredSubtaskHierarchy(subtask);
-      return this.#database
-        .select()
-        .from(subtaskImplementationCheckpointsTable)
-        .where(eq(subtaskImplementationCheckpointsTable.subtaskId, subtaskId))
-        .orderBy(
-          asc(subtaskImplementationCheckpointsTable.occurredAt),
-          asc(subtaskImplementationCheckpointsTable.id),
-        )
-        .all()
-        .map((row) => this.#subtaskImplementationCheckpointFromRow(row));
-    });
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const subtask = this.#getSubtask(subtaskId);
+        if (subtask === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The Subtask does not exist.",
+          );
+        }
+        this.#validateStoredSubtaskHierarchy(subtask);
+        return this.#database
+          .select()
+          .from(subtaskImplementationCheckpointsTable)
+          .where(eq(subtaskImplementationCheckpointsTable.subtaskId, subtaskId))
+          .orderBy(
+            asc(subtaskImplementationCheckpointsTable.occurredAt),
+            asc(subtaskImplementationCheckpointsTable.id),
+          )
+          .all()
+          .map((row) => this.#subtaskImplementationCheckpointFromRow(row));
+      }),
+    );
   }
 
   replaceDependenciesForBigTask(
@@ -1607,7 +1624,7 @@ export class TaskStorage {
   ): SubtaskImplementationCheckpoint {
     const checkpoint = subtaskImplementationCheckpointFromRow(row);
     const subtask = this.#getSubtask(checkpoint.subtaskId);
-    if (subtask === null) {
+    if (subtask === null || subtask.maturity === "NOT_STARTED") {
       throw malformedStoredData();
     }
     this.#validateStoredSubtaskHierarchy(subtask);
@@ -1615,10 +1632,47 @@ export class TaskStorage {
   }
 
   #validateStoredSubtaskHierarchy(subtask: Subtask): void {
-    const bigTask = this.#getBigTask(subtask.bigTaskId);
-    if (bigTask === null || this.#getProject(bigTask.projectId) === null) {
+    const subtaskRow = this.#database
+      .select()
+      .from(subtasksTable)
+      .where(eq(subtasksTable.id, subtask.id))
+      .get();
+    if (
+      subtaskRow === undefined ||
+      subtaskRow.bigTaskId !== subtask.bigTaskId ||
+      !isCanonicalUtcTimestamp(subtaskRow.createdAt) ||
+      !isCanonicalUtcTimestamp(subtaskRow.updatedAt)
+    ) {
       throw malformedStoredData();
     }
+
+    const bigTaskRow = this.#database
+      .select()
+      .from(bigTasksTable)
+      .where(eq(bigTasksTable.id, subtask.bigTaskId))
+      .get();
+    if (
+      bigTaskRow === undefined ||
+      !isCanonicalUtcTimestamp(bigTaskRow.createdAt) ||
+      !isCanonicalUtcTimestamp(bigTaskRow.updatedAt)
+    ) {
+      throw malformedStoredData();
+    }
+    const bigTask = bigTaskFromRow(bigTaskRow);
+
+    const projectRow = this.#database
+      .select()
+      .from(projectsTable)
+      .where(eq(projectsTable.id, bigTask.projectId))
+      .get();
+    if (
+      projectRow === undefined ||
+      !isCanonicalUtcTimestamp(projectRow.createdAt) ||
+      !isCanonicalUtcTimestamp(projectRow.updatedAt)
+    ) {
+      throw malformedStoredData();
+    }
+    projectFromRow(projectRow);
   }
 
   #getContextItem(contextItemId: ContextItemId): ContextItem | null {

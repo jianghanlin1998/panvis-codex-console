@@ -40,14 +40,22 @@ describe("Subtask Implementation Checkpoint domain contract", () => {
 
   it.each([
     "A".repeat(40),
+    `${"a".repeat(20)}A${"a".repeat(19)}`,
+    `g${"a".repeat(39)}`,
     `${"a".repeat(39)}g`,
+    `${"a".repeat(20)}g${"a".repeat(19)}`,
     "a".repeat(39),
     "a".repeat(41),
     "a".repeat(63),
     "a".repeat(65),
     ` ${"a".repeat(40)}`,
     `${"a".repeat(40)} `,
+    `\t${"a".repeat(40)}`,
+    `${"a".repeat(40)}\r\n`,
+    `\u00a0${"a".repeat(40)}`,
     `${"a".repeat(20)} ${"a".repeat(19)}`,
+    `${"a".repeat(20)}\0${"a".repeat(19)}`,
+    `${"a".repeat(20)}\u0001${"a".repeat(19)}`,
   ])("rejects the invalid repository SHA %#", (repositoryCommitSha) => {
     expect(RepositoryCommitShaSchema.safeParse(repositoryCommitSha).success).toBe(false);
   });
@@ -101,6 +109,71 @@ describe("Subtask Implementation Checkpoint domain contract", () => {
         }).success,
       ).toBe(false);
     }
+  });
+
+  it("uses JavaScript UTF-16 code-unit limits for supplementary Unicode", () => {
+    const atBoundary = SubtaskImplementationCheckpointSchema.safeParse({
+      ...validCheckpoint,
+      actorReference: "🚀".repeat(128),
+      sourceReference: "🚀".repeat(1_024),
+      summary: "🚀".repeat(500),
+    });
+    expect(atBoundary.success).toBe(true);
+
+    for (const input of [
+      { actorReference: `${"🚀".repeat(127)}abc` },
+      { sourceReference: `${"🚀".repeat(1_024)}x` },
+      { summary: `${"🚀".repeat(500)}x` },
+    ]) {
+      expect(
+        SubtaskImplementationCheckpointSchema.safeParse({
+          ...validCheckpoint,
+          ...input,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("applies JavaScript trim semantics without erasing permitted zero-width content", () => {
+    expect(
+      SubtaskImplementationCheckpointSchema.parse({
+        ...validCheckpoint,
+        actorReference: "\u00a0actor\u00a0",
+        sourceReference: "\r\nsource\t",
+        summary: " e\u0301 ",
+      }),
+    ).toMatchObject({
+      actorReference: "actor",
+      sourceReference: "source",
+      summary: "e\u0301",
+    });
+    expect(
+      SubtaskImplementationCheckpointSchema.parse({
+        ...validCheckpoint,
+        summary: "\u200b",
+      }).summary,
+    ).toBe("\u200b");
+  });
+
+  it("keeps identifier boundaries and permitted Unicode explicit", () => {
+    expect(
+      SubtaskImplementationCheckpointIdSchema.parse(`icp_${"x".repeat(124)}`),
+    ).toHaveLength(128);
+    expect(SubtaskImplementationCheckpointIdSchema.parse("icp_実装🚀")).toBe(
+      "icp_実装🚀",
+    );
+    for (const invalid of [
+      "icp_",
+      `icp_${"x".repeat(125)}`,
+      "icp_   ",
+    ]) {
+      expect(
+        SubtaskImplementationCheckpointIdSchema.safeParse(invalid).success,
+      ).toBe(false);
+    }
+    expect(SubtaskImplementationCheckpointIdSchema.parse(" icp_trimmed ")).toBe(
+      "icp_trimmed",
+    );
   });
 
   it("allows an omitted actor reference", () => {
