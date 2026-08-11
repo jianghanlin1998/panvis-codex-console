@@ -1443,7 +1443,39 @@ export class TaskStorage {
   }
 
   #listDependencies(bigTaskId: BigTaskId): readonly SubtaskDependency[] {
-    const dependencies = this.#database
+    const bigTaskIds = new Set(
+      this.#database
+        .select({ id: bigTasksTable.id })
+        .from(bigTasksTable)
+        .all()
+        .map(({ id }) => id),
+    );
+    const rawSubtasks = this.#database
+      .select({ id: subtasksTable.id, bigTaskId: subtasksTable.bigTaskId })
+      .from(subtasksTable)
+      .all();
+    const parseDependencySubtask = (row: {
+      readonly id: string;
+      readonly bigTaskId: string;
+    }): DependencySubtask => {
+      const id = SubtaskIdSchema.safeParse(row.id);
+      const parsedBigTaskId = BigTaskIdSchema.safeParse(row.bigTaskId);
+      if (
+        !id.success ||
+        !parsedBigTaskId.success ||
+        id.data !== row.id ||
+        parsedBigTaskId.data !== row.bigTaskId ||
+        !bigTaskIds.has(row.bigTaskId)
+      ) {
+        throw malformedStoredData();
+      }
+      return { id: id.data, bigTaskId: parsedBigTaskId.data };
+    };
+    const targetSubtasks = rawSubtasks
+      .filter((subtask) => subtask.bigTaskId === bigTaskId)
+      .map(parseDependencySubtask);
+    const targetSubtaskIds = new Set(targetSubtasks.map(({ id }) => id));
+    const rawDependencies = this.#database
       .select({
         upstreamSubtaskId: taskDependenciesTable.upstreamSubtaskId,
         downstreamSubtaskId: taskDependenciesTable.downstreamSubtaskId,
@@ -1457,14 +1489,33 @@ export class TaskStorage {
         asc(taskDependenciesTable.downstreamSubtaskId),
         asc(taskDependenciesTable.dependencyType),
       )
-      .all()
-      .map(dependencyFromRow);
-    const subtasks = this.#allDependencySubtasks();
+      .all();
+    const relevantRows = rawDependencies.filter(
+      (dependency) =>
+        targetSubtaskIds.has(dependency.upstreamSubtaskId as SubtaskId) ||
+        targetSubtaskIds.has(dependency.downstreamSubtaskId as SubtaskId),
+    );
+    const referencedSubtaskIds = new Set(
+      relevantRows.flatMap((dependency) => [
+        dependency.upstreamSubtaskId,
+        dependency.downstreamSubtaskId,
+      ]),
+    );
+    const subtasksById = new Map<SubtaskId, DependencySubtask>(
+      targetSubtasks.map((subtask) => [subtask.id, subtask]),
+    );
+    for (const row of rawSubtasks) {
+      if (referencedSubtaskIds.has(row.id)) {
+        const subtask = parseDependencySubtask(row);
+        subtasksById.set(subtask.id, subtask);
+      }
+    }
+    const subtasks = [...subtasksById.values()];
+    const dependencies = relevantRows.map(dependencyFromRow);
     const validation = validateSubtaskDependencies(subtasks, dependencies);
     if (!validation.valid) {
       throw malformedStoredData();
     }
-    const subtasksById = new Map(subtasks.map((subtask) => [subtask.id, subtask]));
     return dependencies.filter(
       (dependency) =>
         subtasksById.get(dependency.upstreamSubtaskId)?.bigTaskId === bigTaskId &&

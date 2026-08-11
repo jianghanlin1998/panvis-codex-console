@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { SubtaskIdSchema } from "./identifiers.js";
+import { BigTaskIdSchema, SubtaskIdSchema } from "./identifiers.js";
 import type { BigTaskId, SubtaskId } from "./identifiers.js";
 import { SubtaskMaturitySchema } from "./tasks.js";
 import type { SubtaskMaturity } from "./tasks.js";
@@ -54,6 +54,14 @@ export interface DependencySubtask {
 export interface DependencyReadinessSubtask extends DependencySubtask {
   readonly maturity: SubtaskMaturity;
 }
+
+const DependencyReadinessSubtaskSchema = z
+  .object({
+    id: SubtaskIdSchema,
+    bigTaskId: BigTaskIdSchema,
+    maturity: SubtaskMaturitySchema,
+  })
+  .strict();
 
 export interface DependencyValidationError {
   readonly code: DependencyValidationErrorCode;
@@ -220,6 +228,20 @@ export interface DependencyReadinessResult {
   readonly errorCodes: readonly DependencyValidationErrorCode[];
 }
 
+const malformedReadinessInput = (): DependencyReadinessResult => ({
+  valid: false,
+  ready: false,
+  blockers: [],
+  errors: [],
+  errorCodes: [],
+});
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null;
+
+const compareCodeUnits = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
+
 const satisfiesRequiredGate = (
   maturity: SubtaskMaturity,
   requiredGate: DependencyRequiredGate,
@@ -239,8 +261,57 @@ export const evaluateSubtaskDependencyReadiness = (
   dependencies: readonly SubtaskDependency[],
   downstreamSubtaskId: SubtaskId,
 ): DependencyReadinessResult => {
-  const validation = validateSubtaskDependencies(subtasks, dependencies);
-  const downstreamExists = subtasks.some(({ id }) => id === downstreamSubtaskId);
+  if (!Array.isArray(subtasks) || !Array.isArray(dependencies)) {
+    return malformedReadinessInput();
+  }
+
+  const parsedDownstreamSubtaskId = SubtaskIdSchema.safeParse(downstreamSubtaskId);
+  if (
+    !parsedDownstreamSubtaskId.success ||
+    parsedDownstreamSubtaskId.data !== downstreamSubtaskId
+  ) {
+    return malformedReadinessInput();
+  }
+
+  const parsedSubtasks: DependencyReadinessSubtask[] = [];
+  const seenSubtaskIds = new Set<SubtaskId>();
+  for (const input of subtasks) {
+    const parsed = DependencyReadinessSubtaskSchema.safeParse(input);
+    if (
+      !parsed.success ||
+      !isRecord(input) ||
+      parsed.data.id !== input.id ||
+      parsed.data.bigTaskId !== input.bigTaskId ||
+      parsed.data.maturity !== input.maturity ||
+      seenSubtaskIds.has(parsed.data.id)
+    ) {
+      return malformedReadinessInput();
+    }
+    seenSubtaskIds.add(parsed.data.id);
+    parsedSubtasks.push(parsed.data);
+  }
+
+  const parsedDependencies: SubtaskDependency[] = [];
+  for (const input of dependencies) {
+    const parsed = SubtaskDependencySchema.safeParse(input);
+    if (
+      !parsed.success ||
+      !isRecord(input) ||
+      parsed.data.upstreamSubtaskId !== input.upstreamSubtaskId ||
+      parsed.data.downstreamSubtaskId !== input.downstreamSubtaskId ||
+      parsed.data.dependencyType !== input.dependencyType ||
+      parsed.data.requiredGate !== input.requiredGate ||
+      parsed.data.reason !== input.reason
+    ) {
+      return malformedReadinessInput();
+    }
+    parsedDependencies.push(parsed.data);
+  }
+
+  const validation = validateSubtaskDependencies(parsedSubtasks, parsedDependencies);
+  const downstreamExists = parsedSubtasks.some(
+    ({ id }) => id === parsedDownstreamSubtaskId.data,
+  );
   const errors: DependencyValidationError[] = validation.valid
     ? []
     : [...validation.errors];
@@ -250,13 +321,13 @@ export const evaluateSubtaskDependencyReadiness = (
     !errors.some(
       (error) =>
         error.code === "MISSING_DOWNSTREAM_SUBTASK" &&
-        error.subtaskIds.includes(downstreamSubtaskId),
+        error.subtaskIds.includes(parsedDownstreamSubtaskId.data),
     )
   ) {
     errors.push({
       code: "MISSING_DOWNSTREAM_SUBTASK",
       message: "The downstream Subtask evaluated for readiness does not exist.",
-      subtaskIds: [downstreamSubtaskId],
+      subtaskIds: [parsedDownstreamSubtaskId.data],
     });
   }
 
@@ -270,8 +341,8 @@ export const evaluateSubtaskDependencyReadiness = (
     };
   }
 
-  const subtasksById = new Map(subtasks.map((subtask) => [subtask.id, subtask]));
-  const blockers = dependencies
+  const subtasksById = new Map(parsedSubtasks.map((subtask) => [subtask.id, subtask]));
+  const blockers = parsedDependencies
     .filter(
       (
         dependency,
@@ -280,7 +351,7 @@ export const evaluateSubtaskDependencyReadiness = (
         { readonly dependencyType: "BLOCKING" }
       > =>
         dependency.dependencyType === "BLOCKING" &&
-        dependency.downstreamSubtaskId === downstreamSubtaskId,
+        dependency.downstreamSubtaskId === parsedDownstreamSubtaskId.data,
     )
     .flatMap((dependency): DependencyReadinessBlocker[] => {
       const upstream = subtasksById.get(dependency.upstreamSubtaskId);
@@ -301,9 +372,9 @@ export const evaluateSubtaskDependencyReadiness = (
     })
     .sort(
       (left, right) =>
-        left.upstreamSubtaskId.localeCompare(right.upstreamSubtaskId) ||
-        left.requiredGate.localeCompare(right.requiredGate) ||
-        left.reason.localeCompare(right.reason),
+        compareCodeUnits(left.upstreamSubtaskId, right.upstreamSubtaskId) ||
+        compareCodeUnits(left.requiredGate, right.requiredGate) ||
+        compareCodeUnits(left.reason, right.reason),
     );
 
   return {

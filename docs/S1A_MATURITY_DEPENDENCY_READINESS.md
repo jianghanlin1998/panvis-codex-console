@@ -33,7 +33,7 @@ Informational dependencies never block. Only blocking edges participate in readi
 
 `evaluateSubtaskDependencyReadiness` consumes explicit Subtask IDs, Big Task ownership, maturity, the complete dependency set, and one downstream Subtask ID. It performs no storage, Git, filesystem, chat, or model access.
 
-The result reports structural validity, readiness, stable validation codes, and deterministically ordered blockers. Each blocker includes the upstream Subtask ID, required gate, actual maturity, and durable dependency reason. Structurally invalid input fails closed with `ready: false`.
+The result reports structural validity, readiness, stable validation codes, and deterministically ordered blockers. Each blocker includes the upstream Subtask ID, required gate, actual maturity, and durable dependency reason. Blockers use locale-independent JavaScript UTF-16 code-unit ordering by upstream Subtask ID, then required gate, then reason. Structurally invalid input fails closed with `ready: false`. Malformed runtime entity shapes and duplicate Subtask records also fail closed; because the approved validation-code taxonomy covers dependency-graph structure rather than malformed runtime records, those boundary failures return empty validation diagnostics instead of exposing parser errors or inventing a new public code.
 
 ## Persistence and migration
 
