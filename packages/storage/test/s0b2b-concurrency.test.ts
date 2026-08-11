@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+
 import { describe, expect, it } from "vitest";
 
 import { ContextScopeSchema } from "@codex-task-console/domain";
@@ -6,6 +8,7 @@ import { openTaskDatabase } from "../src/index.js";
 import type { TaskStorage, TaskStorageError } from "../src/index.js";
 import {
   captureTaskStorageError,
+  FIXED_TIME,
   fixedClock,
   makeAuditEvent,
   makeBigTask,
@@ -33,6 +36,22 @@ const assertSanitizedContention = (error: TaskStorageError): void => {
     /SQLite|SQL|locked|busy|constraint|context_digests|audit_events|index|\/Users\//i,
   );
 };
+
+const readDigestUpdatedAt = (databasePath: string, digestId: string): string => {
+  const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return (
+      sqlite
+        .prepare("SELECT updated_at FROM context_digests WHERE id = ?")
+        .get(digestId) as { readonly updated_at: string }
+    ).updated_at;
+  } finally {
+    sqlite.close();
+  }
+};
+
+const timestampAfter = (milliseconds: number): string =>
+  new Date(new Date(FIXED_TIME).getTime() + milliseconds).toISOString();
 
 const withTwoConnections = (
   databasePath: string,
@@ -128,6 +147,7 @@ describe("S0B2b deterministic two-connection concurrency hardening", () => {
         seedHierarchy(seed);
         seed.createContextDigest(original);
         seed.close();
+        expect(readDigestUpdatedAt(databasePath, original.id)).toBe(FIXED_TIME);
 
         withTwoConnections(databasePath, (first, second) => {
           first.runInTransaction((transaction) => {
@@ -141,6 +161,9 @@ describe("S0B2b deterministic two-connection concurrency hardening", () => {
             );
           });
         });
+        expect(readDigestUpdatedAt(databasePath, original.id)).toBe(
+          timestampAfter(1),
+        );
 
         const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
         try {
@@ -229,13 +252,20 @@ describe("S0B2b deterministic two-connection concurrency hardening", () => {
       seedHierarchy(seed);
       seed.createContextDigest(original);
       seed.close();
+      expect(readDigestUpdatedAt(databasePath, original.id)).toBe(FIXED_TIME);
 
       withTwoConnections(databasePath, (first, second) => {
         first.replaceContextDigest(
           makeContextDigest(original.id, scope, { body: "Serialized first." }),
         );
+        expect(readDigestUpdatedAt(databasePath, original.id)).toBe(
+          timestampAfter(1),
+        );
         second.replaceContextDigest(
           makeContextDigest(original.id, scope, { body: "Serialized second." }),
+        );
+        expect(readDigestUpdatedAt(databasePath, original.id)).toBe(
+          timestampAfter(2),
         );
       });
 

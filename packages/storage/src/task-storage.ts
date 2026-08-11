@@ -1022,6 +1022,17 @@ export class TaskStorage {
         if (currentAtScope === null || currentAtScope.id !== existing.id) {
           throw malformedStoredData();
         }
+        const currentTimestampRow = this.#database
+          .select({ updatedAt: contextDigestsTable.updatedAt })
+          .from(contextDigestsTable)
+          .where(eq(contextDigestsTable.id, replacement.id))
+          .get();
+        if (
+          currentTimestampRow === undefined ||
+          !isCanonicalUtcTimestamp(currentTimestampRow.updatedAt)
+        ) {
+          throw malformedStoredData();
+        }
 
         const update = this.#database
           .update(contextDigestsTable)
@@ -1030,7 +1041,9 @@ export class TaskStorage {
             sourceType: replacement.provenance.sourceType,
             sourceReference: replacement.provenance.sourceReference,
             effectiveAt: replacement.provenance.effectiveAt,
-            updatedAt: this.#timestamp(),
+            updatedAt: this.#contextDigestReplacementTimestamp(
+              currentTimestampRow.updatedAt,
+            ),
           })
           .where(eq(contextDigestsTable.id, replacement.id))
           .run();
@@ -1465,6 +1478,15 @@ export class TaskStorage {
       throw new TaskStorageError("STORAGE_OPERATION_FAILED", "The storage clock is invalid.");
     }
     return timestamp.toISOString();
+  }
+
+  #contextDigestReplacementTimestamp(previousUpdatedAt: string): string {
+    const currentTimestamp = this.#timestamp();
+    const previousTime = new Date(previousUpdatedAt).getTime();
+    const currentTime = new Date(currentTimestamp).getTime();
+    return currentTime > previousTime
+      ? currentTimestamp
+      : new Date(previousTime + 1).toISOString();
   }
 
   #ensureOpen(): void {

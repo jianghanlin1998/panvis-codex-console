@@ -6,7 +6,7 @@ S0B2b adds two exact-scope persistence primitives. It remains domain and storage
 
 A Context Digest is compact derived current state for one exact Project, Big Task, or Subtask scope. Context Items remain the authoritative facts, decisions, requirements, constraints, questions, and risks. A Digest does not replace that evidence.
 
-Each exact scope has at most one current Digest. The stable Digest identity remains attached to that scope; replacement changes only its trimmed body and digest-specific provenance, preserves storage creation time, and updates storage modification time atomically. S0B2b has no Digest history or supersession graph, automatic generation, LLM summarization, inheritance, or Context Packet compilation.
+Each exact scope has at most one current Digest. The stable Digest identity remains attached to that scope; replacement changes only its trimmed body and digest-specific provenance, preserves storage creation time, and updates storage modification time atomically. Every successful replacement sets `updated_at` strictly later than the immediately previous persisted value. A forward-moving clock supplies its canonical millisecond value; a same-time or backward clock advances the previous value by exactly one millisecond. This is update evidence, not a Digest history or versioning model. S0B2b has no Digest history or supersession graph, automatic generation, LLM summarization, inheritance, or Context Packet compilation.
 
 Digest bodies contain 1–8,000 JavaScript UTF-16 code units. Source references contain 1–2,048. Accepted timestamps are offset-aware and normalized to canonical UTC ISO values. Values are rejected rather than truncated.
 

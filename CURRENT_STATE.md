@@ -14,18 +14,19 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S0C Mock Codex App Server boundary + `$task-execution` Skill: ACCEPTED foundation
 - S0D Provider-neutral execution contracts: ACCEPTED
 - S0B2a Context Item storage: ACCEPTED
-- S0B2b Context Digest + Audit Event persistence: ACCEPTED
-- S0B2b Fresh Independent QA: PASS
-- No blocking S0B2b foundation findings remain.
+- S0B2b Context Digest + Audit Event persistence: HARDENED
+- Known Digest `updated_at` P2: REPAIRED
+- S0B2b Fresh Focused Re-QA: PENDING
+- S0B2b ACCEPTED: NO until focused re-QA passes
 - S1A Subtask Maturity + Dependency Gate + Readiness Contracts: IMPLEMENTED
-- S1A Comprehensive Hardening: PENDING
+- S1A Comprehensive Hardening: PAUSED pending S0B2b focused re-QA
 - S1A ACCEPTED: NO
 
 ## Active blockers
-- None for S1A Comprehensive Hardening.
+- S0B2b focused fresh re-QA must pass before S1A Comprehensive Hardening resumes.
 
 ## Next safe task
-**S1A Comprehensive Hardening**
+**S0B2b Focused Fresh Re-QA**
 
 The Task Control Plane has started at the contract/foundation layer only. No operational lifecycle, maturity mutation, scheduling, worktree, thread, or execution automation exists yet.
 
