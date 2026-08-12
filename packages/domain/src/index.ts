@@ -100,6 +100,20 @@ export type {
 } from "./context.js";
 
 export {
+  buildAllowedContextSet,
+  evaluateContextScopeAccess,
+} from "./context-access.js";
+export type {
+  AllowedContextSet,
+  AllowedContextSetBuildErrorCode,
+  AllowedContextSetBuildResult,
+  AllowedRawContextScopes,
+  ContextAccessTarget,
+  ContextScopeAccessDecision,
+  ContextScopeAccessReason,
+} from "./context-access.js";
+
+export {
   DependencyRequiredGateSchema,
   DependencyTypeSchema,
   DependencyValidationErrorCodeSchema,

@@ -24,17 +24,19 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1B1 Comprehensive Hardening: PASS
 - S1B1 Fresh Independent QA: PASS
 - S1B1 ACCEPTED: YES
-- S1B2a Durable Implementation Completion Transition: HARDENED
+- S1B2a Durable Implementation Completion Transition: ACCEPTED
 - S1B2a Comprehensive Hardening: PASS
-- S1B2a Fresh Independent QA: FAIL
-- CTC-S1B2A-QA-001: REPAIRED
-- S1B2a Focused Fresh Re-QA: PENDING
-- S1B2a ACCEPTED: NO
+- S1B2a Focused Fresh Re-QA: PASS
+- CTC-S1B2A-QA-001: CLOSED
+- S1B2a ACCEPTED: YES
+- S2A Context Scope ACL / AllowedContextSet: IMPLEMENTED
+- S2A Comprehensive Hardening: PENDING
+- S2A ACCEPTED: NO
 
 ## Next safe task
-**S1B2a Focused Fresh Re-QA**
+**S2A Comprehensive Hardening**
 
-The Task Control Plane remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. No scheduling, worktree, thread, or execution automation exists yet.
+The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. Context retrieval and compilation remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -44,7 +46,7 @@ Hanlin manual QA: NOT REQUIRED
 - scheduling, concurrency control, or `WHEN_READY` execution
 - live Codex App Server execution
 - execution/thread/run persistence
-- Context Engine/JIT compiler or Promoted Context
+- context retrieval/search/RAG, Context Packet/compiler, or Promoted Context
 - worktree lifecycle automation
 - automatic Audit Event emission
 - batch provisioning

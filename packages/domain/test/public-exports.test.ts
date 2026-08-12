@@ -16,7 +16,9 @@ import {
   RepositoryCommitShaSchema,
   SubtaskImplementationCheckpointIdSchema,
   SubtaskImplementationCheckpointSchema,
+  buildAllowedContextSet,
   deriveContextScope,
+  evaluateContextScopeAccess,
   SubtaskDependencySchema,
   SubtaskMaturitySchema,
   evaluateSubtaskDependencyReadiness,
@@ -34,6 +36,8 @@ describe("domain package public exports", () => {
     expect(ContextItemSchema).toBeDefined();
     expect(ContextScopeSchema).toBeDefined();
     expect(deriveContextScope).toBeTypeOf("function");
+    expect(buildAllowedContextSet).toBeTypeOf("function");
+    expect(evaluateContextScopeAccess).toBeTypeOf("function");
     expect(SubtaskDependencySchema).toBeDefined();
     expect(SubtaskMaturitySchema).toBeDefined();
     expect(DependencyRequiredGateSchema).toBeDefined();
