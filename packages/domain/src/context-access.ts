@@ -116,45 +116,185 @@ const AllowedContextSetSchema = z
     }
   });
 
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null;
+const PROJECT_KEYS = [
+  "recordType",
+  "id",
+  "name",
+  "slug",
+  "repository",
+  "defaultBranch",
+  "maxActiveCodingSubtasks",
+] as const;
+const BIG_TASK_KEYS = [
+  "recordType",
+  "id",
+  "projectId",
+  "title",
+  "goal",
+  "rationale",
+  "scopeIn",
+  "scopeOut",
+  "acceptanceCriteria",
+  "status",
+] as const;
+const SUBTASK_KEYS = [
+  "recordType",
+  "id",
+  "bigTaskId",
+  "title",
+  "goal",
+  "scopeIn",
+  "scopeOut",
+  "acceptanceCriteria",
+  "untouchedAreas",
+  "status",
+  "maturity",
+  "startPolicy",
+  "delegationPolicy",
+  "recommendedReasoningLevel",
+  "promptSeed",
+] as const;
+
+const hasExactOwnDataProperties = (
+  value: unknown,
+  expectedKeys: readonly string[],
+): value is Readonly<Record<string, unknown>> => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+
+  const ownKeys = Reflect.ownKeys(value);
+  if (
+    ownKeys.length !== expectedKeys.length ||
+    expectedKeys.some((key) => !ownKeys.includes(key))
+  ) {
+    return false;
+  }
+
+  return expectedKeys.every((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && "value" in descriptor && descriptor.enumerable;
+  });
+};
+
+const ownDataValue = (value: Readonly<Record<string, unknown>>, key: string): unknown =>
+  Object.getOwnPropertyDescriptor(value, key)?.value;
+
+const hasDenseOwnDataElements = (value: unknown): value is readonly unknown[] => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    return false;
+  }
+
+  const expectedKeys = [
+    ...Array.from({ length: value.length }, (_, index) => String(index)),
+    "length",
+  ];
+  const ownKeys = Reflect.ownKeys(value);
+  if (
+    ownKeys.length !== expectedKeys.length ||
+    expectedKeys.some((key) => !ownKeys.includes(key))
+  ) {
+    return false;
+  }
+
+  return expectedKeys.every((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && "value" in descriptor;
+  });
+};
+
+const hasRepositoryReferenceShape = (value: unknown): boolean => {
+  if (hasExactOwnDataProperties(value, ["kind", "path"])) {
+    return ownDataValue(value, "kind") === "PATH";
+  }
+  if (hasExactOwnDataProperties(value, ["kind", "reference"])) {
+    return ownDataValue(value, "kind") === "REFERENCE";
+  }
+  return false;
+};
+
+const hasProjectEvidenceShape = (
+  value: unknown,
+): value is Readonly<Record<string, unknown>> =>
+  hasExactOwnDataProperties(value, PROJECT_KEYS) &&
+  hasRepositoryReferenceShape(ownDataValue(value, "repository"));
+
+const hasBigTaskEvidenceShape = (
+  value: unknown,
+): value is Readonly<Record<string, unknown>> =>
+  hasExactOwnDataProperties(value, BIG_TASK_KEYS) &&
+  hasDenseOwnDataElements(ownDataValue(value, "scopeIn")) &&
+  hasDenseOwnDataElements(ownDataValue(value, "scopeOut")) &&
+  hasDenseOwnDataElements(ownDataValue(value, "acceptanceCriteria"));
+
+const hasSubtaskEvidenceShape = (
+  value: unknown,
+): value is Readonly<Record<string, unknown>> =>
+  hasExactOwnDataProperties(value, SUBTASK_KEYS) &&
+  hasDenseOwnDataElements(ownDataValue(value, "scopeIn")) &&
+  hasDenseOwnDataElements(ownDataValue(value, "scopeOut")) &&
+  hasDenseOwnDataElements(ownDataValue(value, "acceptanceCriteria")) &&
+  hasDenseOwnDataElements(ownDataValue(value, "untouchedAreas"));
 
 const isCanonicalContextScope = (input: unknown, parsed: ContextScope): boolean => {
-  if (!isRecord(input) || input.projectId !== parsed.projectId) {
+  const expectedKeys =
+    parsed.scopeType === "PROJECT"
+      ? ["scopeType", "projectId"]
+      : parsed.scopeType === "BIG_TASK"
+        ? ["scopeType", "projectId", "bigTaskId"]
+        : ["scopeType", "projectId", "bigTaskId", "subtaskId"];
+  if (
+    !hasExactOwnDataProperties(input, expectedKeys) ||
+    ownDataValue(input, "scopeType") !== parsed.scopeType ||
+    ownDataValue(input, "projectId") !== parsed.projectId
+  ) {
     return false;
   }
   switch (parsed.scopeType) {
     case "PROJECT":
       return true;
     case "BIG_TASK":
-      return input.bigTaskId === parsed.bigTaskId;
+      return ownDataValue(input, "bigTaskId") === parsed.bigTaskId;
     case "SUBTASK":
-      return input.bigTaskId === parsed.bigTaskId && input.subtaskId === parsed.subtaskId;
+      return (
+        ownDataValue(input, "bigTaskId") === parsed.bigTaskId &&
+        ownDataValue(input, "subtaskId") === parsed.subtaskId
+      );
   }
 };
 
 const parseCanonicalAllowedContextSet = (input: unknown): AllowedContextSet | null => {
-  const parsed = AllowedContextSetSchema.safeParse(input);
-  if (!parsed.success || !isRecord(input)) {
+  try {
+    const parsed = AllowedContextSetSchema.safeParse(input);
+    if (!parsed.success || !hasExactOwnDataProperties(input, ["target", "allowedRawScopes"])) {
+      return null;
+    }
+
+    const rawTarget = ownDataValue(input, "target");
+    const rawScopes = ownDataValue(input, "allowedRawScopes");
+    if (
+      !hasExactOwnDataProperties(rawTarget, ["projectId", "bigTaskId", "subtaskId"]) ||
+      !hasDenseOwnDataElements(rawScopes) ||
+      rawScopes.length !== 3 ||
+      ownDataValue(rawTarget, "projectId") !== parsed.data.target.projectId ||
+      ownDataValue(rawTarget, "bigTaskId") !== parsed.data.target.bigTaskId ||
+      ownDataValue(rawTarget, "subtaskId") !== parsed.data.target.subtaskId ||
+      !parsed.data.allowedRawScopes.every((scope, index) =>
+        isCanonicalContextScope(rawScopes[index], scope),
+      )
+    ) {
+      return null;
+    }
+
+    return parsed.data;
+  } catch {
     return null;
   }
-
-  const rawTarget = input.target;
-  const rawScopes = input.allowedRawScopes;
-  if (
-    !isRecord(rawTarget) ||
-    !Array.isArray(rawScopes) ||
-    rawTarget.projectId !== parsed.data.target.projectId ||
-    rawTarget.bigTaskId !== parsed.data.target.bigTaskId ||
-    rawTarget.subtaskId !== parsed.data.target.subtaskId ||
-    !parsed.data.allowedRawScopes.every((scope, index) =>
-      isCanonicalContextScope(rawScopes[index], scope),
-    )
-  ) {
-    return null;
-  }
-
-  return parsed.data;
 };
 
 const freezeAllowedContextSet = (target: ContextAccessTarget): AllowedContextSet => {
@@ -185,45 +325,54 @@ export const buildAllowedContextSet = (
   bigTask: BigTask,
   subtask: Subtask,
 ): AllowedContextSetBuildResult => {
-  const parsedProject = ProjectSchema.safeParse(project);
-  const parsedBigTask = BigTaskSchema.safeParse(bigTask);
-  const parsedSubtask = SubtaskSchema.safeParse(subtask);
-  if (
-    !parsedProject.success ||
-    !parsedBigTask.success ||
-    !parsedSubtask.success ||
-    !isRecord(project) ||
-    !isRecord(bigTask) ||
-    !isRecord(subtask) ||
-    project.id !== parsedProject.data.id ||
-    bigTask.id !== parsedBigTask.data.id ||
-    bigTask.projectId !== parsedBigTask.data.projectId ||
-    subtask.id !== parsedSubtask.data.id ||
-    subtask.bigTaskId !== parsedSubtask.data.bigTaskId
-  ) {
+  try {
+    if (
+      !hasProjectEvidenceShape(project) ||
+      !hasBigTaskEvidenceShape(bigTask) ||
+      !hasSubtaskEvidenceShape(subtask)
+    ) {
+      return { valid: false, errorCodes: ["INVALID_TARGET_SHAPE"] };
+    }
+
+    const parsedProject = ProjectSchema.safeParse(project);
+    const parsedBigTask = BigTaskSchema.safeParse(bigTask);
+    const parsedSubtask = SubtaskSchema.safeParse(subtask);
+    if (
+      !parsedProject.success ||
+      !parsedBigTask.success ||
+      !parsedSubtask.success ||
+      ownDataValue(project, "id") !== parsedProject.data.id ||
+      ownDataValue(bigTask, "id") !== parsedBigTask.data.id ||
+      ownDataValue(bigTask, "projectId") !== parsedBigTask.data.projectId ||
+      ownDataValue(subtask, "id") !== parsedSubtask.data.id ||
+      ownDataValue(subtask, "bigTaskId") !== parsedSubtask.data.bigTaskId
+    ) {
+      return { valid: false, errorCodes: ["INVALID_TARGET_SHAPE"] };
+    }
+
+    const errorCodes: AllowedContextSetBuildErrorCode[] = [];
+    if (parsedBigTask.data.projectId !== parsedProject.data.id) {
+      errorCodes.push("BIG_TASK_PROJECT_MISMATCH");
+    }
+    if (parsedSubtask.data.bigTaskId !== parsedBigTask.data.id) {
+      errorCodes.push("SUBTASK_BIG_TASK_MISMATCH");
+    }
+    if (errorCodes.length > 0) {
+      return { valid: false, errorCodes };
+    }
+
+    return {
+      valid: true,
+      allowedContextSet: freezeAllowedContextSet({
+        projectId: parsedProject.data.id,
+        bigTaskId: parsedBigTask.data.id,
+        subtaskId: parsedSubtask.data.id,
+      }),
+      errorCodes: [],
+    };
+  } catch {
     return { valid: false, errorCodes: ["INVALID_TARGET_SHAPE"] };
   }
-
-  const errorCodes: AllowedContextSetBuildErrorCode[] = [];
-  if (parsedBigTask.data.projectId !== parsedProject.data.id) {
-    errorCodes.push("BIG_TASK_PROJECT_MISMATCH");
-  }
-  if (parsedSubtask.data.bigTaskId !== parsedBigTask.data.id) {
-    errorCodes.push("SUBTASK_BIG_TASK_MISMATCH");
-  }
-  if (errorCodes.length > 0) {
-    return { valid: false, errorCodes };
-  }
-
-  return {
-    valid: true,
-    allowedContextSet: freezeAllowedContextSet({
-      projectId: parsedProject.data.id,
-      bigTaskId: parsedBigTask.data.id,
-      subtaskId: parsedSubtask.data.id,
-    }),
-    errorCodes: [],
-  };
 };
 
 const accessDecision = (
@@ -240,31 +389,34 @@ export const evaluateContextScopeAccess = (
     return accessDecision(false, "INVALID_ALLOWED_CONTEXT_SET");
   }
 
-  const parsedCandidate = ContextScopeSchema.safeParse(candidateScope);
-  if (
-    !parsedCandidate.success ||
-    !isCanonicalContextScope(candidateScope, parsedCandidate.data)
-  ) {
+  let parsedCandidate: ContextScope;
+  try {
+    const result = ContextScopeSchema.safeParse(candidateScope);
+    if (!result.success || !isCanonicalContextScope(candidateScope, result.data)) {
+      return accessDecision(false, "INVALID_CONTEXT_SCOPE");
+    }
+    parsedCandidate = result.data;
+  } catch {
     return accessDecision(false, "INVALID_CONTEXT_SCOPE");
   }
 
   const { target } = parsedAllowedContextSet;
-  if (parsedCandidate.data.projectId !== target.projectId) {
+  if (parsedCandidate.projectId !== target.projectId) {
     return accessDecision(false, "OTHER_PROJECT_EXCLUDED");
   }
 
-  switch (parsedCandidate.data.scopeType) {
+  switch (parsedCandidate.scopeType) {
     case "PROJECT":
       return accessDecision(true, "TARGET_PROJECT_SCOPE");
     case "BIG_TASK":
-      return parsedCandidate.data.bigTaskId === target.bigTaskId
+      return parsedCandidate.bigTaskId === target.bigTaskId
         ? accessDecision(true, "TARGET_BIG_TASK_SCOPE")
         : accessDecision(false, "UNRELATED_BIG_TASK_EXCLUDED");
     case "SUBTASK":
-      if (parsedCandidate.data.bigTaskId !== target.bigTaskId) {
+      if (parsedCandidate.bigTaskId !== target.bigTaskId) {
         return accessDecision(false, "UNRELATED_BIG_TASK_EXCLUDED");
       }
-      return parsedCandidate.data.subtaskId === target.subtaskId
+      return parsedCandidate.subtaskId === target.subtaskId
         ? accessDecision(true, "TARGET_SUBTASK_SCOPE")
         : accessDecision(false, "SIBLING_SUBTASK_EXCLUDED");
   }

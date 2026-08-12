@@ -2,7 +2,7 @@
 
 S2A establishes one pure deterministic access boundary for raw durable context scope. It does not retrieve, rank, compile, or inject context.
 
-`buildAllowedContextSet(project, bigTask, subtask)` accepts the existing strict domain entities as ownership evidence. It produces no set unless the evidence proves the exact hierarchy `Project -> Big Task -> Subtask`. Malformed, noncanonical, or mismatched evidence fails closed with stable validation codes.
+`buildAllowedContextSet(project, bigTask, subtask)` accepts the existing strict domain entities as ownership evidence. It produces no set unless the evidence proves the exact hierarchy `Project -> Big Task -> Subtask`. Malformed structural shapes, noncanonical identity or ownership fields, and mismatched ownership fail closed with stable validation codes. Parser-normalizable non-access fields such as names, titles, repository references, scope text, and prompt seeds may be accepted because they do not participate in the ACL; valid canonical changes to those fields cannot change access.
 
 For one valid target Subtask, `AllowedContextSet.allowedRawScopes` is always ordered as:
 
@@ -10,7 +10,9 @@ For one valid target Subtask, `AllowedContextSet.allowedRawScopes` is always ord
 2. the target parent Big Task scope in that Project;
 3. the target exact Subtask scope in that Big Task and Project.
 
-`evaluateContextScopeAccess(allowedContextSet, candidateScope)` returns an inspectable allow/deny decision. It allows only those three exact scopes. Sibling Subtasks, unrelated Big Tasks in the same Project, Subtasks under unrelated Big Tasks, and every scope in another Project are denied. Malformed, noncanonical, unknown, or corrupt runtime inputs are denied by default. The canonical set and its nested values are immutable.
+`evaluateContextScopeAccess(allowedContextSet, candidateScope)` is a pure structural evaluator relative to the supplied set; it does not authenticate builder provenance or durable ownership. A canonical structural copy, including a JSON round trip, is accepted. Any valid supplied set can contain only its own exact ordered three-scope hierarchy. Reordered, duplicated, widened, malformed, or noncanonical sets fail closed.
+
+The evaluator allows only those three exact scopes. Sibling Subtasks, unrelated Big Tasks in the same Project, Subtasks under unrelated Big Tasks, and every scope in another Project are denied. Candidate scope IDs must already be canonical; parser normalization never turns a raw request into an allow. Malformed, inherited-field, unknown, corrupt, or hostile runtime inputs are denied by default without broadening access. The builder output and its nested values are immutable.
 
 Task dependencies do not expand this ACL. Blocking, informational, upstream, downstream, and unrelated dependency evidence never grants raw Subtask scope. Future accepted Promoted Context may carry compact conclusions across a separate contract; it is not raw-scope access and is not implemented here.
 
