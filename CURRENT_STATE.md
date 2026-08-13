@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-12
+Last reconciled: 2026-08-14
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -31,11 +31,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1B2a ACCEPTED: YES
 - S2A Context Scope ACL / AllowedContextSet: HARDENED
 - S2A Comprehensive Hardening: PASS
-- S2A Fresh Independent QA: PENDING
+- S2A Fresh Independent QA: FAIL
+- CTC-S2A-FQA-001: REPAIRED
+- CTC-S2A-FQA-002: REPAIRED
+- S2A Focused Fresh Re-QA: PENDING
 - S2A ACCEPTED: NO
 
 ## Next safe task
-**S2A Fresh Independent QA**
+**S2A Focused Fresh Re-QA**
 
 The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. Context retrieval and compilation remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 

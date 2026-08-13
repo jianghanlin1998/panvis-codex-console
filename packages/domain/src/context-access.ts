@@ -155,6 +155,221 @@ const SUBTASK_KEYS = [
   "promptSeed",
 ] as const;
 
+type StructuralObservation =
+  | { readonly kind: "PRIMITIVE"; readonly value: unknown }
+  | {
+      readonly kind: "OBJECT" | "ARRAY";
+      readonly prototype: "OBJECT" | "NULL" | "ARRAY";
+      readonly keys: readonly string[];
+      readonly descriptors: readonly {
+        readonly key: string;
+        readonly enumerable: boolean;
+        readonly configurable: boolean;
+        readonly writable: boolean;
+        readonly value: StructuralObservation;
+      }[];
+    };
+
+interface StructuralCapture {
+  readonly data: unknown;
+  readonly observation: StructuralObservation;
+}
+
+const structuralObservationsEqual = (
+  left: StructuralObservation,
+  right: StructuralObservation,
+): boolean => {
+  if (left.kind === "PRIMITIVE" || right.kind === "PRIMITIVE") {
+    return (
+      left.kind === "PRIMITIVE" &&
+      right.kind === "PRIMITIVE" &&
+      Object.is(left.value, right.value)
+    );
+  }
+  if (
+    left.kind !== right.kind ||
+    left.prototype !== right.prototype ||
+    left.keys.length !== right.keys.length ||
+    left.keys.some((key, index) => key !== right.keys[index]) ||
+    left.descriptors.length !== right.descriptors.length
+  ) {
+    return false;
+  }
+  return left.descriptors.every((descriptor, index) => {
+    const other = right.descriptors[index];
+    return (
+      other !== undefined &&
+      descriptor.key === other.key &&
+      descriptor.enumerable === other.enumerable &&
+      descriptor.configurable === other.configurable &&
+      descriptor.writable === other.writable &&
+      structuralObservationsEqual(descriptor.value, other.value)
+    );
+  });
+};
+
+const captureStructuralDataOnce = (
+  input: unknown,
+  ancestors: Set<object>,
+): StructuralCapture | null => {
+  if ((typeof input !== "object" && typeof input !== "function") || input === null) {
+    return {
+      data: input,
+      observation: { kind: "PRIMITIVE", value: input },
+    };
+  }
+  if (typeof input === "function" || ancestors.has(input)) {
+    return null;
+  }
+
+  const isArray = Array.isArray(input);
+  const prototype = Object.getPrototypeOf(input) as unknown;
+  if (
+    (isArray && prototype !== Array.prototype) ||
+    (!isArray && prototype !== Object.prototype && prototype !== null)
+  ) {
+    return null;
+  }
+
+  const ownKeys = Reflect.ownKeys(input);
+  if (ownKeys.some((key) => typeof key !== "string")) {
+    return null;
+  }
+  const keys = ownKeys as string[];
+  const descriptors = keys.map((key) => ({
+    key,
+    descriptor: Object.getOwnPropertyDescriptor(input, key),
+  }));
+  if (
+    descriptors.some(
+      ({ descriptor }) => descriptor === undefined || !("value" in descriptor),
+    )
+  ) {
+    return null;
+  }
+
+  if (isArray) {
+    const lengthDescriptor = descriptors.find(({ key }) => key === "length")?.descriptor;
+    if (
+      lengthDescriptor === undefined ||
+      !("value" in lengthDescriptor) ||
+      lengthDescriptor.enumerable ||
+      lengthDescriptor.configurable ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0
+    ) {
+      return null;
+    }
+    const length = lengthDescriptor.value as number;
+    if (keys.length !== length + 1) {
+      return null;
+    }
+    const expectedKeys = [
+      ...Array.from({ length }, (_, index) => String(index)),
+      "length",
+    ];
+    if (
+      expectedKeys.some((key) => !keys.includes(key)) ||
+      descriptors.some(
+        ({ key, descriptor }) =>
+          key !== "length" && descriptor !== undefined && !descriptor.enumerable,
+      )
+    ) {
+      return null;
+    }
+  } else if (descriptors.some(({ descriptor }) => !descriptor?.enumerable)) {
+    return null;
+  }
+
+  ancestors.add(input);
+  try {
+    const capturedDescriptors: Array<{
+      key: string;
+      descriptor: PropertyDescriptor & { value: unknown };
+      capture: StructuralCapture;
+    }> = [];
+    for (const { key, descriptor } of descriptors) {
+      if (descriptor === undefined || !("value" in descriptor)) {
+        return null;
+      }
+      const capture = captureStructuralDataOnce(descriptor.value, ancestors);
+      if (capture === null) {
+        return null;
+      }
+      capturedDescriptors.push({
+        key,
+        descriptor: descriptor as PropertyDescriptor & { value: unknown },
+        capture,
+      });
+    }
+
+    let data: unknown;
+    if (isArray) {
+      const lengthDescriptor = descriptors.find(({ key }) => key === "length")!.descriptor!;
+      const length = (lengthDescriptor as PropertyDescriptor & { value: number }).value;
+      data = Array.from({ length }, (_, index) =>
+        capturedDescriptors.find(({ key }) => key === String(index))!.capture.data,
+      );
+    } else {
+      const objectData = Object.create(
+        prototype === null ? null : Object.prototype,
+      ) as Record<string, unknown>;
+      for (const { key, capture } of capturedDescriptors) {
+        Object.defineProperty(objectData, key, {
+          value: capture.data,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      }
+      data = objectData;
+    }
+    return {
+      data,
+      observation: {
+        kind: isArray ? "ARRAY" : "OBJECT",
+        prototype: isArray ? "ARRAY" : prototype === null ? "NULL" : "OBJECT",
+        keys,
+        descriptors: capturedDescriptors.map(({ key, descriptor, capture }) => ({
+          key,
+          enumerable: descriptor.enumerable ?? false,
+          configurable: descriptor.configurable ?? false,
+          writable: descriptor.writable ?? false,
+          value: capture.observation,
+        })),
+      },
+    };
+  } finally {
+    ancestors.delete(input);
+  }
+};
+
+const captureStableStructuralDataList = (inputs: readonly unknown[]): unknown[] | null => {
+  const captures = Array.from({ length: 3 }, () =>
+    inputs.map((input) => captureStructuralDataOnce(input, new Set<object>())),
+  );
+  if (
+    captures.some((pass) => pass.some((capture) => capture === null)) ||
+    inputs.some(
+      (_input, index) =>
+        !structuralObservationsEqual(
+          captures[0]![index]!.observation,
+          captures[1]![index]!.observation,
+        ) ||
+        !structuralObservationsEqual(
+          captures[0]![index]!.observation,
+          captures[2]![index]!.observation,
+        ),
+    )
+  ) {
+    return null;
+  }
+  return captures[0]!.map((capture) => capture!.data);
+};
+
+const captureStableStructuralData = (input: unknown): unknown | null =>
+  captureStableStructuralDataList([input])?.[0] ?? null;
+
 const hasExactOwnDataProperties = (
   value: unknown,
   expectedKeys: readonly string[],
@@ -162,51 +377,18 @@ const hasExactOwnDataProperties = (
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
-
-  const prototype = Object.getPrototypeOf(value) as unknown;
-  if (prototype !== Object.prototype && prototype !== null) {
-    return false;
-  }
-
   const ownKeys = Reflect.ownKeys(value);
-  if (
-    ownKeys.length !== expectedKeys.length ||
-    expectedKeys.some((key) => !ownKeys.includes(key))
-  ) {
-    return false;
-  }
-
-  return expectedKeys.every((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor !== undefined && "value" in descriptor && descriptor.enumerable;
-  });
+  return (
+    ownKeys.length === expectedKeys.length &&
+    expectedKeys.every((key) => ownKeys.includes(key))
+  );
 };
 
 const ownDataValue = (value: Readonly<Record<string, unknown>>, key: string): unknown =>
   Object.getOwnPropertyDescriptor(value, key)?.value;
 
-const hasDenseOwnDataElements = (value: unknown): value is readonly unknown[] => {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
-    return false;
-  }
-
-  const expectedKeys = [
-    ...Array.from({ length: value.length }, (_, index) => String(index)),
-    "length",
-  ];
-  const ownKeys = Reflect.ownKeys(value);
-  if (
-    ownKeys.length !== expectedKeys.length ||
-    expectedKeys.some((key) => !ownKeys.includes(key))
-  ) {
-    return false;
-  }
-
-  return expectedKeys.every((key) => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor !== undefined && "value" in descriptor;
-  });
-};
+const hasDenseOwnDataElements = (value: unknown): value is readonly unknown[] =>
+  Array.isArray(value);
 
 const hasRepositoryReferenceShape = (value: unknown): boolean => {
   if (hasExactOwnDataProperties(value, ["kind", "path"])) {
@@ -326,26 +508,31 @@ export const buildAllowedContextSet = (
   subtask: Subtask,
 ): AllowedContextSetBuildResult => {
   try {
+    const capturedEvidence = captureStableStructuralDataList([project, bigTask, subtask]);
+    if (capturedEvidence === null) {
+      return { valid: false, errorCodes: ["INVALID_TARGET_SHAPE"] };
+    }
+    const [capturedProject, capturedBigTask, capturedSubtask] = capturedEvidence;
     if (
-      !hasProjectEvidenceShape(project) ||
-      !hasBigTaskEvidenceShape(bigTask) ||
-      !hasSubtaskEvidenceShape(subtask)
+      !hasProjectEvidenceShape(capturedProject) ||
+      !hasBigTaskEvidenceShape(capturedBigTask) ||
+      !hasSubtaskEvidenceShape(capturedSubtask)
     ) {
       return { valid: false, errorCodes: ["INVALID_TARGET_SHAPE"] };
     }
 
-    const parsedProject = ProjectSchema.safeParse(project);
-    const parsedBigTask = BigTaskSchema.safeParse(bigTask);
-    const parsedSubtask = SubtaskSchema.safeParse(subtask);
+    const parsedProject = ProjectSchema.safeParse(capturedProject);
+    const parsedBigTask = BigTaskSchema.safeParse(capturedBigTask);
+    const parsedSubtask = SubtaskSchema.safeParse(capturedSubtask);
     if (
       !parsedProject.success ||
       !parsedBigTask.success ||
       !parsedSubtask.success ||
-      ownDataValue(project, "id") !== parsedProject.data.id ||
-      ownDataValue(bigTask, "id") !== parsedBigTask.data.id ||
-      ownDataValue(bigTask, "projectId") !== parsedBigTask.data.projectId ||
-      ownDataValue(subtask, "id") !== parsedSubtask.data.id ||
-      ownDataValue(subtask, "bigTaskId") !== parsedSubtask.data.bigTaskId
+      ownDataValue(capturedProject, "id") !== parsedProject.data.id ||
+      ownDataValue(capturedBigTask, "id") !== parsedBigTask.data.id ||
+      ownDataValue(capturedBigTask, "projectId") !== parsedBigTask.data.projectId ||
+      ownDataValue(capturedSubtask, "id") !== parsedSubtask.data.id ||
+      ownDataValue(capturedSubtask, "bigTaskId") !== parsedSubtask.data.bigTaskId
     ) {
       return { valid: false, errorCodes: ["INVALID_TARGET_SHAPE"] };
     }
@@ -384,15 +571,32 @@ export const evaluateContextScopeAccess = (
   allowedContextSet: AllowedContextSet,
   candidateScope: ContextScope,
 ): ContextScopeAccessDecision => {
-  const parsedAllowedContextSet = parseCanonicalAllowedContextSet(allowedContextSet);
+  let capturedAllowedContextSet: unknown;
+  let capturedCandidate: unknown;
+  try {
+    const capturedEvidence = captureStableStructuralDataList([
+      allowedContextSet,
+      candidateScope,
+    ]);
+    if (capturedEvidence === null) {
+      const stableSet = captureStableStructuralData(allowedContextSet);
+      return parseCanonicalAllowedContextSet(stableSet) === null
+        ? accessDecision(false, "INVALID_ALLOWED_CONTEXT_SET")
+        : accessDecision(false, "INVALID_CONTEXT_SCOPE");
+    }
+    [capturedAllowedContextSet, capturedCandidate] = capturedEvidence;
+  } catch {
+    return accessDecision(false, "INVALID_ALLOWED_CONTEXT_SET");
+  }
+  const parsedAllowedContextSet = parseCanonicalAllowedContextSet(capturedAllowedContextSet);
   if (parsedAllowedContextSet === null) {
     return accessDecision(false, "INVALID_ALLOWED_CONTEXT_SET");
   }
 
   let parsedCandidate: ContextScope;
   try {
-    const result = ContextScopeSchema.safeParse(candidateScope);
-    if (!result.success || !isCanonicalContextScope(candidateScope, result.data)) {
+    const result = ContextScopeSchema.safeParse(capturedCandidate);
+    if (!result.success || !isCanonicalContextScope(capturedCandidate, result.data)) {
       return accessDecision(false, "INVALID_CONTEXT_SCOPE");
     }
     parsedCandidate = result.data;
