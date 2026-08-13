@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   auditEventsTable,
@@ -13,6 +13,10 @@ import {
   taskDependenciesTable,
   TaskStorage,
   TaskStorageError,
+} from "@codex-task-console/storage";
+import type {
+  AllowedRawContextItemBucket,
+  AllowedRawContextItemSnapshot,
 } from "@codex-task-console/storage";
 
 describe("storage package public exports", () => {
@@ -29,5 +33,7 @@ describe("storage package public exports", () => {
     expect(subtasksTable).toBeDefined();
     expect(taskDependenciesTable).toBeDefined();
     expect(subtaskImplementationCheckpointsTable).toBeDefined();
+    expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
+    expectTypeOf<AllowedRawContextItemSnapshot>().toBeObject();
   });
 });

@@ -18,6 +18,7 @@ import {
   SubtaskDependencySchema,
   SubtaskIdSchema,
   SubtaskSchema,
+  buildAllowedContextSet,
   deriveContextScope,
   evaluateSubtaskDependencyReadiness,
   validateSubtaskDependencies,
@@ -27,6 +28,7 @@ import {
 import type {
   AuditEvent,
   AuditEventId,
+  AllowedContextSet,
   BigTask,
   BigTaskId,
   ContextDigest,
@@ -77,6 +79,33 @@ export interface CompleteSubtaskImplementationInput {
 export interface CompleteSubtaskImplementationResult {
   readonly subtask: Subtask;
   readonly checkpoint: SubtaskImplementationCheckpoint;
+}
+
+type ProjectContextScope = Extract<
+  ContextScope,
+  { readonly scopeType: "PROJECT" }
+>;
+type BigTaskContextScope = Extract<
+  ContextScope,
+  { readonly scopeType: "BIG_TASK" }
+>;
+type SubtaskContextScope = Extract<
+  ContextScope,
+  { readonly scopeType: "SUBTASK" }
+>;
+
+export interface AllowedRawContextItemBucket<Scope extends ContextScope = ContextScope> {
+  readonly scope: Scope;
+  readonly contextItems: readonly ContextItem[];
+}
+
+export interface AllowedRawContextItemSnapshot {
+  readonly allowedContextSet: AllowedContextSet;
+  readonly buckets: readonly [
+    AllowedRawContextItemBucket<ProjectContextScope>,
+    AllowedRawContextItemBucket<BigTaskContextScope>,
+    AllowedRawContextItemBucket<SubtaskContextScope>,
+  ];
 }
 
 type ProjectRow = typeof projectsTable.$inferSelect;
@@ -1294,14 +1323,63 @@ export class TaskStorage {
     const scope = parseContextScope(input);
     return this.#operation(() => {
       this.#validateExactScopeHierarchy(scope, "Context Item");
-      return this.#database
-        .select()
-        .from(contextItemsTable)
-        .where(contextScopePredicate(scope))
-        .orderBy(asc(contextItemsTable.effectiveAt), asc(contextItemsTable.id))
-        .all()
-        .map((row) => this.#contextItemFromRow(row));
+      return this.#listContextItemsAtExactScope(scope);
     });
+  }
+
+  readAllowedRawContextItemsForSubtask(
+    input: SubtaskId,
+  ): AllowedRawContextItemSnapshot {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const subtask = this.#getSubtask(subtaskId);
+        if (subtask === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The Subtask does not exist.",
+          );
+        }
+        this.#validateStoredSubtaskHierarchy(subtask);
+
+        const bigTask = this.#getBigTask(subtask.bigTaskId);
+        const project = bigTask === null ? null : this.#getProject(bigTask.projectId);
+        if (bigTask === null || project === null) {
+          throw malformedStoredData();
+        }
+
+        const allowedContextSetResult = buildAllowedContextSet(
+          project,
+          bigTask,
+          subtask,
+        );
+        if (!allowedContextSetResult.valid) {
+          throw malformedStoredData();
+        }
+
+        // The accepted ACL is complete before any Context Item query is issued.
+        const { allowedContextSet } = allowedContextSetResult;
+        const [projectScope, bigTaskScope, subtaskScope] =
+          allowedContextSet.allowedRawScopes;
+        return {
+          allowedContextSet,
+          buckets: [
+            {
+              scope: projectScope,
+              contextItems: this.#listContextItemsAtExactScope(projectScope),
+            },
+            {
+              scope: bigTaskScope,
+              contextItems: this.#listContextItemsAtExactScope(bigTaskScope),
+            },
+            {
+              scope: subtaskScope,
+              contextItems: this.#listContextItemsAtExactScope(subtaskScope),
+            },
+          ],
+        };
+      }),
+    );
   }
 
   supersedeContextItem(input: ContextItem): ContextItem {
@@ -1701,6 +1779,16 @@ export class TaskStorage {
       .where(eq(contextItemsTable.id, contextItemId))
       .get();
     return row === undefined ? null : this.#contextItemFromRow(row);
+  }
+
+  #listContextItemsAtExactScope(scope: ContextScope): readonly ContextItem[] {
+    return this.#database
+      .select()
+      .from(contextItemsTable)
+      .where(contextScopePredicate(scope))
+      .orderBy(asc(contextItemsTable.effectiveAt), asc(contextItemsTable.id))
+      .all()
+      .map((row) => this.#contextItemFromRow(row));
   }
 
   #getContextDigest(contextDigestId: ContextDigestId): ContextDigest | null {
