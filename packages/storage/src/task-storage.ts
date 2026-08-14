@@ -108,6 +108,20 @@ export interface AllowedRawContextItemSnapshot {
   ];
 }
 
+export interface ActiveContextItemBucket<Scope extends ContextScope = ContextScope> {
+  readonly scope: Scope;
+  readonly contextItems: readonly ContextItem[];
+}
+
+export interface ActiveContextItemSnapshot {
+  readonly allowedContextSet: AllowedContextSet;
+  readonly buckets: readonly [
+    ActiveContextItemBucket<ProjectContextScope>,
+    ActiveContextItemBucket<BigTaskContextScope>,
+    ActiveContextItemBucket<SubtaskContextScope>,
+  ];
+}
+
 type ProjectRow = typeof projectsTable.$inferSelect;
 type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
@@ -1394,49 +1408,38 @@ export class TaskStorage {
   ): AllowedRawContextItemSnapshot {
     const subtaskId = parseCanonicalSubtaskId(input);
     return this.#operation(() =>
+      this.#readSnapshot(() =>
+        this.#readAllowedRawContextItemsForSubtask(subtaskId),
+      ),
+    );
+  }
+
+  readActiveContextItemsForSubtask(input: SubtaskId): ActiveContextItemSnapshot {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    return this.#operation(() =>
       this.#readSnapshot(() => {
-        const subtask = this.#getSubtask(subtaskId);
-        if (subtask === null) {
-          throw new TaskStorageError(
-            "PARENT_NOT_FOUND",
-            "The Subtask does not exist.",
-          );
-        }
-        this.#validateStoredSubtaskHierarchy(subtask);
-
-        const bigTask = this.#getBigTask(subtask.bigTaskId);
-        const project = bigTask === null ? null : this.#getProject(bigTask.projectId);
-        if (bigTask === null || project === null) {
-          throw malformedStoredData();
-        }
-
-        const allowedContextSetResult = buildAllowedContextSet(
-          project,
-          bigTask,
-          subtask,
-        );
-        if (!allowedContextSetResult.valid) {
-          throw malformedStoredData();
-        }
-
-        // The accepted ACL is complete before any Context Item query is issued.
-        const { allowedContextSet } = allowedContextSetResult;
-        const [projectScope, bigTaskScope, subtaskScope] =
-          allowedContextSet.allowedRawScopes;
+        const rawSnapshot = this.#readAllowedRawContextItemsForSubtask(subtaskId);
+        const [projectBucket, bigTaskBucket, subtaskBucket] = rawSnapshot.buckets;
         return {
-          allowedContextSet,
+          allowedContextSet: rawSnapshot.allowedContextSet,
           buckets: [
             {
-              scope: projectScope,
-              contextItems: this.#listContextItemsAtExactScope(projectScope),
+              scope: projectBucket.scope,
+              contextItems: projectBucket.contextItems.filter(
+                ({ status }) => status === "ACTIVE",
+              ),
             },
             {
-              scope: bigTaskScope,
-              contextItems: this.#listContextItemsAtExactScope(bigTaskScope),
+              scope: bigTaskBucket.scope,
+              contextItems: bigTaskBucket.contextItems.filter(
+                ({ status }) => status === "ACTIVE",
+              ),
             },
             {
-              scope: subtaskScope,
-              contextItems: this.#listContextItemsAtExactScope(subtaskScope),
+              scope: subtaskBucket.scope,
+              contextItems: subtaskBucket.contextItems.filter(
+                ({ status }) => status === "ACTIVE",
+              ),
             },
           ],
         };
@@ -1728,6 +1731,56 @@ export class TaskStorage {
       .where(eq(projectsTable.id, projectId))
       .get();
     return row === undefined ? null : projectFromRow(row);
+  }
+
+  #readAllowedRawContextItemsForSubtask(
+    subtaskId: SubtaskId,
+  ): AllowedRawContextItemSnapshot {
+    const subtask = this.#getSubtask(subtaskId);
+    if (subtask === null) {
+      throw new TaskStorageError(
+        "PARENT_NOT_FOUND",
+        "The Subtask does not exist.",
+      );
+    }
+    this.#validateStoredSubtaskHierarchy(subtask);
+
+    const bigTask = this.#getBigTask(subtask.bigTaskId);
+    const project = bigTask === null ? null : this.#getProject(bigTask.projectId);
+    if (bigTask === null || project === null) {
+      throw malformedStoredData();
+    }
+
+    const allowedContextSetResult = buildAllowedContextSet(
+      project,
+      bigTask,
+      subtask,
+    );
+    if (!allowedContextSetResult.valid) {
+      throw malformedStoredData();
+    }
+
+    // The accepted ACL is complete before any Context Item query is issued.
+    const { allowedContextSet } = allowedContextSetResult;
+    const [projectScope, bigTaskScope, subtaskScope] =
+      allowedContextSet.allowedRawScopes;
+    return {
+      allowedContextSet,
+      buckets: [
+        {
+          scope: projectScope,
+          contextItems: this.#listContextItemsAtExactScope(projectScope),
+        },
+        {
+          scope: bigTaskScope,
+          contextItems: this.#listContextItemsAtExactScope(bigTaskScope),
+        },
+        {
+          scope: subtaskScope,
+          contextItems: this.#listContextItemsAtExactScope(subtaskScope),
+        },
+      ],
+    };
   }
 
   #getBigTask(bigTaskId: BigTaskId): BigTask | null {

@@ -15,6 +15,8 @@ import {
   TaskStorageError,
 } from "@codex-task-console/storage";
 import type {
+  ActiveContextItemBucket,
+  ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
 } from "@codex-task-console/storage";
@@ -33,6 +35,8 @@ describe("storage package public exports", () => {
     expect(subtasksTable).toBeDefined();
     expect(taskDependenciesTable).toBeDefined();
     expect(subtaskImplementationCheckpointsTable).toBeDefined();
+    expectTypeOf<ActiveContextItemBucket>().toBeObject();
+    expectTypeOf<ActiveContextItemSnapshot>().toBeObject();
     expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
     expectTypeOf<AllowedRawContextItemSnapshot>().toBeObject();
   });

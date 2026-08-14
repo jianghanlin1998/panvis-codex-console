@@ -35,15 +35,18 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-S2A-FQA-001: CLOSED
 - CTC-S2A-FQA-002: CLOSED
 - S2A ACCEPTED: YES
-- S2B1 Allowed Raw Context Item Retrieval Snapshot: HARDENED
+- S2B1 Allowed Raw Context Item Retrieval Snapshot: ACCEPTED
 - S2B1 Comprehensive Hardening: PASS
-- S2B1 Fresh Independent QA: PENDING
-- S2B1 ACCEPTED: NO
+- S2B1 Fresh Independent QA: PASS
+- S2B1 ACCEPTED: YES
+- S2B2 Active Context Item Selection: IMPLEMENTED
+- S2B2 Comprehensive Hardening: PENDING
+- S2B2 ACCEPTED: NO
 
 ## Next safe task
-**S2B1 Fresh Independent QA**
+**S2B2 Comprehensive Hardening**
 
-The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. Current-context selection, context compilation, Promoted Context, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
+The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -53,7 +56,7 @@ Hanlin manual QA: NOT REQUIRED
 - scheduling, concurrency control, or `WHEN_READY` execution
 - live Codex App Server execution
 - execution/thread/run persistence
-- context retrieval/search/RAG, Context Packet/compiler, or Promoted Context
+- context conflict resolution, search/RAG, Context Packet/compiler, or Promoted Context
 - worktree lifecycle automation
 - automatic Audit Event emission
 - batch provisioning

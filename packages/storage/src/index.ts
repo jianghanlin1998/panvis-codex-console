@@ -14,6 +14,8 @@ export {
 
 export { openTaskDatabase, TaskStorage } from "./task-storage.js";
 export type {
+  ActiveContextItemBucket,
+  ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
   CompleteSubtaskImplementationInput,
