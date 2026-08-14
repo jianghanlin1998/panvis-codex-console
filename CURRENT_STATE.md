@@ -43,16 +43,20 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2B2 Comprehensive Hardening: PASS
 - S2B2 Fresh Independent QA: PASS
 - S2B2 ACCEPTED: YES
-- S2C1 QA Clean-Context Profile Contract: HARDENED
+- S2C1 QA Clean-Context Profile Contract: ACCEPTED
 - S2C1 Comprehensive Hardening: PASS
-- S2C1 Fresh Independent QA: PENDING
-- S2C1 ACCEPTED: NO
+- S2C1 Fresh Independent QA: PASS
+- S2C1 ACCEPTED: YES
+- S2D1 Promoted Context Route Eligibility: IMPLEMENTED
+- S2D1 Comprehensive Hardening: PENDING
+- S2D1 Independent QA: PENDING
+- S2D1 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**S2C1 Fresh Independent QA**
+**S2D1 Comprehensive Hardening**
 
-The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
+The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context content, acceptance, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 

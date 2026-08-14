@@ -14,6 +14,10 @@ import {
   NormalizedUsageSchema,
   ProviderRunReferenceSchema,
   ProviderThreadReferenceSchema,
+  PromotedContextRouteAudienceKindSchema,
+  PromotedContextRouteReasonSchema,
+  PromotedContextRouteSchema,
+  PromotedContextRouteTopologySchema,
   QaContextCandidateClassSchema,
   QaContextProfileCandidateSchema,
   QaContextProfileDecisionReasonSchema,
@@ -24,6 +28,7 @@ import {
   buildAllowedContextSet,
   deriveContextScope,
   evaluateContextScopeAccess,
+  evaluatePromotedContextRoute,
   evaluateQaContextProfileCandidate,
   SubtaskDependencySchema,
   SubtaskMaturitySchema,
@@ -45,6 +50,11 @@ describe("domain package public exports", () => {
     expect(deriveContextScope).toBeTypeOf("function");
     expect(buildAllowedContextSet).toBeTypeOf("function");
     expect(evaluateContextScopeAccess).toBeTypeOf("function");
+    expect(PromotedContextRouteAudienceKindSchema).toBeDefined();
+    expect(PromotedContextRouteSchema).toBeDefined();
+    expect(PromotedContextRouteTopologySchema).toBeDefined();
+    expect(PromotedContextRouteReasonSchema).toBeDefined();
+    expect(evaluatePromotedContextRoute).toBeTypeOf("function");
     expect(QaContextProfileKindSchema).toBeDefined();
     expect(QaContextCandidateClassSchema).toBeDefined();
     expect(BoundedRetestTargetSchema).toBeDefined();

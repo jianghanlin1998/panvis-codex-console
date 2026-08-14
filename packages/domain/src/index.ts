@@ -134,6 +134,21 @@ export type {
 } from "./context-access.js";
 
 export {
+  PromotedContextRouteAudienceKindSchema,
+  PromotedContextRouteReasonSchema,
+  PromotedContextRouteSchema,
+  PromotedContextRouteTopologySchema,
+  evaluatePromotedContextRoute,
+} from "./promoted-context-route.js";
+export type {
+  PromotedContextRoute,
+  PromotedContextRouteAudienceKind,
+  PromotedContextRouteEvaluation,
+  PromotedContextRouteReason,
+  PromotedContextRouteTopology,
+} from "./promoted-context-route.js";
+
+export {
   DependencyRequiredGateSchema,
   DependencyTypeSchema,
   DependencyValidationErrorCodeSchema,
