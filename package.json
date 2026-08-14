@@ -5,7 +5,8 @@
   "type": "module",
   "packageManager": "pnpm@11.16.0",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "pnpm": ">=11.16.0 <12.0.0"
   },
   "scripts": {
     "build": "tsc -b packages/shared/tsconfig.build.json packages/domain/tsconfig.build.json packages/storage/tsconfig.build.json packages/codex-adapter/tsconfig.build.json --pretty false",

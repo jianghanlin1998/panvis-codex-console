@@ -46,6 +46,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2C1 QA Clean-Context Profile Contract: IMPLEMENTED
 - S2C1 Comprehensive Hardening: PENDING
 - S2C1 ACCEPTED: NO
+- Runtime preflight recovers compatible bundled Node and supports the verified pnpm 11 range declared in `package.json`.
 
 ## Next safe task
 **S2C1 Comprehensive Hardening**
