@@ -35,12 +35,13 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-S2A-FQA-001: CLOSED
 - CTC-S2A-FQA-002: CLOSED
 - S2A ACCEPTED: YES
-- S2B1 Allowed Raw Context Item Retrieval Snapshot: IMPLEMENTED
-- S2B1 Comprehensive Hardening: PENDING
+- S2B1 Allowed Raw Context Item Retrieval Snapshot: HARDENED
+- S2B1 Comprehensive Hardening: PASS
+- S2B1 Fresh Independent QA: PENDING
 - S2B1 ACCEPTED: NO
 
 ## Next safe task
-**S2B1 Comprehensive Hardening**
+**S2B1 Fresh Independent QA**
 
 The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. Current-context selection, context compilation, Promoted Context, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 

@@ -47,7 +47,7 @@ import type {
   SubtaskImplementationCheckpoint,
   SubtaskImplementationCheckpointId,
 } from "@codex-task-console/domain";
-import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 
@@ -637,6 +637,68 @@ const contextScopesEqual = (left: ContextScope, right: ContextScope): boolean =>
         left.projectId === right.projectId &&
         left.bigTaskId === right.bigTaskId &&
         left.subtaskId === right.subtaskId
+      );
+  }
+};
+
+const JAVASCRIPT_TRIM_CHARACTERS =
+  "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+
+const canonicalStoredIdentifierPredicate = (
+  column:
+    | typeof contextItemsTable.projectId
+    | typeof contextItemsTable.bigTaskId
+    | typeof contextItemsTable.subtaskId
+    | typeof contextItemsTable.supersedesContextItemId,
+  canonicalId: string,
+) =>
+  eq(
+    sql<string>`trim(${column}, ${JAVASCRIPT_TRIM_CHARACTERS})`,
+    canonicalId,
+  );
+
+const noncanonicalContextScopeAliasPredicate = (scope: ContextScope) => {
+  const canonicalProject = canonicalStoredIdentifierPredicate(
+    contextItemsTable.projectId,
+    scope.projectId,
+  );
+  switch (scope.scopeType) {
+    case "PROJECT":
+      return and(
+        canonicalProject,
+        ne(contextItemsTable.projectId, scope.projectId),
+        isNull(contextItemsTable.bigTaskId),
+        isNull(contextItemsTable.subtaskId),
+      );
+    case "BIG_TASK":
+      return and(
+        canonicalProject,
+        canonicalStoredIdentifierPredicate(
+          contextItemsTable.bigTaskId,
+          scope.bigTaskId,
+        ),
+        or(
+          ne(contextItemsTable.projectId, scope.projectId),
+          ne(contextItemsTable.bigTaskId, scope.bigTaskId),
+        ),
+        isNull(contextItemsTable.subtaskId),
+      );
+    case "SUBTASK":
+      return and(
+        canonicalProject,
+        canonicalStoredIdentifierPredicate(
+          contextItemsTable.bigTaskId,
+          scope.bigTaskId,
+        ),
+        canonicalStoredIdentifierPredicate(
+          contextItemsTable.subtaskId,
+          scope.subtaskId,
+        ),
+        or(
+          ne(contextItemsTable.projectId, scope.projectId),
+          ne(contextItemsTable.bigTaskId, scope.bigTaskId),
+          ne(contextItemsTable.subtaskId, scope.subtaskId),
+        ),
       );
   }
 };
@@ -1782,6 +1844,16 @@ export class TaskStorage {
   }
 
   #listContextItemsAtExactScope(scope: ContextScope): readonly ContextItem[] {
+    const noncanonicalAlias = this.#database
+      .select({ id: contextItemsTable.id })
+      .from(contextItemsTable)
+      .where(noncanonicalContextScopeAliasPredicate(scope))
+      .limit(1)
+      .get();
+    if (noncanonicalAlias !== undefined) {
+      throw malformedStoredData();
+    }
+
     return this.#database
       .select()
       .from(contextItemsTable)
@@ -1923,11 +1995,7 @@ export class TaskStorage {
     current = startingContextItem;
 
     while (true) {
-      const successorRows = this.#database
-        .select()
-        .from(contextItemsTable)
-        .where(eq(contextItemsTable.supersedesContextItemId, current.id))
-        .all();
+      const successorRows = this.#listCanonicalContextSuccessorRows(current.id);
       if (successorRows.length === 0) {
         if (isLinked && current.status !== "ACTIVE") {
           throw malformedStoredData();
@@ -1971,17 +2039,28 @@ export class TaskStorage {
     current: ContextItem,
     prior: ContextItem,
   ): void {
-    const directSuccessors = this.#database
-      .select({ id: contextItemsTable.id })
-      .from(contextItemsTable)
-      .where(eq(contextItemsTable.supersedesContextItemId, prior.id))
-      .all();
+    const directSuccessors = this.#listCanonicalContextSuccessorRows(prior.id);
     if (
       directSuccessors.length !== 1 ||
       directSuccessors[0]?.id !== current.id
     ) {
       throw malformedStoredData();
     }
+  }
+
+  #listCanonicalContextSuccessorRows(
+    contextItemId: ContextItemId,
+  ): readonly ContextItemRow[] {
+    return this.#database
+      .select()
+      .from(contextItemsTable)
+      .where(
+        canonicalStoredIdentifierPredicate(
+          contextItemsTable.supersedesContextItemId,
+          contextItemId,
+        ),
+      )
+      .all();
   }
 
   #invalidExactScopeHierarchyRelationship(
