@@ -156,10 +156,51 @@ const PROFILE_POLICIES: Readonly<
   FOCUSED_RE_QA: CLEAN_QA_POLICY,
 });
 
-const captureStrictDataObject = (
+interface StrictDataObservation {
+  readonly prototype: "OBJECT" | "NULL" | "ARRAY";
+  readonly keys: readonly string[];
+  readonly descriptors: readonly {
+    readonly key: string;
+    readonly enumerable: boolean;
+    readonly configurable: boolean;
+    readonly writable: boolean;
+    readonly value: unknown;
+  }[];
+}
+
+interface StrictDataObjectCapture {
+  readonly data: Record<string, unknown>;
+  readonly observation: StrictDataObservation;
+}
+
+interface StrictCandidateArrayCapture {
+  readonly data: readonly unknown[];
+  readonly observation: StrictDataObservation;
+}
+
+const observationsEqual = (
+  left: StrictDataObservation,
+  right: StrictDataObservation,
+): boolean =>
+  left.prototype === right.prototype &&
+  left.keys.length === right.keys.length &&
+  left.keys.every((key, index) => key === right.keys[index]) &&
+  left.descriptors.length === right.descriptors.length &&
+  left.descriptors.every((descriptor, index) => {
+    const other = right.descriptors[index];
+    return (
+      other !== undefined &&
+      descriptor.key === other.key &&
+      descriptor.enumerable === other.enumerable &&
+      descriptor.configurable === other.configurable &&
+      descriptor.writable === other.writable &&
+      Object.is(descriptor.value, other.value)
+    );
+  });
+
+const captureStrictDataObjectOnce = (
   input: unknown,
-  expectedKeys: readonly string[],
-): Record<string, unknown> | null => {
+): StrictDataObjectCapture | null => {
   try {
     if (typeof input !== "object" || input === null || Array.isArray(input)) {
       return null;
@@ -169,16 +210,16 @@ const captureStrictDataObject = (
       return null;
     }
     const ownKeys = Reflect.ownKeys(input);
-    if (
-      ownKeys.length !== expectedKeys.length ||
-      ownKeys.some((key) => typeof key !== "string") ||
-      expectedKeys.some((key) => !ownKeys.includes(key))
-    ) {
+    if (ownKeys.some((key) => typeof key !== "string")) {
       return null;
     }
 
-    const captured: Record<string, unknown> = {};
-    for (const key of expectedKeys) {
+    const keys = ownKeys as string[];
+    const captured = Object.create(
+      prototype === null ? null : Object.prototype,
+    ) as Record<string, unknown>;
+    const descriptors: StrictDataObservation["descriptors"][number][] = [];
+    for (const key of keys) {
       const descriptor = Object.getOwnPropertyDescriptor(input, key);
       if (
         descriptor === undefined ||
@@ -187,41 +228,67 @@ const captureStrictDataObject = (
       ) {
         return null;
       }
-      captured[key] = descriptor.value;
+      Object.defineProperty(captured, key, {
+        value: descriptor.value,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+      descriptors.push({
+        key,
+        enumerable: descriptor.enumerable ?? false,
+        configurable: descriptor.configurable ?? false,
+        writable: descriptor.writable ?? false,
+        value: descriptor.value,
+      });
     }
-    return captured;
+    return {
+      data: captured,
+      observation: {
+        prototype: prototype === null ? "NULL" : "OBJECT",
+        keys,
+        descriptors,
+      },
+    };
   } catch {
     return null;
   }
 };
 
+const captureStableStrictDataObject = (
+  input: unknown,
+): Record<string, unknown> | null => {
+  const captures = Array.from({ length: 3 }, () =>
+    captureStrictDataObjectOnce(input),
+  );
+  const first = captures[0];
+  if (first === undefined || first === null) {
+    return null;
+  }
+  if (
+    captures.slice(1).some(
+      (capture) =>
+        capture === undefined ||
+        capture === null ||
+        !observationsEqual(first.observation, capture.observation),
+    )
+  ) {
+    return null;
+  }
+  return first.data;
+};
+
 const parseCandidateMetadata = (input: unknown): QaContextProfileCandidate | null => {
   try {
-    if (typeof input !== "object" || input === null || Array.isArray(input)) {
-      return null;
-    }
-    const classDescriptor = Object.getOwnPropertyDescriptor(input, "candidateClass");
-    if (classDescriptor === undefined || !("value" in classDescriptor)) {
-      return null;
-    }
-    const isRetestTarget = classDescriptor.value === "BOUNDED_RETEST_TARGET";
-    const capturedCandidate = captureStrictDataObject(
-      input,
-      isRetestTarget
-        ? ["candidateClass", "sourceReference", "retestTarget"]
-        : ["candidateClass", "sourceReference"],
-    );
+    const capturedCandidate = captureStableStrictDataObject(input);
     if (capturedCandidate === null) {
       return null;
     }
 
-    if (isRetestTarget) {
-      const capturedTarget = captureStrictDataObject(capturedCandidate.retestTarget, [
-        "findingId",
-        "violatedInvariant",
-        "affectedContract",
-        "repairedSha",
-      ]);
+    if (capturedCandidate.candidateClass === "BOUNDED_RETEST_TARGET") {
+      const capturedTarget = captureStableStrictDataObject(
+        capturedCandidate.retestTarget,
+      );
       if (capturedTarget === null) {
         return null;
       }
@@ -235,34 +302,95 @@ const parseCandidateMetadata = (input: unknown): QaContextProfileCandidate | nul
   }
 };
 
-const captureCandidateArray = (input: unknown): readonly unknown[] | null => {
+const captureCandidateArrayOnce = (
+  input: unknown,
+): StrictCandidateArrayCapture | null => {
   try {
     if (!Array.isArray(input) || Object.getPrototypeOf(input) !== Array.prototype) {
       return null;
     }
     const ownKeys = Reflect.ownKeys(input);
+    if (ownKeys.some((key) => typeof key !== "string")) {
+      return null;
+    }
+    const keys = ownKeys as string[];
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(input, "length");
+    if (
+      lengthDescriptor === undefined ||
+      !("value" in lengthDescriptor) ||
+      lengthDescriptor.enumerable ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0
+    ) {
+      return null;
+    }
+    const length = lengthDescriptor.value as number;
     const expectedKeys = [
-      ...Array.from({ length: input.length }, (_, index) => String(index)),
+      ...Array.from({ length }, (_, index) => String(index)),
       "length",
     ];
     if (
-      ownKeys.length !== expectedKeys.length ||
-      expectedKeys.some((key) => !ownKeys.includes(key))
+      keys.length !== expectedKeys.length ||
+      keys.some((key, index) => key !== expectedKeys[index])
     ) {
       return null;
     }
     const candidates: unknown[] = [];
-    for (let index = 0; index < input.length; index += 1) {
+    const descriptors: StrictDataObservation["descriptors"][number][] = [
+      {
+        key: "length",
+        enumerable: lengthDescriptor.enumerable ?? false,
+        configurable: lengthDescriptor.configurable ?? false,
+        writable: lengthDescriptor.writable ?? false,
+        value: length,
+      },
+    ];
+    for (let index = 0; index < length; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
       if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
         return null;
       }
       candidates.push(descriptor.value);
+      descriptors.push({
+        key: String(index),
+        enumerable: descriptor.enumerable ?? false,
+        configurable: descriptor.configurable ?? false,
+        writable: descriptor.writable ?? false,
+        value: descriptor.value,
+      });
     }
-    return candidates;
+    return {
+      data: candidates,
+      observation: {
+        prototype: "ARRAY",
+        keys,
+        descriptors,
+      },
+    };
   } catch {
     return null;
   }
+};
+
+const captureCandidateArray = (input: unknown): readonly unknown[] | null => {
+  const captures = Array.from({ length: 3 }, () =>
+    captureCandidateArrayOnce(input),
+  );
+  const first = captures[0];
+  if (first === undefined || first === null) {
+    return null;
+  }
+  if (
+    captures.slice(1).some(
+      (capture) =>
+        capture === undefined ||
+        capture === null ||
+        !observationsEqual(first.observation, capture.observation),
+    )
+  ) {
+    return null;
+  }
+  return first.data;
 };
 
 export const evaluateQaContextProfileCandidate = (
