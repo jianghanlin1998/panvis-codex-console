@@ -100,6 +100,26 @@ export type {
 } from "./context.js";
 
 export {
+  BoundedRetestTargetSchema,
+  QaContextCandidateClassSchema,
+  QaContextProfileCandidateSchema,
+  QaContextProfileDecisionReasonSchema,
+  QaContextProfileKindSchema,
+  evaluateQaContextProfileCandidate,
+  narrowContextCandidatesForQa,
+} from "./context-profile.js";
+export type {
+  BoundedRetestTarget,
+  QaContextCandidateClass,
+  QaContextProfileCandidate,
+  QaContextProfileCandidateEvaluation,
+  QaContextProfileDecision,
+  QaContextProfileDecisionReason,
+  QaContextProfileKind,
+  QaContextProfileNarrowingResult,
+} from "./context-profile.js";
+
+export {
   buildAllowedContextSet,
   evaluateContextScopeAccess,
 } from "./context-access.js";

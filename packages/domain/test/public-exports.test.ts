@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AuditEventSchema,
   BudgetPolicySchema,
+  BoundedRetestTargetSchema,
   ContextDigestSchema,
   ContextItemSchema,
   ContextScopeSchema,
@@ -13,16 +14,22 @@ import {
   NormalizedUsageSchema,
   ProviderRunReferenceSchema,
   ProviderThreadReferenceSchema,
+  QaContextCandidateClassSchema,
+  QaContextProfileCandidateSchema,
+  QaContextProfileDecisionReasonSchema,
+  QaContextProfileKindSchema,
   RepositoryCommitShaSchema,
   SubtaskImplementationCheckpointIdSchema,
   SubtaskImplementationCheckpointSchema,
   buildAllowedContextSet,
   deriveContextScope,
   evaluateContextScopeAccess,
+  evaluateQaContextProfileCandidate,
   SubtaskDependencySchema,
   SubtaskMaturitySchema,
   evaluateSubtaskDependencyReadiness,
   validateBudgetPolicy,
+  narrowContextCandidatesForQa,
   validateSubtaskDependencies,
   validateSubtaskMaturityTransition,
   validateSubtaskTransition,
@@ -38,6 +45,13 @@ describe("domain package public exports", () => {
     expect(deriveContextScope).toBeTypeOf("function");
     expect(buildAllowedContextSet).toBeTypeOf("function");
     expect(evaluateContextScopeAccess).toBeTypeOf("function");
+    expect(QaContextProfileKindSchema).toBeDefined();
+    expect(QaContextCandidateClassSchema).toBeDefined();
+    expect(BoundedRetestTargetSchema).toBeDefined();
+    expect(QaContextProfileCandidateSchema).toBeDefined();
+    expect(QaContextProfileDecisionReasonSchema).toBeDefined();
+    expect(evaluateQaContextProfileCandidate).toBeTypeOf("function");
+    expect(narrowContextCandidatesForQa).toBeTypeOf("function");
     expect(SubtaskDependencySchema).toBeDefined();
     expect(SubtaskMaturitySchema).toBeDefined();
     expect(DependencyRequiredGateSchema).toBeDefined();
