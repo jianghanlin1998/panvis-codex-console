@@ -39,12 +39,13 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2B1 Comprehensive Hardening: PASS
 - S2B1 Fresh Independent QA: PASS
 - S2B1 ACCEPTED: YES
-- S2B2 Active Context Item Selection: IMPLEMENTED
-- S2B2 Comprehensive Hardening: PENDING
+- S2B2 Active Context Item Selection: HARDENED
+- S2B2 Comprehensive Hardening: PASS
+- S2B2 Fresh Independent QA: PENDING
 - S2B2 ACCEPTED: NO
 
 ## Next safe task
-**S2B2 Comprehensive Hardening**
+**S2B2 Fresh Independent QA**
 
 The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
