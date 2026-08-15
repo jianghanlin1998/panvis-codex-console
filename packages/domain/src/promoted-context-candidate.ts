@@ -7,6 +7,7 @@ import {
   evaluatePromotedContextRoute,
 } from "./promoted-context-route.js";
 import type {
+  PromotedContextRoute,
   PromotedContextRouteReason,
   PromotedContextRouteTopology,
 } from "./promoted-context-route.js";
@@ -53,7 +54,7 @@ export type PromotedContextCandidateEvaluation =
   | Readonly<{
       valid: false;
       eligibleForPromotion: false;
-      reason: "INVALID_CANDIDATE";
+      reason: "INVALID_CANDIDATE" | "INVALID_ROUTE";
     }>
   | Readonly<{
       valid: true;
@@ -62,13 +63,74 @@ export type PromotedContextCandidateEvaluation =
       candidate: PromotedContextCandidate;
     }>;
 
-const captureDataProperties = (
+type StructuralObservation =
+  | { readonly kind: "PRIMITIVE"; readonly value: unknown }
+  | {
+      readonly kind: "OBJECT" | "ARRAY";
+      readonly prototype: "OBJECT" | "NULL" | "ARRAY";
+      readonly keys: readonly string[];
+      readonly descriptors: readonly {
+        readonly key: string;
+        readonly enumerable: boolean;
+        readonly configurable: boolean;
+        readonly writable: boolean;
+        readonly value: StructuralObservation;
+      }[];
+    };
+
+interface StructuralCapture {
+  readonly data: unknown;
+  readonly observation: StructuralObservation;
+}
+
+interface StableStructuralCaptureResult {
+  readonly stable: readonly boolean[];
+  readonly data: readonly unknown[];
+}
+
+const structuralObservationsEqual = (
+  left: StructuralObservation,
+  right: StructuralObservation,
+): boolean => {
+  if (left.kind === "PRIMITIVE" || right.kind === "PRIMITIVE") {
+    return (
+      left.kind === "PRIMITIVE" &&
+      right.kind === "PRIMITIVE" &&
+      Object.is(left.value, right.value)
+    );
+  }
+  if (
+    left.kind !== right.kind ||
+    left.prototype !== right.prototype ||
+    left.keys.length !== right.keys.length ||
+    left.keys.some((key, index) => key !== right.keys[index]) ||
+    left.descriptors.length !== right.descriptors.length
+  ) {
+    return false;
+  }
+  return left.descriptors.every((descriptor, index) => {
+    const other = right.descriptors[index];
+    return (
+      other !== undefined &&
+      descriptor.key === other.key &&
+      descriptor.enumerable === other.enumerable &&
+      descriptor.configurable === other.configurable &&
+      descriptor.writable === other.writable &&
+      structuralObservationsEqual(descriptor.value, other.value)
+    );
+  });
+};
+
+const captureStructuralDataOnce = (
   input: unknown,
   ancestors: Set<object>,
-): unknown | null => {
+): StructuralCapture | null => {
   try {
     if ((typeof input !== "object" && typeof input !== "function") || input === null) {
-      return input;
+      return {
+        data: input,
+        observation: { kind: "PRIMITIVE", value: input },
+      };
     }
     if (typeof input === "function" || ancestors.has(input)) {
       return null;
@@ -105,6 +167,8 @@ const captureDataProperties = (
       if (
         lengthDescriptor === undefined ||
         !("value" in lengthDescriptor) ||
+        lengthDescriptor.enumerable ||
+        lengthDescriptor.configurable ||
         !Number.isSafeInteger(lengthDescriptor.value) ||
         lengthDescriptor.value < 0
       ) {
@@ -132,46 +196,63 @@ const captureDataProperties = (
 
     ancestors.add(input);
     try {
-      if (isArray) {
-        const length = (
-          descriptors.find(({ key }) => key === "length")!.descriptor as PropertyDescriptor & {
-            value: number;
-          }
-        ).value;
-        const captured: unknown[] = [];
-        for (let index = 0; index < length; index += 1) {
-          const descriptor = descriptors.find(({ key }) => key === String(index))!.descriptor as
-            | (PropertyDescriptor & { value: unknown })
-            | undefined;
-          if (descriptor === undefined) {
-            return null;
-          }
-          const value = captureDataProperties(descriptor.value, ancestors);
-          if (value === null && descriptor.value !== null) {
-            return null;
-          }
-          captured.push(value);
-        }
-        return captured;
-      }
-
-      const captured = Object.create(
-        prototype === null ? null : Object.prototype,
-      ) as Record<string, unknown>;
+      const capturedDescriptors: Array<{
+        readonly key: string;
+        readonly descriptor: PropertyDescriptor & { readonly value: unknown };
+        readonly capture: StructuralCapture;
+      }> = [];
       for (const { key, descriptor } of descriptors) {
-        const dataDescriptor = descriptor as PropertyDescriptor & { value: unknown };
-        const value = captureDataProperties(dataDescriptor.value, ancestors);
-        if (value === null && dataDescriptor.value !== null) {
+        if (descriptor === undefined || !("value" in descriptor)) {
           return null;
         }
-        Object.defineProperty(captured, key, {
-          value,
-          writable: true,
-          configurable: true,
-          enumerable: true,
+        const capture = captureStructuralDataOnce(descriptor.value, ancestors);
+        if (capture === null) {
+          return null;
+        }
+        capturedDescriptors.push({
+          key,
+          descriptor: descriptor as PropertyDescriptor & { readonly value: unknown },
+          capture,
         });
       }
-      return captured;
+
+      let data: unknown;
+      if (isArray) {
+        const lengthDescriptor = descriptors.find(({ key }) => key === "length")!.descriptor!;
+        const length = (lengthDescriptor as PropertyDescriptor & { value: number }).value;
+        data = Array.from({ length }, (_, index) =>
+          capturedDescriptors.find(({ key }) => key === String(index))!.capture.data,
+        );
+      } else {
+        const capturedRecord = Object.create(
+          prototype === null ? null : Object.prototype,
+        ) as Record<string, unknown>;
+        for (const { key, capture } of capturedDescriptors) {
+          Object.defineProperty(capturedRecord, key, {
+            value: capture.data,
+            writable: true,
+            configurable: true,
+            enumerable: true,
+          });
+        }
+        data = capturedRecord;
+      }
+
+      return {
+        data,
+        observation: {
+          kind: isArray ? "ARRAY" : "OBJECT",
+          prototype: isArray ? "ARRAY" : prototype === null ? "NULL" : "OBJECT",
+          keys,
+          descriptors: capturedDescriptors.map(({ key, descriptor, capture }) => ({
+            key,
+            enumerable: descriptor.enumerable ?? false,
+            configurable: descriptor.configurable ?? false,
+            writable: descriptor.writable ?? false,
+            value: capture.observation,
+          })),
+        },
+      };
     } finally {
       ancestors.delete(input);
     }
@@ -180,13 +261,42 @@ const captureDataProperties = (
   }
 };
 
-const parseCandidate = (input: unknown): PromotedContextCandidate | null => {
-  const captured = captureDataProperties(input, new Set<object>());
-  if (captured === null) {
+const captureStableStructuralDataList = (
+  inputs: readonly unknown[],
+): StableStructuralCaptureResult => {
+  const passes = Array.from({ length: 3 }, () =>
+    inputs.map((input) => captureStructuralDataOnce(input, new Set<object>())),
+  );
+  const stable = inputs.map((_input, inputIndex) => {
+    const first = passes[0]?.[inputIndex];
+    return (
+      first !== undefined &&
+      first !== null &&
+      passes.slice(1).every((pass) => {
+        const capture = pass[inputIndex];
+        return (
+          capture !== undefined &&
+          capture !== null &&
+          structuralObservationsEqual(first.observation, capture.observation)
+        );
+      })
+    );
+  });
+  return {
+    stable,
+    data: inputs.map((_input, inputIndex) =>
+      stable[inputIndex] ? passes[0]![inputIndex]!.data : undefined,
+    ),
+  };
+};
+
+const parseCapturedCandidate = (input: unknown): PromotedContextCandidate | null => {
+  try {
+    const parsed = PromotedContextCandidateSchema.safeParse(input);
+    return parsed.success ? parsed.data : null;
+  } catch {
     return null;
   }
-  const parsed = PromotedContextCandidateSchema.safeParse(captured);
-  return parsed.success ? parsed.data : null;
 };
 
 const freezeCandidate = (
@@ -211,7 +321,17 @@ export const evaluatePromotedContextCandidate = (
   topology: PromotedContextRouteTopology,
   candidate: PromotedContextCandidate,
 ): PromotedContextCandidateEvaluation => {
-  const parsedCandidate = parseCandidate(candidate);
+  const capturedEvidence = captureStableStructuralDataList([candidate, topology]);
+  if (!capturedEvidence.stable[0]) {
+    return Object.freeze({
+      valid: false,
+      eligibleForPromotion: false,
+      reason: "INVALID_CANDIDATE",
+    });
+  }
+
+  const capturedCandidate = capturedEvidence.data[0];
+  const parsedCandidate = parseCapturedCandidate(capturedCandidate);
   if (parsedCandidate === null) {
     return Object.freeze({
       valid: false,
@@ -221,10 +341,30 @@ export const evaluatePromotedContextCandidate = (
   }
 
   const canonicalCandidate = freezeCandidate(parsedCandidate);
+  if (!capturedEvidence.stable[1]) {
+    return Object.freeze({
+      valid: true,
+      eligibleForPromotion: false,
+      reason: "INVALID_TOPOLOGY",
+      candidate: canonicalCandidate,
+    });
+  }
+
+  const capturedRoute = Object.getOwnPropertyDescriptor(
+    capturedCandidate as object,
+    "route",
+  )?.value as PromotedContextRoute;
   const routeEvaluation = evaluatePromotedContextRoute(
-    topology,
-    canonicalCandidate.route,
+    capturedEvidence.data[1] as PromotedContextRouteTopology,
+    capturedRoute,
   );
+  if (routeEvaluation.reason === "INVALID_ROUTE") {
+    return Object.freeze({
+      valid: false,
+      eligibleForPromotion: false,
+      reason: routeEvaluation.reason,
+    });
+  }
   return Object.freeze({
     valid: true,
     eligibleForPromotion: routeEvaluation.eligible,
