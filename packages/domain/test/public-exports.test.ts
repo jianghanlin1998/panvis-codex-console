@@ -14,6 +14,9 @@ import {
   NormalizedUsageSchema,
   ProviderRunReferenceSchema,
   ProviderThreadReferenceSchema,
+  PromotedContextAcceptanceEvaluationSchema,
+  PromotedContextAcceptanceReasonSchema,
+  PromotedContextAcceptanceRequirementSchema,
   PromotedContextRouteAudienceKindSchema,
   PromotedContextCandidateProvenanceSchema,
   PromotedContextCandidateReasonSchema,
@@ -31,6 +34,7 @@ import {
   buildAllowedContextSet,
   deriveContextScope,
   evaluateContextScopeAccess,
+  evaluatePromotedContextAcceptanceRequirement,
   evaluatePromotedContextRoute,
   evaluatePromotedContextCandidate,
   evaluateQaContextProfileCandidate,
@@ -63,6 +67,10 @@ describe("domain package public exports", () => {
     expect(PromotedContextCandidateProvenanceSchema).toBeDefined();
     expect(PromotedContextCandidateReasonSchema).toBeDefined();
     expect(evaluatePromotedContextCandidate).toBeTypeOf("function");
+    expect(PromotedContextAcceptanceRequirementSchema).toBeDefined();
+    expect(PromotedContextAcceptanceReasonSchema).toBeDefined();
+    expect(PromotedContextAcceptanceEvaluationSchema).toBeDefined();
+    expect(evaluatePromotedContextAcceptanceRequirement).toBeTypeOf("function");
     expect(QaContextProfileKindSchema).toBeDefined();
     expect(QaContextCandidateClassSchema).toBeDefined();
     expect(BoundedRetestTargetSchema).toBeDefined();

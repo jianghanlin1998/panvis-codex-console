@@ -51,16 +51,20 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2D1 Comprehensive Hardening: PASS
 - S2D1 Fresh Independent QA: PASS
 - S2D1 ACCEPTED: YES
-- S2D2 Promoted Context Candidate Contract: HARDENED
+- S2D2 Promoted Context Candidate Contract: ACCEPTED
 - S2D2 Comprehensive Hardening: PASS
-- S2D2 Fresh Independent QA: PENDING
-- S2D2 ACCEPTED: NO
+- S2D2 Fresh Independent QA: PASS
+- S2D2 ACCEPTED: YES
+- S2D3 Promoted Context Acceptance Authority Policy: IMPLEMENTED
+- S2D3 Comprehensive Hardening: PENDING
+- S2D3 Fresh Independent QA: PENDING
+- S2D3 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**S2D2 Fresh Independent QA**
+**S2D3 Comprehensive Hardening**
 
-The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. The Promoted Context candidate contract is structural only; acceptance, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
+The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context candidate, route, and required-authority contracts are pure policy only; actual evidence validation, acceptance, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 

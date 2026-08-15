@@ -162,6 +162,18 @@ export type {
 } from "./promoted-context-candidate.js";
 
 export {
+  PromotedContextAcceptanceEvaluationSchema,
+  PromotedContextAcceptanceReasonSchema,
+  PromotedContextAcceptanceRequirementSchema,
+  evaluatePromotedContextAcceptanceRequirement,
+} from "./promoted-context-acceptance.js";
+export type {
+  PromotedContextAcceptanceEvaluation,
+  PromotedContextAcceptanceReason,
+  PromotedContextAcceptanceRequirement,
+} from "./promoted-context-acceptance.js";
+
+export {
   DependencyRequiredGateSchema,
   DependencyTypeSchema,
   DependencyValidationErrorCodeSchema,
