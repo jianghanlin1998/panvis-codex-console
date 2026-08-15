@@ -47,16 +47,20 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2C1 Comprehensive Hardening: PASS
 - S2C1 Fresh Independent QA: PASS
 - S2C1 ACCEPTED: YES
-- S2D1 Promoted Context Route Eligibility: HARDENED
+- S2D1 Promoted Context Route Eligibility: ACCEPTED
 - S2D1 Comprehensive Hardening: PASS
-- S2D1 Fresh Independent QA: PENDING
-- S2D1 ACCEPTED: NO
+- S2D1 Fresh Independent QA: PASS
+- S2D1 ACCEPTED: YES
+- S2D2 Promoted Context Candidate Contract: IMPLEMENTED
+- S2D2 Comprehensive Hardening: PENDING
+- S2D2 Fresh Independent QA: PENDING
+- S2D2 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**S2D1 Fresh Independent QA**
+**S2D2 Comprehensive Hardening**
 
-The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context content, acceptance, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
+The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. The Promoted Context candidate contract is structural only; acceptance, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -66,7 +70,7 @@ Hanlin manual QA: NOT REQUIRED
 - scheduling, concurrency control, or `WHEN_READY` execution
 - live Codex App Server execution
 - execution/thread/run persistence
-- context conflict resolution, search/RAG, Context Packet/compiler, or Promoted Context
+- context conflict resolution, search/RAG, Context Packet/compiler, or Promoted Context acceptance/persistence/retrieval
 - worktree lifecycle automation
 - automatic Audit Event emission
 - batch provisioning

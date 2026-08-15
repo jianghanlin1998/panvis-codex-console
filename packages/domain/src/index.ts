@@ -149,6 +149,19 @@ export type {
 } from "./promoted-context-route.js";
 
 export {
+  PromotedContextCandidateProvenanceSchema,
+  PromotedContextCandidateReasonSchema,
+  PromotedContextCandidateSchema,
+  evaluatePromotedContextCandidate,
+} from "./promoted-context-candidate.js";
+export type {
+  PromotedContextCandidate,
+  PromotedContextCandidateEvaluation,
+  PromotedContextCandidateProvenance,
+  PromotedContextCandidateReason,
+} from "./promoted-context-candidate.js";
+
+export {
   DependencyRequiredGateSchema,
   DependencyTypeSchema,
   DependencyValidationErrorCodeSchema,
