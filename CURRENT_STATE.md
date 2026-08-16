@@ -82,14 +82,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-S2D6A-HARD-002: CLOSED
 - CTC-S2D6A-HARD-003: CLOSED
 - S2D6a ACCEPTED: YES
-- JIT Context Packet Core Contract: HARDENED
+- JIT Context Packet Core Contract: ACCEPTED
 - JIT Context Packet Core Comprehensive Hardening: PASS
-- JIT Context Packet Core Fresh Independent QA: PENDING
-- JIT Context Packet Core ACCEPTED: NO
+- JIT Context Packet Core Fresh Independent QA: PASS
+- JIT Context Packet Core ACCEPTED: YES
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**JIT Context Packet Core Fresh Independent QA**
+**JIT Context Packet / Compiler — operational integration product decision**
 
 Hanlin manual QA: NOT REQUIRED
 
