@@ -29,13 +29,13 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1B2a Focused Fresh Re-QA: PASS
 - CTC-S1B2A-QA-001: CLOSED
 - S1B2a ACCEPTED: YES
-- S2A Context Scope ACL / AllowedContextSet: HARDENED
+- S2A Context Scope ACL / AllowedContextSet: ACCEPTED
 - S2A Comprehensive Hardening: PASS
 - S2A Focused Fresh Re-QA: PASS
 - CTC-S2A-FQA-001: CLOSED
 - CTC-S2A-FQA-002: CLOSED
-- S2A Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PENDING
-- S2A ACCEPTED: NO
+- S2A Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PASS
+- S2A ACCEPTED: YES
 - S2B1 Allowed Raw Context Item Retrieval Snapshot: ACCEPTED
 - S2B1 Comprehensive Hardening: PASS
 - S2B1 Fresh Independent QA: PASS
@@ -48,38 +48,38 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2C1 Comprehensive Hardening: PASS
 - S2C1 Fresh Independent QA: PASS
 - S2C1 ACCEPTED: YES
-- S2D1 Promoted Context Route Eligibility: HARDENED
+- S2D1 Promoted Context Route Eligibility: ACCEPTED
 - S2D1 Comprehensive Hardening: PASS
 - S2D1 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
-- S2D1 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PENDING
-- S2D1 ACCEPTED: NO
-- S2D2 Promoted Context Candidate Contract: HARDENED
+- S2D1 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PASS
+- S2D1 ACCEPTED: YES
+- S2D2 Promoted Context Candidate Contract: ACCEPTED
 - S2D2 Comprehensive Hardening: PASS
 - S2D2 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
-- S2D2 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PENDING
-- S2D2 ACCEPTED: NO
-- S2D3 Promoted Context Acceptance Authority Policy: HARDENED
+- S2D2 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PASS
+- S2D2 ACCEPTED: YES
+- S2D3 Promoted Context Acceptance Authority Policy: ACCEPTED
 - S2D3 Comprehensive Hardening: PASS
 - S2D3 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
-- S2D3 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PENDING
-- S2D3 ACCEPTED: NO
-- S2D4 Promoted Context Human Confirmation Evidence: HARDENED
+- S2D3 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PASS
+- S2D3 ACCEPTED: YES
+- S2D4 Promoted Context Human Confirmation Evidence: ACCEPTED
 - S2D4 Comprehensive Hardening: PASS
 - S2D4 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
-- S2D4 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PENDING
-- S2D4 ACCEPTED: NO
+- S2D4 Focused Fresh Re-QA for CTC-S2D5A-HARD-001: PASS
+- S2D4 ACCEPTED: YES
 - CTC-S2D4-FQA-001: CLOSED
-- CTC-S2D5A-HARD-001: REPAIRED; focused Fresh Re-QA pending for affected accepted upstream slices
-- S2D5a Accepted Promoted Context Snapshot / Internal Human Acceptance Core: HARDENED
+- CTC-S2D5A-HARD-001: CLOSED
+- S2D5a Accepted Promoted Context Snapshot / Internal Human Acceptance Core: ACCEPTED
 - S2D5a Comprehensive Hardening: PASS
-- S2D5a Fresh Independent QA: PENDING
-- S2D5a ACCEPTED: NO
+- S2D5a Fresh Independent QA: PASS
+- S2D5a ACCEPTED: YES
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Focused Fresh Re-QA for CTC-S2D5A-HARD-001 across S2A and S2D1-S2D4**
+**Trusted Human Action Controller — product decision**
 
-The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. The hardened Promoted Context snapshot DATA contract and internal pure trusted-human transition core now exist. A shared structural-capture repair rejects the special `__proto__` own key before strict downstream parsing; this reopened S2A and S2D1-S2D4 for focused Fresh Re-QA. The trusted human-action controller/UI command, public operational acceptance command, accepted-context persistence, `acceptedAt`, durable IDs, idempotency or anti-replay, deterministic engineering-evidence validation, retrieval, materialization, and Context Packet/compiler integration remain non-operational. Caller-supplied evidence or snapshot-shaped JSON does not establish acceptance authority. No browser Console UI or daemon, live App Server orchestration, scheduling, worktree, thread, or execution automation exists yet.
+The next discussion will decide the trusted controller contract and its sequencing relative to durable acceptance persistence; implementation is not approved or started. The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. The accepted Promoted Context snapshot data contract and internal pure trusted-human transition core exist. The trusted human-action controller/UI command, public operational Promoted Context acceptance command, accepted-context persistence, `acceptedAt`, durable accepted IDs, idempotency or anti-replay, deterministic engineering-evidence validation, Promoted Context retrieval/materialization, Context Packet/compiler integration, and search/RAG remain non-operational. Caller-supplied human evidence or snapshot-shaped JSON does not establish acceptance authority. No browser Console UI or daemon, live App Server orchestration, scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 
