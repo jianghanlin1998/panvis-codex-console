@@ -12,6 +12,7 @@ Long-running AI coding work becomes difficult to manage when task boundaries, de
 - Deterministic maturity, dependency, readiness, implementation-checkpoint, approval, and acceptance gates
 - Local SQLite persistence through Drizzle, including schema migrations and constrained storage contracts
 - Default-deny context ACLs, allowed-context snapshots, active-item selection, and clean-context QA profiles
+- Provider-neutral structured JIT Context Packet core with fixed execution and clean-QA profiles
 - Explicit Promoted Context contracts that avoid raw sibling-chat leakage
 - Provider-neutral execution references and mappings with Codex App Server as the V1 target boundary
 - Deterministic unit, integration, migration, concurrency, and adversarial test coverage
@@ -80,3 +81,4 @@ Workspace packages are under `packages/`, and deliberate public APIs are exporte
 - [Human confirmation evidence](docs/S2D4_PROMOTED_CONTEXT_HUMAN_CONFIRMATION_EVIDENCE.md)
 - [Accepted Promoted Context snapshot](docs/S2D5A_ACCEPTED_PROMOTED_CONTEXT_SNAPSHOT.md)
 - [Typed deterministic engineering facts](docs/S2D6A_TYPED_DETERMINISTIC_ENGINEERING_FACT.md)
+- [JIT Context Packet core](docs/JIT_CONTEXT_PACKET_CORE.md)

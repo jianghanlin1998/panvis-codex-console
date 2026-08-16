@@ -120,6 +120,21 @@ export type {
 } from "./context-profile.js";
 
 export {
+  JitContextPacketCompilationInputSchema,
+  JitContextPacketCompilationReasonSchema,
+  JitContextPacketProfileKindSchema,
+  JitContextPacketSchema,
+  compileJitContextPacket,
+} from "./context-packet.js";
+export type {
+  JitContextPacket,
+  JitContextPacketCompilationInput,
+  JitContextPacketCompilationReason,
+  JitContextPacketCompilationResult,
+  JitContextPacketProfileKind,
+} from "./context-packet.js";
+
+export {
   buildAllowedContextSet,
   evaluateContextScopeAccess,
 } from "./context-access.js";

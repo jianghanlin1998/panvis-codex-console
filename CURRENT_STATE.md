@@ -82,12 +82,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-S2D6A-HARD-002: CLOSED
 - CTC-S2D6A-HARD-003: CLOSED
 - S2D6a ACCEPTED: YES
+- JIT Context Packet Core Contract: IMPLEMENTED
+- JIT Context Packet Core Comprehensive Hardening: PENDING
+- JIT Context Packet Core Fresh Independent QA: PENDING
+- JIT Context Packet Core ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**JIT Context Packet / Compiler — product decision**
-
-Implementation is not approved or started. Product decisions remain for packet contents, deterministic inclusion/exclusion, priority and ordering, budget enforcement, QA clean-context interaction, accepted Promoted Context integration, repository/runtime evidence placement, and the compiler output boundary.
+**JIT Context Packet Core Comprehensive Hardening**
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -95,14 +97,17 @@ Hanlin manual QA: NOT REQUIRED
 - browser Console UI or daemon/local service
 - TODO -> IN_PROGRESS start orchestration, repair/re-entry, or later maturity mutation
 - scheduling, concurrency control, or `WHEN_READY` execution
-- live Codex App Server execution
+- trusted retrieval integration or JIT operational orchestration
+- accepted Promoted Context retrieval or injection
+- Digest integration or raw-history injection
+- token meter or budget pruning
+- provider serialization or live Codex App Server execution
 - execution/thread/run persistence
 - trusted deterministic evidence producer/verifier or automatic deterministic `ENGINEERING_FACT` acceptance
 - trusted human-action controller/UI command
 - public operational Promoted Context acceptance command
 - accepted-context persistence, `acceptedAt`, durable accepted IDs, or idempotency/anti-replay
 - Promoted Context retrieval/materialization
-- JIT Context Packet/compiler
 - context conflict resolution or search/RAG
 - worktree lifecycle automation
 - automatic Audit Event emission

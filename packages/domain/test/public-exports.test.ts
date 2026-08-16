@@ -14,6 +14,10 @@ import {
   DependencyRequiredGateSchema,
   DurableTaskSchema,
   ExecutionProviderDescriptorSchema,
+  JitContextPacketCompilationInputSchema,
+  JitContextPacketCompilationReasonSchema,
+  JitContextPacketProfileKindSchema,
+  JitContextPacketSchema,
   NativeSubagentOwnershipSchema,
   NormalizedUsageSchema,
   ProviderRunReferenceSchema,
@@ -39,6 +43,7 @@ import {
   SubtaskImplementationCheckpointIdSchema,
   SubtaskImplementationCheckpointSchema,
   buildAllowedContextSet,
+  compileJitContextPacket,
   deriveContextScope,
   evaluateContextScopeAccess,
   evaluatePromotedContextAcceptanceRequirement,
@@ -96,6 +101,11 @@ describe("domain package public exports", () => {
     expect(QaContextProfileDecisionReasonSchema).toBeDefined();
     expect(evaluateQaContextProfileCandidate).toBeTypeOf("function");
     expect(narrowContextCandidatesForQa).toBeTypeOf("function");
+    expect(JitContextPacketProfileKindSchema).toBeDefined();
+    expect(JitContextPacketCompilationInputSchema).toBeDefined();
+    expect(JitContextPacketSchema).toBeDefined();
+    expect(JitContextPacketCompilationReasonSchema).toBeDefined();
+    expect(compileJitContextPacket).toBeTypeOf("function");
     expect(SubtaskDependencySchema).toBeDefined();
     expect(SubtaskMaturitySchema).toBeDefined();
     expect(DependencyRequiredGateSchema).toBeDefined();
@@ -133,6 +143,11 @@ describe("domain package public exports", () => {
       "approveEngineeringFact",
       "verifyDeterministicEngineeringFact",
       "probeDeterministicEngineeringFact",
+      "serializeJitContextPacket",
+      "measureJitContextPacketTokens",
+      "pruneJitContextPacket",
+      "loadAcceptedPromotedContext",
+      "loadRawContextHistory",
     ]) {
       expect(domainExports).not.toHaveProperty(forbiddenExport);
     }
