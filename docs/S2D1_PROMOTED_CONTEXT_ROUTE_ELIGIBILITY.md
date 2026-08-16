@@ -4,7 +4,7 @@ S2D1 defines one pure deterministic policy boundary for deciding whether a reque
 
 `evaluatePromotedContextRoute(topology, route)` accepts minimal canonical Project, Big Task, Subtask ownership views plus existing explicit `SubtaskDependency` records. It returns `valid`, `eligible`, and a closed stable reason. Malformed routes, duplicate task identifiers, broken ownership, malformed dependency records, duplicate or missing dependency endpoints, self-dependencies, cross-Big-Task dependencies, and invalid blocking cycles fail closed. The evaluator performs no I/O, writes, time reads, randomness, input mutation, storage access, or Audit Event creation.
 
-Evaluation first captures route and topology evidence together as a stable descriptor-backed structural representation. Accessors are not invoked, security-relevant fields are not reread from the caller after capture, and changing or throwing runtime objects, records, and arrays fail closed. Stable ordinary, null-prototype, frozen, sealed, cloned, JSON-round-tripped, and transparent Proxy representations remain compatible.
+Evaluation first captures route and topology evidence through six alternating forward/reverse descriptor-backed joint sweeps. All complete joint observations must agree, so observing either input cannot relay a mutually incompatible route/topology state into eligibility. Accessors are not invoked, security-relevant fields are not reread from the caller after capture, and changing or throwing runtime objects, records, and arrays fail closed. Stable ordinary, null-prototype, frozen, sealed, cloned, JSON-round-tripped, and transparent Proxy representations remain compatible.
 
 Exactly two audience kinds exist:
 

@@ -1600,6 +1600,7 @@ describe("S2D2 acceptance, persistence, and I/O separation", () => {
       "./context.js",
       "./promoted-context-route.js",
       "./promoted-context-route.js",
+      "./structural-capture.js",
     ]);
     for (const forbiddenRuntime of [
       /node:fs/,

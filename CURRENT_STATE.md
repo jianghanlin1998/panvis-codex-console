@@ -47,26 +47,28 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2C1 Comprehensive Hardening: PASS
 - S2C1 Fresh Independent QA: PASS
 - S2C1 ACCEPTED: YES
-- S2D1 Promoted Context Route Eligibility: ACCEPTED
+- S2D1 Promoted Context Route Eligibility: HARDENED
 - S2D1 Comprehensive Hardening: PASS
-- S2D1 Fresh Independent QA: PASS
-- S2D1 ACCEPTED: YES
-- S2D2 Promoted Context Candidate Contract: ACCEPTED
+- S2D1 prior Fresh Independent QA: PASS; reopened by CTC-S2D4-FQA-001
+- S2D1 ACCEPTED: NO
+- S2D2 Promoted Context Candidate Contract: HARDENED
 - S2D2 Comprehensive Hardening: PASS
-- S2D2 Fresh Independent QA: PASS
-- S2D2 ACCEPTED: YES
-- S2D3 Promoted Context Acceptance Authority Policy: ACCEPTED
+- S2D2 prior Fresh Independent QA: PASS; reopened by CTC-S2D4-FQA-001
+- S2D2 ACCEPTED: NO
+- S2D3 Promoted Context Acceptance Authority Policy: HARDENED
 - S2D3 Comprehensive Hardening: PASS
-- S2D3 Fresh Independent QA: PASS
-- S2D3 ACCEPTED: YES
+- S2D3 prior Fresh Independent QA: PASS; reopened by CTC-S2D4-FQA-001
+- S2D3 ACCEPTED: NO
 - S2D4 Promoted Context Human Confirmation Evidence: HARDENED
 - S2D4 Comprehensive Hardening: PASS
-- S2D4 Fresh Independent QA: PENDING
+- S2D4 Fresh Independent QA: FAIL; CTC-S2D4-FQA-001 repaired
 - S2D4 ACCEPTED: NO
+- CTC-S2D4-FQA-001: REPAIRED
+- CTC-S2D4-FQA-001 Focused Fresh Re-QA: PENDING
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**S2D4 Fresh Independent QA**
+**Focused Fresh Re-QA — CTC-S2D4-FQA-001 across S2D1–S2D4**
 
 The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context candidate, route, required-authority, and human-evidence structural-applicability contracts are pure policy only; trusted human-action authentication, actual acceptance and accepted snapshots, deterministic engineering-evidence validation, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
