@@ -17,6 +17,9 @@ import {
   PromotedContextAcceptanceEvaluationSchema,
   PromotedContextAcceptanceReasonSchema,
   PromotedContextAcceptanceRequirementSchema,
+  PromotedContextHumanConfirmationEvaluationSchema,
+  PromotedContextHumanConfirmationEvidenceSchema,
+  PromotedContextHumanConfirmationReasonSchema,
   PromotedContextRouteAudienceKindSchema,
   PromotedContextCandidateProvenanceSchema,
   PromotedContextCandidateReasonSchema,
@@ -35,6 +38,7 @@ import {
   deriveContextScope,
   evaluateContextScopeAccess,
   evaluatePromotedContextAcceptanceRequirement,
+  evaluatePromotedContextHumanConfirmationEvidence,
   evaluatePromotedContextRoute,
   evaluatePromotedContextCandidate,
   evaluateQaContextProfileCandidate,
@@ -71,6 +75,12 @@ describe("domain package public exports", () => {
     expect(PromotedContextAcceptanceReasonSchema).toBeDefined();
     expect(PromotedContextAcceptanceEvaluationSchema).toBeDefined();
     expect(evaluatePromotedContextAcceptanceRequirement).toBeTypeOf("function");
+    expect(PromotedContextHumanConfirmationEvidenceSchema).toBeDefined();
+    expect(PromotedContextHumanConfirmationReasonSchema).toBeDefined();
+    expect(PromotedContextHumanConfirmationEvaluationSchema).toBeDefined();
+    expect(evaluatePromotedContextHumanConfirmationEvidence).toBeTypeOf(
+      "function",
+    );
     expect(QaContextProfileKindSchema).toBeDefined();
     expect(QaContextCandidateClassSchema).toBeDefined();
     expect(BoundedRetestTargetSchema).toBeDefined();

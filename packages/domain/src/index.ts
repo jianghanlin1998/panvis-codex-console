@@ -174,6 +174,18 @@ export type {
 } from "./promoted-context-acceptance.js";
 
 export {
+  PromotedContextHumanConfirmationEvaluationSchema,
+  PromotedContextHumanConfirmationEvidenceSchema,
+  PromotedContextHumanConfirmationReasonSchema,
+  evaluatePromotedContextHumanConfirmationEvidence,
+} from "./promoted-context-human-confirmation.js";
+export type {
+  PromotedContextHumanConfirmationEvaluation,
+  PromotedContextHumanConfirmationEvidence,
+  PromotedContextHumanConfirmationReason,
+} from "./promoted-context-human-confirmation.js";
+
+export {
   DependencyRequiredGateSchema,
   DependencyTypeSchema,
   DependencyValidationErrorCodeSchema,
