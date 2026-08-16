@@ -1517,8 +1517,17 @@ export class TaskStorage {
     input: SubtaskId,
     inputProfile: JitContextPacketProfileKind,
   ): JitContextStorageSourceSnapshot {
-    const subtaskId = parseCanonicalSubtaskId(input);
-    const profile = parseJitContextPacketProfileKind(inputProfile);
+    let subtaskId: SubtaskId;
+    let profile: JitContextPacketProfileKind;
+    try {
+      subtaskId = parseCanonicalSubtaskId(input);
+      profile = parseJitContextPacketProfileKind(inputProfile);
+    } catch (error) {
+      if (error instanceof TaskStorageError) {
+        throw error;
+      }
+      throw invalidInput("JIT Context storage source snapshot");
+    }
     return this.#operation(() =>
       this.#readSnapshot(() => {
         const hierarchy = this.#readCanonicalTaskHierarchyForSubtask(subtaskId);

@@ -86,14 +86,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - JIT Context Packet Core Comprehensive Hardening: PASS
 - JIT Context Packet Core Fresh Independent QA: PASS
 - JIT Context Packet Core ACCEPTED: YES
-- Profile-aware Trusted Storage Snapshot: IMPLEMENTED
-- Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PENDING
+- Profile-aware Trusted Storage Snapshot: HARDENED
+- Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PASS
 - Profile-aware Trusted Storage Snapshot Fresh Independent QA: PENDING
 - Profile-aware Trusted Storage Snapshot ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Profile-aware Trusted Storage Snapshot Comprehensive Hardening**
+**Profile-aware Trusted Storage Snapshot Fresh Independent QA**
 
 Hanlin manual QA: NOT REQUIRED
 

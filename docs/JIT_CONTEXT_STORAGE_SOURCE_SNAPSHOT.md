@@ -22,6 +22,12 @@ performs no application write, timestamp update, Audit Event, cache, or
 materialization. Returned values are detached from SQLite state and deeply
 frozen against accidental post-read mutation.
 
+Hardening locks the QA exclusion at the SQL boundary: both QA profiles issue
+zero `context_items` SELECTs even when relevant Context Item storage is
+malformed. Deterministic two-connection WAL tests also establish that the
+returned hierarchy, repeated hierarchy validation, AllowedContextSet, Context
+Item status, and supersession reads cannot mix separate committed states.
+
 Trust is operational, not structural: this snapshot is trusted as a storage
 source only when consumed directly from this verified TaskStorage operation.
 A caller can manually construct equal-shaped data; shape or type compatibility
@@ -35,4 +41,6 @@ deferred to future orchestration. The method does not compile a
 `JitContextPacket`. Project rules, repository/runtime evidence, QA
 instructions, retest targets, Promoted Context, Digests, raw history, token
 budgets, provider serialization, and execution remain separate future sources
-or layers.
+or layers. Invalid and hostile local runtime arguments fail with the existing
+sanitized storage input error rather than exposing caller-controlled coercion
+or Proxy failures.
