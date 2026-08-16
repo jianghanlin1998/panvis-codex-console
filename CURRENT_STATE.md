@@ -29,12 +29,12 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1B2a Focused Fresh Re-QA: PASS
 - CTC-S1B2A-QA-001: CLOSED
 - S1B2a ACCEPTED: YES
-- S2A Context Scope ACL / AllowedContextSet: HARDENED
+- S2A Context Scope ACL / AllowedContextSet: ACCEPTED
 - S2A Comprehensive Hardening: PASS
-- S2A prior Focused Fresh Re-QA: PASS; reopened by CTC-S2D4-FQA-001 shared joint-snapshot repair
+- S2A Focused Fresh Re-QA: PASS
 - CTC-S2A-FQA-001: CLOSED
 - CTC-S2A-FQA-002: CLOSED
-- S2A ACCEPTED: NO
+- S2A ACCEPTED: YES
 - S2B1 Allowed Raw Context Item Retrieval Snapshot: ACCEPTED
 - S2B1 Comprehensive Hardening: PASS
 - S2B1 Fresh Independent QA: PASS
@@ -47,30 +47,31 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2C1 Comprehensive Hardening: PASS
 - S2C1 Fresh Independent QA: PASS
 - S2C1 ACCEPTED: YES
-- S2D1 Promoted Context Route Eligibility: HARDENED
+- S2D1 Promoted Context Route Eligibility: ACCEPTED
 - S2D1 Comprehensive Hardening: PASS
-- S2D1 prior Fresh Independent QA: PASS; reopened by CTC-S2D4-FQA-001
-- S2D1 ACCEPTED: NO
-- S2D2 Promoted Context Candidate Contract: HARDENED
+- S2D1 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
+- S2D1 ACCEPTED: YES
+- S2D2 Promoted Context Candidate Contract: ACCEPTED
 - S2D2 Comprehensive Hardening: PASS
-- S2D2 prior Fresh Independent QA: PASS; reopened by CTC-S2D4-FQA-001
-- S2D2 ACCEPTED: NO
-- S2D3 Promoted Context Acceptance Authority Policy: HARDENED
+- S2D2 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
+- S2D2 ACCEPTED: YES
+- S2D3 Promoted Context Acceptance Authority Policy: ACCEPTED
 - S2D3 Comprehensive Hardening: PASS
-- S2D3 prior Fresh Independent QA: PASS; reopened by CTC-S2D4-FQA-001
-- S2D3 ACCEPTED: NO
-- S2D4 Promoted Context Human Confirmation Evidence: HARDENED
+- S2D3 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
+- S2D3 ACCEPTED: YES
+- S2D4 Promoted Context Human Confirmation Evidence: ACCEPTED
 - S2D4 Comprehensive Hardening: PASS
-- S2D4 Fresh Independent QA: FAIL; CTC-S2D4-FQA-001 repaired
-- S2D4 ACCEPTED: NO
-- CTC-S2D4-FQA-001: REPAIRED
-- CTC-S2D4-FQA-001 Focused Fresh Re-QA: PENDING
+- S2D4 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
+- S2D4 ACCEPTED: YES
+- CTC-S2D4-FQA-001: CLOSED
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Focused Fresh Re-QA — CTC-S2D4-FQA-001 across S2A and S2D1–S2D4**
+**S2D5 product decision — Human Acceptance Transition / Accepted Promoted Context Snapshot**
 
-The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context candidate, route, required-authority, and human-evidence structural-applicability contracts are pure policy only; trusted human-action authentication, actual acceptance and accepted snapshots, deterministic engineering-evidence validation, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
+S2D5 implementation has not started and is not approved.
+
+The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context candidate, route, required-authority, and human-evidence structural-applicability contracts are pure policy only; trusted human-action authentication/controller, the actual acceptance transition, accepted Promoted Context snapshot/record, deterministic engineering-evidence validation, Promoted Context persistence, retrieval, Context Packet/compiler integration, and search/RAG remain non-operational. The accepted S2D4 evidence contract does not authenticate the human or perform acceptance. No browser Console UI or daemon, live App Server orchestration, scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 
