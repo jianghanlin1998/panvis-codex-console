@@ -19,6 +19,7 @@ import type {
   ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
+  JitContextStorageSourceSnapshot,
 } from "@codex-task-console/storage";
 
 describe("storage package public exports", () => {
@@ -39,5 +40,6 @@ describe("storage package public exports", () => {
     expectTypeOf<ActiveContextItemSnapshot>().toBeObject();
     expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
     expectTypeOf<AllowedRawContextItemSnapshot>().toBeObject();
+    expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
   });
 });

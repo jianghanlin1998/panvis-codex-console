@@ -20,5 +20,6 @@ export type {
   AllowedRawContextItemSnapshot,
   CompleteSubtaskImplementationInput,
   CompleteSubtaskImplementationResult,
+  JitContextStorageSourceSnapshot,
   OpenTaskDatabaseOptions,
 } from "./task-storage.js";

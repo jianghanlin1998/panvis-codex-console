@@ -10,6 +10,7 @@ import {
   ContextItemIdSchema,
   ContextItemSchema,
   ContextScopeSchema,
+  JitContextPacketProfileKindSchema,
   ProjectIdSchema,
   ProjectSchema,
   SubtaskImplementationCheckpointIdSchema,
@@ -38,6 +39,7 @@ import type {
   ContextScope,
   DependencyReadinessResult,
   DependencySubtask,
+  JitContextPacketProfileKind,
   Project,
   ProjectId,
   Subtask,
@@ -122,6 +124,38 @@ export interface ActiveContextItemSnapshot {
   ];
 }
 
+export type JitContextStorageSourceSnapshot =
+  | Readonly<{
+      profile: "STANDARD_SUBTASK_EXECUTION";
+      project: Project;
+      bigTask: BigTask;
+      subtask: Subtask;
+      allowedContextSet: AllowedContextSet;
+      activeContext: Readonly<{
+        project: readonly ContextItem[];
+        bigTask: readonly ContextItem[];
+        subtask: readonly ContextItem[];
+      }>;
+    }>
+  | Readonly<{
+      profile: "FRESH_INDEPENDENT_QA";
+      project: Project;
+      bigTask: BigTask;
+      subtask: Subtask;
+    }>
+  | Readonly<{
+      profile: "FOCUSED_RE_QA";
+      project: Project;
+      bigTask: BigTask;
+      subtask: Subtask;
+    }>;
+
+interface CanonicalTaskHierarchy {
+  readonly project: Project;
+  readonly bigTask: BigTask;
+  readonly subtask: Subtask;
+}
+
 type ProjectRow = typeof projectsTable.$inferSelect;
 type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
@@ -188,6 +222,33 @@ const parseCanonicalSubtaskId = (input: SubtaskId): SubtaskId => {
     throw invalidInput("Subtask ID");
   }
   return subtaskId;
+};
+
+const parseJitContextPacketProfileKind = (
+  input: JitContextPacketProfileKind,
+): JitContextPacketProfileKind => {
+  const result = JitContextPacketProfileKindSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("JIT Context Packet profile");
+  }
+  return result.data;
+};
+
+const freezeJitContextStorageSourceSnapshot = (
+  snapshot: JitContextStorageSourceSnapshot,
+): JitContextStorageSourceSnapshot => {
+  const freezeRecursively = (value: unknown): void => {
+    if (typeof value !== "object" || value === null) {
+      return;
+    }
+    for (const nestedValue of Object.values(value)) {
+      freezeRecursively(nestedValue);
+    }
+    Object.freeze(value);
+  };
+
+  freezeRecursively(snapshot);
+  return snapshot;
 };
 
 const parseContextItemId = (input: ContextItemId): ContextItemId => {
@@ -1447,6 +1508,49 @@ export class TaskStorage {
     );
   }
 
+  /**
+   * Returns a direct, immutable storage-origin snapshot for future trusted JIT
+   * assembly. Its data shape alone does not prove storage origin or authorize
+   * packet injection, and the supplied profile is selected by the caller.
+   */
+  readJitContextSourceSnapshotForSubtask(
+    input: SubtaskId,
+    inputProfile: JitContextPacketProfileKind,
+  ): JitContextStorageSourceSnapshot {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    const profile = parseJitContextPacketProfileKind(inputProfile);
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const hierarchy = this.#readCanonicalTaskHierarchyForSubtask(subtaskId);
+        if (profile !== "STANDARD_SUBTASK_EXECUTION") {
+          return freezeJitContextStorageSourceSnapshot({
+            profile,
+            ...hierarchy,
+          });
+        }
+
+        const rawSnapshot = this.#readAllowedRawContextItemsForSubtask(subtaskId);
+        const [projectBucket, bigTaskBucket, subtaskBucket] = rawSnapshot.buckets;
+        return freezeJitContextStorageSourceSnapshot({
+          profile,
+          ...hierarchy,
+          allowedContextSet: rawSnapshot.allowedContextSet,
+          activeContext: {
+            project: projectBucket.contextItems.filter(
+              ({ status }) => status === "ACTIVE",
+            ),
+            bigTask: bigTaskBucket.contextItems.filter(
+              ({ status }) => status === "ACTIVE",
+            ),
+            subtask: subtaskBucket.contextItems.filter(
+              ({ status }) => status === "ACTIVE",
+            ),
+          },
+        });
+      }),
+    );
+  }
+
   supersedeContextItem(input: ContextItem): ContextItem {
     const replacement = parseContextItemInput(input);
     const priorContextItemId = replacement.provenance.supersedesContextItemId;
@@ -1731,6 +1835,26 @@ export class TaskStorage {
       .where(eq(projectsTable.id, projectId))
       .get();
     return row === undefined ? null : projectFromRow(row);
+  }
+
+  #readCanonicalTaskHierarchyForSubtask(
+    subtaskId: SubtaskId,
+  ): CanonicalTaskHierarchy {
+    const subtask = this.#getSubtask(subtaskId);
+    if (subtask === null) {
+      throw new TaskStorageError(
+        "PARENT_NOT_FOUND",
+        "The Subtask does not exist.",
+      );
+    }
+    this.#validateStoredSubtaskHierarchy(subtask);
+
+    const bigTask = this.#getBigTask(subtask.bigTaskId);
+    const project = bigTask === null ? null : this.#getProject(bigTask.projectId);
+    if (bigTask === null || project === null) {
+      throw malformedStoredData();
+    }
+    return { project, bigTask, subtask };
   }
 
   #readAllowedRawContextItemsForSubtask(

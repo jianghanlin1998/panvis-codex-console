@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-16
+Last reconciled: 2026-08-17
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -86,10 +86,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - JIT Context Packet Core Comprehensive Hardening: PASS
 - JIT Context Packet Core Fresh Independent QA: PASS
 - JIT Context Packet Core ACCEPTED: YES
+- Profile-aware Trusted Storage Snapshot: IMPLEMENTED
+- Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PENDING
+- Profile-aware Trusted Storage Snapshot Fresh Independent QA: PENDING
+- Profile-aware Trusted Storage Snapshot ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**JIT Context Packet / Compiler — operational integration product decision**
+**Profile-aware Trusted Storage Snapshot Comprehensive Hardening**
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -97,7 +101,8 @@ Hanlin manual QA: NOT REQUIRED
 - browser Console UI or daemon/local service
 - TODO -> IN_PROGRESS start orchestration, repair/re-entry, or later maturity mutation
 - scheduling, concurrency control, or `WHEN_READY` execution
-- trusted retrieval integration or JIT operational orchestration
+- trusted classified Project-rule and repository/runtime-evidence integration
+- operational JIT packet assembly or orchestration
 - accepted Promoted Context retrieval or injection
 - Digest integration or raw-history injection
 - token meter or budget pruning
