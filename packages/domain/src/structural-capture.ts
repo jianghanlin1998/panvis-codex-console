@@ -106,7 +106,13 @@ const captureStructuralDataOnce = (
     }
 
     const ownKeys = Reflect.ownKeys(input);
-    if (ownKeys.some((key) => typeof key !== "string")) {
+    // Strict schema parsers may intentionally ignore this prototype-pollution
+    // key, so reject it before parsing can erase an exact-shape violation.
+    if (
+      ownKeys.some(
+        (key) => typeof key !== "string" || key === "__proto__",
+      )
+    ) {
       return null;
     }
     const keys = ownKeys as string[];
