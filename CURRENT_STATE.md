@@ -29,12 +29,12 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S1B2a Focused Fresh Re-QA: PASS
 - CTC-S1B2A-QA-001: CLOSED
 - S1B2a ACCEPTED: YES
-- S2A Context Scope ACL / AllowedContextSet: ACCEPTED
+- S2A Context Scope ACL / AllowedContextSet: HARDENED
 - S2A Comprehensive Hardening: PASS
-- S2A Focused Fresh Re-QA: PASS
+- S2A prior Focused Fresh Re-QA: PASS; reopened by CTC-S2D4-FQA-001 shared joint-snapshot repair
 - CTC-S2A-FQA-001: CLOSED
 - CTC-S2A-FQA-002: CLOSED
-- S2A ACCEPTED: YES
+- S2A ACCEPTED: NO
 - S2B1 Allowed Raw Context Item Retrieval Snapshot: ACCEPTED
 - S2B1 Comprehensive Hardening: PASS
 - S2B1 Fresh Independent QA: PASS
@@ -68,7 +68,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Focused Fresh Re-QA — CTC-S2D4-FQA-001 across S2D1–S2D4**
+**Focused Fresh Re-QA — CTC-S2D4-FQA-001 across S2A and S2D1–S2D4**
 
 The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context candidate, route, required-authority, and human-evidence structural-applicability contracts are pure policy only; trusted human-action authentication, actual acceptance and accepted snapshots, deterministic engineering-evidence validation, persistence, retrieval, Context Packets, prompt compilation, and search remain non-operational. No scheduling, worktree, thread, or execution automation exists yet.
 
