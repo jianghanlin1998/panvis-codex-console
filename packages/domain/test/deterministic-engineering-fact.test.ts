@@ -286,7 +286,7 @@ describe("S2D6a typed deterministic engineering fact DATA contract", () => {
     expect(empty.changedFiles).toEqual([]);
     expect(Object.isFrozen(empty.changedFiles)).toBe(true);
     expect(renderDeterministicEngineeringFact(empty)?.body).toContain(
-      "reported 0 changed files.",
+      "records 0 changed files.",
     );
   });
 
@@ -337,7 +337,7 @@ describe("S2D6a typed deterministic engineering fact DATA contract", () => {
       components: [],
     });
     expect(renderDeterministicEngineeringFact(empty)?.body).toContain(
-      "reported no runtime/toolchain components.",
+      "records no runtime/toolchain components.",
     );
   });
 });
@@ -352,19 +352,19 @@ describe("S2D6a deterministic renderer", () => {
     expect(rendered).toEqual([
       {
         title: "Repository commit observation",
-        body: `For repository PATH "/workspace/project", verification observed ref "refs/heads/main" at commit ${SHA_A}.`,
+        body: `For repository PATH "/workspace/project", the supplied observation records ref "refs/heads/main" at commit ${SHA_A}.`,
       },
       {
-        title: "Deterministic test-run observation",
-        body: `For repository PATH "/workspace/project" at commit ${SHA_A}, command "pnpm test" completed with exit code 0; 2 test files / 12 tests / 11 passed / 1 failed.`,
+        title: "Test-run observation",
+        body: `For repository PATH "/workspace/project" at commit ${SHA_A}, the supplied observation records command "pnpm test" with exit code 0; 2 test files / 12 tests / 11 passed / 1 failed.`,
       },
       {
-        title: "Deterministic diff file-set observation",
-        body: `For repository PATH "/workspace/project", between commits ${SHA_A} and ${SHA_B}, the deterministic diff reported 2 changed files: "README.md", "packages/domain/src/index.ts".`,
+        title: "Diff file-set observation",
+        body: `For repository PATH "/workspace/project", between commits ${SHA_A} and ${SHA_B}, the supplied observation records 2 changed files: "README.md", "packages/domain/src/index.ts".`,
       },
       {
         title: "Runtime toolchain observation",
-        body: `For repository PATH "/workspace/project" at commit ${SHA_A}, the runtime probe reported: "Node" "v24.19.0", "pnpm" "11.19.0".`,
+        body: `For repository PATH "/workspace/project" at commit ${SHA_A}, the supplied observation records runtime/toolchain components: "Node" "v24.19.0", "pnpm" "11.19.0".`,
       },
     ]);
     expect(rendered[0]?.body).not.toContain("current main");

@@ -74,16 +74,16 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2D5a Comprehensive Hardening: PASS
 - S2D5a Fresh Independent QA: PASS
 - S2D5a ACCEPTED: YES
-- S2D6a Typed Deterministic Engineering Fact Contract: IMPLEMENTED
-- S2D6a Comprehensive Hardening: PENDING
+- S2D6a Typed Deterministic Engineering Fact Contract: HARDENED
+- S2D6a Comprehensive Hardening: PASS
 - S2D6a Fresh Independent QA: PENDING
 - S2D6a ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**S2D6a Comprehensive Hardening**
+**S2D6a Fresh Independent QA**
 
-S2D6a defines four typed deterministic engineering-fact DATA variants and a pure observation renderer. Comprehensive hardening and fresh independent QA remain required before acceptance. The trusted deterministic evidence producer/verifier and automatic deterministic `ENGINEERING_FACT` acceptance remain non-operational. The trusted human-action controller/UI command, public operational Promoted Context acceptance command, accepted-context persistence, `acceptedAt`, durable accepted IDs, JIT Context Packet/compiler, retrieval/materialization, and search/RAG also remain non-operational.
+S2D6a comprehensive hardening passed after bounding every canonical render losslessly to the accepted S2D2 title/body limits and clarifying supplied-observation language. Fresh Independent QA remains required before acceptance. The trusted deterministic evidence producer/verifier and automatic deterministic `ENGINEERING_FACT` acceptance remain non-operational. The trusted human-action controller/UI command, public operational Promoted Context acceptance command, accepted-context persistence, `acceptedAt`, durable accepted IDs, JIT Context Packet/compiler, retrieval/materialization, and search/RAG also remain non-operational.
 
 Hanlin manual QA: NOT REQUIRED
 

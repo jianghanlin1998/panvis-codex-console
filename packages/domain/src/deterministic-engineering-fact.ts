@@ -12,13 +12,19 @@ const nonNegativeSafeInteger = z
   .number()
   .int()
   .nonnegative()
-  .max(Number.MAX_SAFE_INTEGER);
+  .max(Number.MAX_SAFE_INTEGER)
+  .refine((value) => !Object.is(value, -0), {
+    message: "Negative zero is not a canonical non-negative integer",
+  });
 
 const safeInteger = z
   .number()
   .int()
   .min(Number.MIN_SAFE_INTEGER)
-  .max(Number.MAX_SAFE_INTEGER);
+  .max(Number.MAX_SAFE_INTEGER)
+  .refine((value) => !Object.is(value, -0), {
+    message: "Negative zero is not a canonical integer",
+  });
 
 const RepositoryCommitFactSchema = z
   .object({
@@ -148,7 +154,7 @@ const RuntimeToolchainFactSchema = z
  * validity; it does not establish that a trusted deterministic probe observed
  * the represented fact.
  */
-export const DeterministicEngineeringFactDataSchema = z.discriminatedUnion(
+const DeterministicEngineeringFactBaseDataSchema = z.discriminatedUnion(
   "factType",
   [
     RepositoryCommitFactSchema,
@@ -158,14 +164,24 @@ export const DeterministicEngineeringFactDataSchema = z.discriminatedUnion(
   ],
 );
 
-export type DeterministicEngineeringFactData = z.infer<
-  typeof DeterministicEngineeringFactDataSchema
+type DeterministicEngineeringFactBaseData = z.infer<
+  typeof DeterministicEngineeringFactBaseDataSchema
 >;
 
 export type DeterministicEngineeringFactConclusion = Readonly<{
   title: string;
   body: string;
 }>;
+
+const PROMOTED_CONTEXT_TITLE_MAX_LENGTH = 256;
+const PROMOTED_CONTEXT_BODY_MAX_LENGTH = 4_000;
+
+const TITLES = Object.freeze({
+  REPOSITORY_COMMIT: "Repository commit observation",
+  TEST_RUN: "Test-run observation",
+  DIFF_FILE_SET: "Diff file-set observation",
+  RUNTIME_TOOLCHAIN: "Runtime toolchain observation",
+} satisfies Readonly<Record<DeterministicEngineeringFactBaseData["factType"], string>>);
 
 const quote = (value: string): string => JSON.stringify(value);
 
@@ -176,6 +192,67 @@ const renderRepository = (repository: RepositoryReference): string =>
 
 const renderChangedFileCount = (count: number): string =>
   `${count} changed ${count === 1 ? "file" : "files"}`;
+
+const renderCanonicalFact = (
+  fact: DeterministicEngineeringFactBaseData,
+): DeterministicEngineeringFactConclusion => {
+  const repository = renderRepository(fact.repository);
+  switch (fact.factType) {
+    case "REPOSITORY_COMMIT":
+      return Object.freeze({
+        title: TITLES.REPOSITORY_COMMIT,
+        body: `For repository ${repository}, the supplied observation records ref ${quote(fact.observedRef)} at commit ${fact.commitSha}.`,
+      });
+    case "TEST_RUN":
+      return Object.freeze({
+        title: TITLES.TEST_RUN,
+        body: `For repository ${repository} at commit ${fact.commitSha}, the supplied observation records command ${quote(fact.command)} with exit code ${fact.exitCode}; ${fact.testFileCount} test files / ${fact.testCount} tests / ${fact.passedTestCount} passed / ${fact.failedTestCount} failed.`,
+      });
+    case "DIFF_FILE_SET": {
+      const fileCount = renderChangedFileCount(fact.changedFiles.length);
+      const fileList = fact.changedFiles.map(quote).join(", ");
+      return Object.freeze({
+        title: TITLES.DIFF_FILE_SET,
+        body: `For repository ${repository}, between commits ${fact.baseCommitSha} and ${fact.headCommitSha}, the supplied observation records ${fileCount}${fileList === "" ? "." : `: ${fileList}.`}`,
+      });
+    }
+    case "RUNTIME_TOOLCHAIN": {
+      const components = fact.components
+        .map(({ name, version }) => `${quote(name)} ${quote(version)}`)
+        .join(", ");
+      return Object.freeze({
+        title: TITLES.RUNTIME_TOOLCHAIN,
+        body: `For repository ${repository} at commit ${fact.commitSha}, the supplied observation records${components === "" ? " no runtime/toolchain components." : ` runtime/toolchain components: ${components}.`}`,
+      });
+    }
+  }
+};
+
+/**
+ * Serialized DATA shape only. Aggregate rendering limits preserve lossless
+ * composability with the accepted S2D2 title/body contract; they establish no
+ * observation authenticity or verification authority.
+ */
+export const DeterministicEngineeringFactDataSchema =
+  DeterministicEngineeringFactBaseDataSchema.superRefine((fact, context) => {
+    const conclusion = renderCanonicalFact(fact);
+    if (conclusion.title.length > PROMOTED_CONTEXT_TITLE_MAX_LENGTH) {
+      context.addIssue({
+        code: "custom",
+        message: "The canonical fact title exceeds the Promoted Context limit",
+      });
+    }
+    if (conclusion.body.length > PROMOTED_CONTEXT_BODY_MAX_LENGTH) {
+      context.addIssue({
+        code: "custom",
+        message: "The canonical fact body exceeds the Promoted Context limit",
+      });
+    }
+  });
+
+export type DeterministicEngineeringFactData = z.infer<
+  typeof DeterministicEngineeringFactDataSchema
+>;
 
 const parseCapturedFact = (
   input: unknown,
@@ -207,36 +284,7 @@ export const renderDeterministicEngineeringFact = (
       return null;
     }
 
-    const repository = renderRepository(fact.repository);
-    switch (fact.factType) {
-      case "REPOSITORY_COMMIT":
-        return Object.freeze({
-          title: "Repository commit observation",
-          body: `For repository ${repository}, verification observed ref ${quote(fact.observedRef)} at commit ${fact.commitSha}.`,
-        });
-      case "TEST_RUN":
-        return Object.freeze({
-          title: "Deterministic test-run observation",
-          body: `For repository ${repository} at commit ${fact.commitSha}, command ${quote(fact.command)} completed with exit code ${fact.exitCode}; ${fact.testFileCount} test files / ${fact.testCount} tests / ${fact.passedTestCount} passed / ${fact.failedTestCount} failed.`,
-        });
-      case "DIFF_FILE_SET": {
-        const fileCount = renderChangedFileCount(fact.changedFiles.length);
-        const fileList = fact.changedFiles.map(quote).join(", ");
-        return Object.freeze({
-          title: "Deterministic diff file-set observation",
-          body: `For repository ${repository}, between commits ${fact.baseCommitSha} and ${fact.headCommitSha}, the deterministic diff reported ${fileCount}${fileList === "" ? "." : `: ${fileList}.`}`,
-        });
-      }
-      case "RUNTIME_TOOLCHAIN": {
-        const components = fact.components
-          .map(({ name, version }) => `${quote(name)} ${quote(version)}`)
-          .join(", ");
-        return Object.freeze({
-          title: "Runtime toolchain observation",
-          body: `For repository ${repository} at commit ${fact.commitSha}, the runtime probe reported${components === "" ? " no runtime/toolchain components." : `: ${components}.`}`,
-        });
-      }
-    }
+    return renderCanonicalFact(fact);
   } catch {
     return null;
   }
