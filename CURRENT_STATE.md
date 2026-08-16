@@ -75,16 +75,19 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2D5a Comprehensive Hardening: PASS
 - S2D5a Fresh Independent QA: PASS
 - S2D5a ACCEPTED: YES
-- S2D6a Typed Deterministic Engineering Fact Contract: HARDENED
+- S2D6a Typed Deterministic Engineering Fact Contract: ACCEPTED
 - S2D6a Comprehensive Hardening: PASS
-- S2D6a Fresh Independent QA: PENDING
-- S2D6a ACCEPTED: NO
+- S2D6a Fresh Independent QA: PASS
+- CTC-S2D6A-HARD-001: CLOSED
+- CTC-S2D6A-HARD-002: CLOSED
+- CTC-S2D6A-HARD-003: CLOSED
+- S2D6a ACCEPTED: YES
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**S2D6a Fresh Independent QA**
+**JIT Context Packet / Compiler — product decision**
 
-S2D6a comprehensive hardening passed after bounding every canonical render losslessly to the accepted S2D2 title/body limits and clarifying supplied-observation language. Fresh Independent QA remains required before acceptance. The trusted deterministic evidence producer/verifier and automatic deterministic `ENGINEERING_FACT` acceptance remain non-operational. The trusted human-action controller/UI command, public operational Promoted Context acceptance command, accepted-context persistence, `acceptedAt`, durable accepted IDs, JIT Context Packet/compiler, retrieval/materialization, and search/RAG also remain non-operational.
+Implementation is not approved or started. Product decisions remain for packet contents, deterministic inclusion/exclusion, priority and ordering, budget enforcement, QA clean-context interaction, accepted Promoted Context integration, repository/runtime evidence placement, and the compiler output boundary.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -96,8 +99,11 @@ Hanlin manual QA: NOT REQUIRED
 - execution/thread/run persistence
 - trusted deterministic evidence producer/verifier or automatic deterministic `ENGINEERING_FACT` acceptance
 - trusted human-action controller/UI command
-- accepted-context persistence, `acceptedAt`, or durable accepted IDs
-- context conflict resolution, search/RAG, Context Packet/compiler, or Promoted Context operational acceptance/persistence/retrieval
+- public operational Promoted Context acceptance command
+- accepted-context persistence, `acceptedAt`, durable accepted IDs, or idempotency/anti-replay
+- Promoted Context retrieval/materialization
+- JIT Context Packet/compiler
+- context conflict resolution or search/RAG
 - worktree lifecycle automation
 - automatic Audit Event emission
 - batch provisioning
