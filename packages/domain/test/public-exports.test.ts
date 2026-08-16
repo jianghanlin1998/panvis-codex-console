@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import * as domainExports from "../src/index.js";
+
 import {
+  AcceptedPromotedContextSnapshotDataSchema,
   AuditEventSchema,
   BudgetPolicySchema,
   BoundedRetestTargetSchema,
@@ -59,6 +62,7 @@ describe("domain package public exports", () => {
     expect(ContextDigestSchema).toBeDefined();
     expect(ContextItemSchema).toBeDefined();
     expect(ContextScopeSchema).toBeDefined();
+    expect(AcceptedPromotedContextSnapshotDataSchema).toBeDefined();
     expect(deriveContextScope).toBeTypeOf("function");
     expect(buildAllowedContextSet).toBeTypeOf("function");
     expect(evaluateContextScopeAccess).toBeTypeOf("function");
@@ -105,5 +109,17 @@ describe("domain package public exports", () => {
     expect(validateSubtaskMaturityTransition).toBeTypeOf("function");
     expect(validateSubtaskTransition).toBeTypeOf("function");
     expect(validateBudgetPolicy).toBeTypeOf("function");
+    expect(domainExports).not.toHaveProperty(
+      "acceptPromotedContextFromTrustedHumanAction",
+    );
+    expect(domainExports).not.toHaveProperty("createTrustedCapability");
+    expect(domainExports).not.toHaveProperty("mintHumanCapability");
+    expect(domainExports).not.toHaveProperty("acceptPromotedContext");
+    expect(domainExports).not.toHaveProperty(
+      "TrustedHumanPromotedContextAcceptanceResultSchema",
+    );
+    expect(domainExports).not.toHaveProperty(
+      "TrustedHumanPromotedContextAcceptanceFailureReasonSchema",
+    );
   });
 });

@@ -64,14 +64,16 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2D4 Focused Fresh Re-QA for CTC-S2D4-FQA-001: PASS
 - S2D4 ACCEPTED: YES
 - CTC-S2D4-FQA-001: CLOSED
+- S2D5a Accepted Promoted Context Snapshot / Internal Human Acceptance Core: IMPLEMENTED
+- S2D5a Comprehensive Hardening: PENDING
+- S2D5a Fresh Independent QA: PENDING
+- S2D5a ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**S2D5 product decision — Human Acceptance Transition / Accepted Promoted Context Snapshot**
+**S2D5a Comprehensive Hardening**
 
-S2D5 implementation has not started and is not approved.
-
-The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. Promoted Context candidate, route, required-authority, and human-evidence structural-applicability contracts are pure policy only; trusted human-action authentication/controller, the actual acceptance transition, accepted Promoted Context snapshot/record, deterministic engineering-evidence validation, Promoted Context persistence, retrieval, Context Packet/compiler integration, and search/RAG remain non-operational. The accepted S2D4 evidence contract does not authenticate the human or perform acceptance. No browser Console UI or daemon, live App Server orchestration, scheduling, worktree, thread, or execution automation exists yet.
+The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. The accepted Promoted Context snapshot DATA contract and internal pure trusted-human transition core now exist, but the trusted human-action controller/UI command, public operational acceptance command, accepted-context persistence, `acceptedAt`, durable IDs, idempotency or anti-replay, deterministic engineering-evidence validation, retrieval, materialization, and Context Packet/compiler integration remain non-operational. Caller-supplied evidence or snapshot-shaped JSON does not establish acceptance authority. No browser Console UI or daemon, live App Server orchestration, scheduling, worktree, thread, or execution automation exists yet.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -81,7 +83,7 @@ Hanlin manual QA: NOT REQUIRED
 - scheduling, concurrency control, or `WHEN_READY` execution
 - live Codex App Server execution
 - execution/thread/run persistence
-- context conflict resolution, search/RAG, Context Packet/compiler, or Promoted Context acceptance/persistence/retrieval
+- context conflict resolution, search/RAG, Context Packet/compiler, or Promoted Context operational acceptance/persistence/retrieval
 - worktree lifecycle automation
 - automatic Audit Event emission
 - batch provisioning
