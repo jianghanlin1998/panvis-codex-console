@@ -8,6 +8,7 @@ import {
   BudgetPolicySchema,
   BoundedRetestTargetSchema,
   ContextDigestSchema,
+  DeterministicEngineeringFactDataSchema,
   ContextItemSchema,
   ContextScopeSchema,
   DependencyRequiredGateSchema,
@@ -45,6 +46,7 @@ import {
   evaluatePromotedContextRoute,
   evaluatePromotedContextCandidate,
   evaluateQaContextProfileCandidate,
+  renderDeterministicEngineeringFact,
   SubtaskDependencySchema,
   SubtaskMaturitySchema,
   evaluateSubtaskDependencyReadiness,
@@ -62,8 +64,10 @@ describe("domain package public exports", () => {
     expect(ContextDigestSchema).toBeDefined();
     expect(ContextItemSchema).toBeDefined();
     expect(ContextScopeSchema).toBeDefined();
+    expect(DeterministicEngineeringFactDataSchema).toBeDefined();
     expect(AcceptedPromotedContextSnapshotDataSchema).toBeDefined();
     expect(deriveContextScope).toBeTypeOf("function");
+    expect(renderDeterministicEngineeringFact).toBeTypeOf("function");
     expect(buildAllowedContextSet).toBeTypeOf("function");
     expect(evaluateContextScopeAccess).toBeTypeOf("function");
     expect(PromotedContextRouteAudienceKindSchema).toBeDefined();
@@ -121,5 +125,16 @@ describe("domain package public exports", () => {
     expect(domainExports).not.toHaveProperty(
       "TrustedHumanPromotedContextAcceptanceFailureReasonSchema",
     );
+    for (const forbiddenExport of [
+      "verifyByParsing",
+      "isVerifiedEngineeringFact",
+      "trustEngineeringFact",
+      "acceptEngineeringFact",
+      "approveEngineeringFact",
+      "verifyDeterministicEngineeringFact",
+      "probeDeterministicEngineeringFact",
+    ]) {
+      expect(domainExports).not.toHaveProperty(forbiddenExport);
+    }
   });
 });

@@ -193,6 +193,15 @@ export type {
 } from "./accepted-promoted-context.js";
 
 export {
+  DeterministicEngineeringFactDataSchema,
+  renderDeterministicEngineeringFact,
+} from "./deterministic-engineering-fact.js";
+export type {
+  DeterministicEngineeringFactConclusion,
+  DeterministicEngineeringFactData,
+} from "./deterministic-engineering-fact.js";
+
+export {
   DependencyRequiredGateSchema,
   DependencyTypeSchema,
   DependencyValidationErrorCodeSchema,

@@ -74,12 +74,16 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - S2D5a Comprehensive Hardening: PASS
 - S2D5a Fresh Independent QA: PASS
 - S2D5a ACCEPTED: YES
+- S2D6a Typed Deterministic Engineering Fact Contract: IMPLEMENTED
+- S2D6a Comprehensive Hardening: PENDING
+- S2D6a Fresh Independent QA: PENDING
+- S2D6a ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Trusted Human Action Controller — product decision**
+**S2D6a Comprehensive Hardening**
 
-The next discussion will decide the trusted controller contract and its sequencing relative to durable acceptance persistence; implementation is not approved or started. The Task Control Plane lifecycle remains non-operational beyond the narrow durable implementation-completion primitive. TODO -> IN_PROGRESS start orchestration remains unimplemented. The QA clean-context profile contract exists but is not wired into thread/history retrieval or Context Packet compilation. S2B2 exposes an ACTIVE-only view but does not resolve conflicts or compile context. The accepted Promoted Context snapshot data contract and internal pure trusted-human transition core exist. The trusted human-action controller/UI command, public operational Promoted Context acceptance command, accepted-context persistence, `acceptedAt`, durable accepted IDs, idempotency or anti-replay, deterministic engineering-evidence validation, Promoted Context retrieval/materialization, Context Packet/compiler integration, and search/RAG remain non-operational. Caller-supplied human evidence or snapshot-shaped JSON does not establish acceptance authority. No browser Console UI or daemon, live App Server orchestration, scheduling, worktree, thread, or execution automation exists yet.
+S2D6a defines four typed deterministic engineering-fact DATA variants and a pure observation renderer. Comprehensive hardening and fresh independent QA remain required before acceptance. The trusted deterministic evidence producer/verifier and automatic deterministic `ENGINEERING_FACT` acceptance remain non-operational. The trusted human-action controller/UI command, public operational Promoted Context acceptance command, accepted-context persistence, `acceptedAt`, durable accepted IDs, JIT Context Packet/compiler, retrieval/materialization, and search/RAG also remain non-operational.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -89,6 +93,9 @@ Hanlin manual QA: NOT REQUIRED
 - scheduling, concurrency control, or `WHEN_READY` execution
 - live Codex App Server execution
 - execution/thread/run persistence
+- trusted deterministic evidence producer/verifier or automatic deterministic `ENGINEERING_FACT` acceptance
+- trusted human-action controller/UI command
+- accepted-context persistence, `acceptedAt`, or durable accepted IDs
 - context conflict resolution, search/RAG, Context Packet/compiler, or Promoted Context operational acceptance/persistence/retrieval
 - worktree lifecycle automation
 - automatic Audit Event emission
