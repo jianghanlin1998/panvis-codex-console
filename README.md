@@ -1,8 +1,42 @@
 # Codex Task Console
 
-Codex Task Console is an independent, local-first internal development tool under development. It is not part of the Panvis product code and is not yet authorized as Hanlin's active operating workflow.
+Local-first control plane for organizing and safely orchestrating AI coding work across projects, bounded tasks, isolated context, approvals, and Codex executions.
 
-The completed foundation slices currently provide deterministic domain contracts, local embedded storage for Projects, Big Tasks, Subtasks with explicit maturity, Task Dependencies with explicit gates and reasons, pure dependency-readiness evaluation, a scope-local storage-backed readiness snapshot read, one atomic initial implementation-completion transition with immutable commit checkpoint evidence, compact exact-scope Context Items with atomic supersession, one current Context Digest per exact scope, append-only Audit Events supplied explicitly by callers, one pure default-deny raw context-scope access boundary, one storage-backed snapshot that retrieves raw Context Items only from an allowed target's Project, parent Big Task, and own Subtask scopes, one ACTIVE-only view derived from that validated raw snapshot, one pure clean-context QA profile that can only narrow already-allowed metadata candidates before future retrieval, one pure promoted-conclusion route-eligibility contract limited to a Subtask's own parent or an exact downstream dependency, one hardened strict Promoted Context candidate contract bound to that route policy, one pure policy declaring the future acceptance authority required by an eligible candidate, one strict human-confirmation evidence-envelope applicability contract, one accepted Promoted Context snapshot DATA contract with an internal-only pure trusted-human transition core, and one strict four-variant DATA vocabulary plus pure renderer for future deterministic engineering evidence. Version-specific mock coverage exists for a narrow Codex App Server protocol subset, alongside provider-neutral execution references with pure Codex mappings. Codex App Server remains the only V1 execution provider. These slices do not provide a working Console application, general lifecycle or maturity mutation, start or repair orchestration, scheduling, context conflict resolution, a trusted human-action controller or public operational Promoted Context acceptance command, a trusted deterministic evidence producer or verifier, automatic deterministic acceptance, Promoted Context persistence or materialization, search, prompt compilation, automatic digest generation or audit emission, or live App Server integration. No ChatGPT Project Instructions or Project Sources have been changed or activated.
+## Why
+
+Long-running AI coding work becomes difficult to manage when task boundaries, dependencies, approvals, Git state, execution evidence, and conversation context bleed together. Codex Task Console explores a deterministic control layer that keeps those concerns explicit and reviewable instead of leaving them implicit in chat history.
+
+## Current foundation
+
+- Project -> Big Task -> Subtask task model with explicit scope and lifecycle contracts
+- Deterministic maturity, dependency, readiness, implementation-checkpoint, approval, and acceptance gates
+- Local SQLite persistence through Drizzle, including schema migrations and constrained storage contracts
+- Default-deny context ACLs, allowed-context snapshots, active-item selection, and clean-context QA profiles
+- Explicit Promoted Context contracts that avoid raw sibling-chat leakage
+- Provider-neutral execution references and mappings with Codex App Server as the V1 target boundary
+- Deterministic unit, integration, migration, concurrency, and adversarial test coverage
+
+## Architecture
+
+The repository separates two concerns:
+
+- **Control plane:** projects, task hierarchy, maturity and dependency gates, context boundaries, approvals, acceptance evidence, and provider-neutral execution contracts.
+- **Execution plane:** the future live Codex App Server integration that will execute approved work. The repository currently models and tests this boundary but does not yet provide live orchestration.
+
+V1 is intentionally local-first and single-user. Codex Task Console is independent from the Panvis product codebase.
+
+## Tech
+
+- TypeScript and Node.js 24
+- pnpm workspaces
+- Zod contracts
+- SQLite with Drizzle ORM and Drizzle migrations
+- Vitest and ESLint
+- Codex App Server target boundary with sanitized protocol fixtures
+
+## Status
+
+Codex Task Console is under active development and remains foundation-heavy. The domain, persistence, context-isolation, acceptance, and execution-boundary contracts are extensively tested, but this is not yet a complete daily-use Console. A browser UI and live Codex App Server orchestration are not implemented.
 
 ## Development
 
@@ -10,6 +44,7 @@ Prerequisites: Node.js 24 or newer and pnpm 11.
 
 ```sh
 pnpm install --frozen-lockfile
+pnpm public:check
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -22,4 +57,26 @@ To verify the installed Codex protocol generators without starting App Server, p
 pnpm codex:schema:generate -- /absolute/temporary/path
 ```
 
-Workspace packages are under `packages/`. Deliberate public APIs are exported by package entry points. See `docs/S0A_SCOPE.md`, `docs/S0B1_SCOPE.md`, `docs/S0B2A_CONTEXT_STORAGE.md`, `docs/S0B2B_DIGEST_AUDIT_STORAGE.md`, `docs/S0C_SCOPE.md`, `docs/S0D_PROVIDER_NEUTRAL_EXECUTION.md`, `docs/S1A_MATURITY_DEPENDENCY_READINESS.md`, `docs/S1B1_PERSISTED_READINESS_SNAPSHOT.md`, `docs/S1B2A_IMPLEMENTATION_COMPLETION.md`, `docs/S2A_CONTEXT_SCOPE_ACL.md`, `docs/S2B1_ALLOWED_RAW_CONTEXT_RETRIEVAL.md`, `docs/S2B2_ACTIVE_CONTEXT_SELECTION.md`, `docs/S2C1_QA_CLEAN_CONTEXT_PROFILE.md`, `docs/S2D1_PROMOTED_CONTEXT_ROUTE_ELIGIBILITY.md`, `docs/S2D2_PROMOTED_CONTEXT_CANDIDATE.md`, `docs/S2D3_PROMOTED_CONTEXT_ACCEPTANCE_AUTHORITY.md`, `docs/S2D4_PROMOTED_CONTEXT_HUMAN_CONFIRMATION_EVIDENCE.md`, `docs/S2D5A_ACCEPTED_PROMOTED_CONTEXT_SNAPSHOT.md`, and `docs/S2D6A_TYPED_DETERMINISTIC_ENGINEERING_FACT.md` for the implemented boundaries.
+## Design documentation
+
+Workspace packages are under `packages/`, and deliberate public APIs are exported by package entry points. Detailed implemented boundaries are documented in:
+
+- [Domain and storage foundation](docs/S0A_SCOPE.md)
+- [Core task storage](docs/S0B1_SCOPE.md)
+- [Context Item storage](docs/S0B2A_CONTEXT_STORAGE.md)
+- [Context Digest and Audit Event storage](docs/S0B2B_DIGEST_AUDIT_STORAGE.md)
+- [Mock Codex App Server boundary](docs/S0C_SCOPE.md)
+- [Provider-neutral execution contracts](docs/S0D_PROVIDER_NEUTRAL_EXECUTION.md)
+- [Maturity, dependencies, and readiness](docs/S1A_MATURITY_DEPENDENCY_READINESS.md)
+- [Persisted readiness snapshot](docs/S1B1_PERSISTED_READINESS_SNAPSHOT.md)
+- [Implementation completion](docs/S1B2A_IMPLEMENTATION_COMPLETION.md)
+- [Context scope ACL](docs/S2A_CONTEXT_SCOPE_ACL.md)
+- [Allowed raw-context retrieval](docs/S2B1_ALLOWED_RAW_CONTEXT_RETRIEVAL.md)
+- [Active-context selection](docs/S2B2_ACTIVE_CONTEXT_SELECTION.md)
+- [Clean-context QA profile](docs/S2C1_QA_CLEAN_CONTEXT_PROFILE.md)
+- [Promoted Context route eligibility](docs/S2D1_PROMOTED_CONTEXT_ROUTE_ELIGIBILITY.md)
+- [Promoted Context candidate](docs/S2D2_PROMOTED_CONTEXT_CANDIDATE.md)
+- [Promoted Context acceptance authority](docs/S2D3_PROMOTED_CONTEXT_ACCEPTANCE_AUTHORITY.md)
+- [Human confirmation evidence](docs/S2D4_PROMOTED_CONTEXT_HUMAN_CONFIRMATION_EVIDENCE.md)
+- [Accepted Promoted Context snapshot](docs/S2D5A_ACCEPTED_PROMOTED_CONTEXT_SNAPSHOT.md)
+- [Typed deterministic engineering facts](docs/S2D6A_TYPED_DETERMINISTIC_ENGINEERING_FACT.md)

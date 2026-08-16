@@ -7,6 +7,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Repo: `jianghanlin1998/panvis-codex-console`
 - Branch: `main`
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
+- Public-repository hygiene guard: enabled
 
 ## Maturity
 - S0A Domain foundation: ACCEPTED
