@@ -28,6 +28,23 @@ ACL
 -> execution
 ```
 
+The two public schemas and the compiler have deliberately different meanings:
+
+- `JitContextPacketCompilationInputSchema.parse(...)` validates compilation-input
+  DATA shape only. It does not prove that ACL authorization or trusted source
+  classification occurred.
+- `JitContextPacketSchema.parse(...)` validates packet DATA shape only. A caller
+  can construct packet-shaped JSON, including the required literal
+  `reasonIncluded` values, without using the compiler. Parser success therefore
+  proves neither compiler origin nor operational injection safety.
+- `compileJitContextPacket(...)` produces one deterministic detached packet from
+  the supplied captured DATA under the caller's pre-established trusted
+  integration precondition. Compiler success still does not authenticate
+  external provenance.
+
+No parser-based compiler-origin, trust, authorization, signature, or capability
+bridge exists in this slice.
+
 ## Profiles and fixed structure
 
 The exact profiles are:

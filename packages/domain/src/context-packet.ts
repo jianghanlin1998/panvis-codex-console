@@ -81,6 +81,11 @@ const FocusedReQaCompilationInputSchema = z
   })
   .strict();
 
+/**
+ * Serialized compilation-input DATA shape only. Parsing this schema does not
+ * establish upstream ACL authorization, trusted classification, or compiler
+ * execution.
+ */
 export const JitContextPacketCompilationInputSchema = z.discriminatedUnion(
   "profile",
   [
@@ -289,6 +294,11 @@ const FocusedReQaPacketSectionsSchema = z.tuple([
   RequiredBoundedRetestTargetsSectionSchema,
 ]);
 
+/**
+ * Serialized packet DATA shape only. Successful parsing, including the fixed
+ * reasonIncluded literals, does not prove compiler origin, provenance, trust,
+ * authorization, or operational injection safety.
+ */
 export const JitContextPacketSchema = z.discriminatedUnion("profile", [
   z
     .object({
