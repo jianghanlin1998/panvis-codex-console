@@ -82,11 +82,10 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-S2D6A-HARD-002: CLOSED
 - CTC-S2D6A-HARD-003: CLOSED
 - S2D6a ACCEPTED: YES
-- JIT Context Packet Core Contract: HARDENED / REOPENED FOR WHITESPACE REPAIR
+- JIT Context Packet Core Contract: ACCEPTED
 - JIT Context Packet Core Comprehensive Hardening: PASS
-- JIT Context Packet Core prior Fresh Independent QA: PASS on pre-repair SHA
-- JIT Context Packet Core Focused Fresh Re-QA — text-block body whitespace: PENDING
-- JIT Context Packet Core ACCEPTED: NO — pending focused re-QA
+- JIT Context Packet Core Focused Fresh Re-QA — text-block body whitespace: PASS
+- JIT Context Packet Core ACCEPTED: YES
 - Profile-aware Trusted Storage Snapshot: ACCEPTED
 - Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PASS
 - Profile-aware Trusted Storage Snapshot Fresh Independent QA: PASS
@@ -95,13 +94,17 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Trusted Repository Source Snapshot Comprehensive Hardening: PASS
 - Trusted Repository Source Snapshot Fresh Independent QA: PASS
 - Trusted Repository Source Snapshot ACCEPTED: YES
+- Operational Context Assembly V0: IMPLEMENTED
+- Operational Context Assembly V0 Comprehensive Hardening: PENDING
+- Operational Context Assembly V0 Fresh Independent QA: PENDING
+- Operational Context Assembly V0 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**JIT Context Packet Core Focused Fresh Re-QA — text-block body whitespace**
+**Operational Context Assembly V0 Comprehensive Hardening**
 
-- Re-verify the repaired Packet text-block body contract independently.
-- Keep operational packet assembly deferred until focused re-QA passes.
+- Harden the accepted V0 Standard/Fresh composition boundary without expanding
+  into deferred Focused Re-QA, token-budget, provider, persistence, or UI work.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -109,10 +112,9 @@ Hanlin manual QA: NOT REQUIRED
 - browser Console UI or daemon/local service
 - TODO -> IN_PROGRESS start orchestration, repair/re-entry, or later maturity mutation
 - scheduling, concurrency control, or `WHEN_READY` execution
-- operational use of the trusted repository source snapshot in packet assembly
-- trusted QA-instruction or locked-invariant source
+- Focused Re-QA operational assembly
+- trusted locked-invariant source
 - trusted bounded-retest-target source
-- operational JIT packet assembly or orchestration
 - accepted Promoted Context retrieval or injection
 - Digest integration or raw-history injection
 - token meter or budget pruning

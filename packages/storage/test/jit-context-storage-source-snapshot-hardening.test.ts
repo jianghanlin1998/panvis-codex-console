@@ -1560,7 +1560,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
     });
   });
 
-  it("adds no schema, migration, write, compiler, or deferred integration and limits the approved consumer", () => {
+  it("adds no schema, migration, write, or deferred integration and limits approved consumers", () => {
     withTemporaryDatabasePath((databasePath) => {
       const storage = openTaskDatabase({ databasePath, clock: fixedClock });
       seedTopology(storage);
@@ -1618,17 +1618,28 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
       .filter(({ path }) => path.includes("/storage/src/"))
       .map(({ source }) => source)
       .join("\n");
+    const taskStorageSource = sources.find(({ path }) =>
+      path.endsWith("/storage/src/task-storage.ts"),
+    )?.source;
+    const operationalAssemblySource = sources.find(({ path }) =>
+      path.endsWith("/storage/src/operational-context-assembly.ts"),
+    )?.source;
     const consumers = sources.flatMap(({ path, source }) =>
       (source.match(/\.readJitContextSourceSnapshotForSubtask\s*\(/g) ?? []).map(
         () => path,
       ),
     );
     expect(
-      (storageSource.match(/compileJitContextPacket\s*\(/g) ?? []).length,
+      (taskStorageSource?.match(/compileJitContextPacket\s*\(/g) ?? []).length,
     ).toBe(0);
-    expect(consumers).toHaveLength(1);
-    expect(consumers[0]?.endsWith("/storage/src/trusted-repository-source.ts"))
-      .toBe(true);
+    expect(
+      (operationalAssemblySource?.match(/compileJitContextPacket\s*\(/g) ?? [])
+        .length,
+    ).toBe(1);
+    expect(consumers.map((path) => path.split("/").at(-1)).sort()).toEqual([
+      "operational-context-assembly.ts",
+      "trusted-repository-source.ts",
+    ]);
     const trustedRepositorySource = sources.find(({ path }) =>
       path.endsWith("/storage/src/trusted-repository-source.ts"),
     )?.source;

@@ -33,3 +33,12 @@ export type {
   TrustedRepositorySourceSnapshot,
   TrustedRepositorySourceTextBlock,
 } from "./trusted-repository-source.js";
+
+export {
+  OperationalJitContextAssembler,
+  OperationalJitContextAssemblyError,
+} from "./operational-context-assembly.js";
+export type {
+  OperationalJitContextAssemblyErrorCode,
+  OperationalJitContextProfile,
+} from "./operational-context-assembly.js";

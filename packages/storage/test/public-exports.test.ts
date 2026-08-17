@@ -6,6 +6,8 @@ import {
   contextDigestsTable,
   contextItemsTable,
   openTaskDatabase,
+  OperationalJitContextAssembler,
+  OperationalJitContextAssemblyError,
   projectsTable,
   STORAGE_ERROR_CODES,
   subtaskImplementationCheckpointsTable,
@@ -22,6 +24,8 @@ import type {
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
   JitContextStorageSourceSnapshot,
+  OperationalJitContextAssemblyErrorCode,
+  OperationalJitContextProfile,
   TrustedRepositorySourceErrorCode,
   TrustedRepositorySourceSnapshot,
   TrustedRepositorySourceTextBlock,
@@ -32,6 +36,8 @@ describe("storage package public exports", () => {
     expect(openTaskDatabase).toBeTypeOf("function");
     expect(TaskStorage).toBeTypeOf("function");
     expect(TaskStorageError).toBeTypeOf("function");
+    expect(OperationalJitContextAssembler).toBeTypeOf("function");
+    expect(OperationalJitContextAssemblyError).toBeTypeOf("function");
     expect(TrustedRepositorySourceReader).toBeTypeOf("function");
     expect(TrustedRepositorySourceError).toBeTypeOf("function");
     expect(STORAGE_ERROR_CODES).toContain("MIGRATION_FAILED");
@@ -48,6 +54,8 @@ describe("storage package public exports", () => {
     expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
     expectTypeOf<AllowedRawContextItemSnapshot>().toBeObject();
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
+    expectTypeOf<OperationalJitContextAssemblyErrorCode>().toBeString();
+    expectTypeOf<OperationalJitContextProfile>().toBeString();
     expectTypeOf<TrustedRepositorySourceSnapshot>().toBeObject();
     expectTypeOf<TrustedRepositorySourceTextBlock>().toBeObject();
     expectTypeOf<TrustedRepositorySourceErrorCode>().toBeString();

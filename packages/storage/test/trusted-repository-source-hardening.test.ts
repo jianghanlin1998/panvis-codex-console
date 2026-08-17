@@ -1298,7 +1298,7 @@ describe.sequential("trusted repository source property and trust-boundary harde
     expect(
       (production.match(/\.readJitContextSourceSnapshotForSubtask\s*\(/g) ?? [])
         .length,
-    ).toBe(1);
+    ).toBe(2);
     expect(
       (storageSource.match(/contextItems/gi) ?? []).length,
     ).toBeGreaterThan(0);
