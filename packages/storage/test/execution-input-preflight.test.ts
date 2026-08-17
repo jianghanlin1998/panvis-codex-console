@@ -5,11 +5,12 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { describe, expect, expectTypeOf, it } from "vitest";
 
@@ -48,6 +49,39 @@ const SUBTASK_ID = SubtaskIdSchema.parse("st_execution_preflight");
 const FIXED_GIT_DATE = "2026-08-17T00:00:00Z";
 const MARKER = "CODEX_TASK_CONSOLE_JIT_CONTEXT_V0\n";
 const FORMAT = "CTC_JIT_CONTEXT_JSON_V0";
+const REPOSITORY_ROOT = join(import.meta.dirname, "..", "..", "..");
+
+const listTypeScriptFiles = (directory: string): readonly string[] =>
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return listTypeScriptFiles(path);
+    }
+    return entry.isFile() && entry.name.endsWith(".ts") ? [path] : [];
+  });
+
+const productionSources = ["domain", "storage", "codex-adapter"].flatMap(
+  (packageName) =>
+    listTypeScriptFiles(join(REPOSITORY_ROOT, "packages", packageName, "src")).map(
+      (path) => ({
+        path,
+        source: readFileSync(path, { encoding: "utf8" }),
+      }),
+  ),
+);
+
+const repositoryRelativePath = (path: string): string =>
+  relative(REPOSITORY_ROOT, path).split(sep).join("/");
+
+const productionSourceFor = (relativePath: string): string => {
+  const source = productionSources.find(
+    ({ path }) => repositoryRelativePath(path) === relativePath,
+  );
+  if (source === undefined) {
+    throw new Error(`Missing audited production source: ${relativePath}`);
+  }
+  return source.source;
+};
 
 interface SyntheticRepository {
   readonly path: string;
@@ -299,6 +333,48 @@ describe.sequential("Execution Input Preflight V0", () => {
     );
   });
 
+  it.each([
+    "STANDARD_SUBTASK_EXECUTION",
+    "FRESH_INDEPENDENT_QA",
+  ] as const)(
+    "round-trips challenging %s content through the one exact framing boundary",
+    (profile) => {
+      const challenge =
+        "quote \"; backslash \\; LF\nCRLF\r\nTAB\t; 中文; emoji 😀; control \u0001; end";
+      withSyntheticRepository(challenge, (repository) =>
+        withMemoryStorage((storage) => {
+          seedHierarchy(storage, repository.path);
+          const expectedPacket = new OperationalJitContextAssembler(
+            storage,
+          ).assembleOperationalJitContextPacketForSubtask(SUBTASK_ID, profile);
+          const result = new ExecutionInputPreflight(
+            storage,
+          ).prepareExecutionInputForSubtask(SUBTASK_ID, profile);
+          if (!result.allowed) {
+            throw new Error("Expected allowed challenging execution input.");
+          }
+
+          const payload = result.text.slice(MARKER.length);
+          expect(result.text.startsWith(MARKER)).toBe(true);
+          expect(result.text.match(/\n/g)).toHaveLength(1);
+          expect(payload.startsWith("{")).toBe(true);
+          expect(result.text.endsWith("\n")).toBe(false);
+          expect(payload).toContain("\\\"");
+          expect(payload).toContain("\\\\");
+          expect(payload).toContain("\\n");
+          expect(payload).toContain("\\r\\n");
+          expect(payload).toContain("\\t");
+          expect(payload).toContain("中文");
+          expect(payload).toContain("😀");
+          expect(payload).toContain("\\u0001");
+          expect(JSON.parse(payload)).toEqual(expectedPacket);
+          expect(result.text).toBe(MARKER + JSON.stringify(expectedPacket));
+          expect(result.utf8Bytes).toBe(Buffer.byteLength(result.text, "utf8"));
+        }),
+      );
+    },
+  );
+
   it("measures exact UTF-8 bytes for Unicode and preserved text layout", () => {
     const rules = "ASCII\r\n中文 😀\r\n\t- Markdown\r\n    indented\r\n";
     withSyntheticRepository(rules, (repository) =>
@@ -417,6 +493,147 @@ describe.sequential("Execution Input Preflight V0", () => {
     );
   });
 
+  it.each([
+    [10, "ABOVE_TARGET", true],
+    [17, "HARD_CAP_EXCEEDED", false],
+  ] as const)(
+    "does not mutate or retry the accepted packet for %s large Context Items",
+    (itemCount, expectedStatus, expectedAllowed) => {
+      withSyntheticRepository("no repair rules\n", (repository) =>
+        withMemoryStorage((storage) => {
+          seedHierarchy(storage, repository.path);
+          const fullBody = seedSizedProjectContext(storage, itemCount);
+          const expectedPacket = new OperationalJitContextAssembler(
+            storage,
+          ).assembleOperationalJitContextPacketForSubtask(
+            SUBTASK_ID,
+            "STANDARD_SUBTASK_EXECUTION",
+          );
+          const expectedText = MARKER + JSON.stringify(expectedPacket);
+          const originalRead =
+            storage.readJitContextSourceSnapshotForSubtask.bind(storage);
+          let snapshotReads = 0;
+          Object.defineProperty(
+            storage,
+            "readJitContextSourceSnapshotForSubtask",
+            {
+              configurable: true,
+              value: (
+                ...arguments_: Parameters<
+                  TaskStorage["readJitContextSourceSnapshotForSubtask"]
+                >
+              ) => {
+                snapshotReads += 1;
+                return originalRead(...arguments_);
+              },
+            },
+          );
+
+          const result = new ExecutionInputPreflight(
+            storage,
+          ).prepareExecutionInputForSubtask(
+            SUBTASK_ID,
+            "STANDARD_SUBTASK_EXECUTION",
+          );
+
+          expect(result.status).toBe(expectedStatus);
+          expect(result.allowed).toBe(expectedAllowed);
+          expect(result.utf8Bytes).toBe(Buffer.byteLength(expectedText, "utf8"));
+          expect(JSON.stringify(expectedPacket)).toContain(fullBody);
+          expect(snapshotReads).toBe(3);
+          if (result.allowed) {
+            expect(result.text).toBe(expectedText);
+            expect(result.text).toContain(fullBody);
+          } else {
+            for (const forbiddenProperty of [
+              "text",
+              "packet",
+              "payload",
+              "serializedText",
+              "contextText",
+            ]) {
+              expect(result).not.toHaveProperty(forbiddenProperty);
+            }
+          }
+        }),
+      );
+    },
+  );
+
+  it("keeps one production serializer owner and storage provider-neutral", () => {
+    const markerOwners = productionSources
+      .filter(({ source }) => source.includes("CODEX_TASK_CONSOLE_JIT_CONTEXT_V0"))
+      .map(({ path }) => repositoryRelativePath(path));
+    const formatOwners = productionSources
+      .filter(({ source }) => source.includes("CTC_JIT_CONTEXT_JSON_V0"))
+      .map(({ path }) => repositoryRelativePath(path));
+    expect(markerOwners).toEqual([
+      "packages/storage/src/execution-input-preflight.ts",
+    ]);
+    expect(formatOwners).toEqual([
+      "packages/storage/src/execution-input-preflight.ts",
+    ]);
+
+    const preflightSource = productionSourceFor(
+      "packages/storage/src/execution-input-preflight.ts",
+    );
+    expect(preflightSource.match(/JSON\.stringify\(packet\)/g)).toHaveLength(1);
+    expect(
+      preflightSource.match(/Buffer\.byteLength\(text, "utf8"\)/g),
+    ).toHaveLength(1);
+
+    const storageSource = productionSources
+      .filter(({ path }) =>
+        repositoryRelativePath(path).startsWith("packages/storage/src/"),
+      )
+      .map(({ source }) => source)
+      .join("\n");
+    expect(storageSource).not.toMatch(
+      /codex-adapter|thread\/start|turn\/start|JSON-RPC|ProviderMessage|serializeForProvider/,
+    );
+  });
+
+  it("keeps the domain evaluator as the only runtime byte-budget decision owner", () => {
+    const budgetSource = productionSourceFor("packages/domain/src/budgets.ts");
+    const preflightSource = productionSourceFor(
+      "packages/storage/src/execution-input-preflight.ts",
+    );
+    expect(
+      budgetSource.match(/if \(utf8Bytes <= normalTargetBytes\)/g),
+    ).toHaveLength(1);
+    expect(
+      budgetSource.match(/if \(utf8Bytes <= absoluteCapBytes\)/g),
+    ).toHaveLength(1);
+    expect(
+      preflightSource.match(/evaluateCompiledContextByteBudget\(/g),
+    ).toHaveLength(1);
+    expect(preflightSource).not.toMatch(
+      /if\s*\(\s*utf8Bytes\s*<=|if\s*\([^)]*(?:40_000|64_000)/,
+    );
+  });
+
+  it("keeps the public operational preflight API minimal", () => {
+    expect(
+      Object.keys(storageExports)
+        .filter((name) => name.includes("ExecutionInputPreflight"))
+        .sort(),
+    ).toEqual(["ExecutionInputPreflight", "ExecutionInputPreflightError"]);
+    expect(Object.getOwnPropertyNames(ExecutionInputPreflight.prototype)).toEqual([
+      "constructor",
+      "prepareExecutionInputForSubtask",
+    ]);
+    for (const forbiddenExport of [
+      "serializePacket",
+      "measureExecutionInput",
+      "authorizePacket",
+      "preflightCallerPacket",
+      "parseTrustedPreflight",
+      "upgradePreflightAuthority",
+    ]) {
+      expect(storageExports).not.toHaveProperty(forbiddenExport);
+    }
+  });
+
   it("accepts only canonical Subtask ID and profile, with no authority upgrade", () => {
     withSyntheticRepository("trusted rules\n", (repository) =>
       withMemoryStorage((storage) => {
@@ -465,6 +682,12 @@ describe.sequential("Execution Input Preflight V0", () => {
           "trustExecutionInputPreflightResult",
           "verifyExecutionInputPreflightResult",
           "executePreflightResult",
+          "serializePacket",
+          "measureExecutionInput",
+          "authorizePacket",
+          "preflightCallerPacket",
+          "parseTrustedPreflight",
+          "upgradePreflightAuthority",
         ]) {
           expect(storageExports).not.toHaveProperty(forbiddenExport);
         }
@@ -521,6 +744,31 @@ describe.sequential("Execution Input Preflight V0", () => {
       expect(error.code).toBe("ASSEMBLY_FAILED");
       expect(error.message).not.toContain(missingPath);
       expect(error.message).not.toMatch(/Git|path|repository/i);
+    });
+  });
+
+  it("sanitizes unexpected trusted-source failures without leaking sentinels", () => {
+    withMemoryStorage((storage) => {
+      const sentinel =
+        "CALLER_SECRET /private/worktree sqlite Zod Git stderr process.env stack";
+      Object.defineProperty(storage, "readJitContextSourceSnapshotForSubtask", {
+        configurable: true,
+        value: () => {
+          throw new Error(sentinel);
+        },
+      });
+
+      const error = capturePreflightError(() =>
+        new ExecutionInputPreflight(storage).prepareExecutionInputForSubtask(
+          SUBTASK_ID,
+          "STANDARD_SUBTASK_EXECUTION",
+        ),
+      );
+      expect(error.code).toBe("ASSEMBLY_FAILED");
+      expect(error.message).toBe("The execution input could not be assembled.");
+      expect(`${error.message} ${JSON.stringify(error)}`).not.toMatch(
+        /CALLER_SECRET|private\/worktree|sqlite|Zod|Git stderr|process\.env|stack/i,
+      );
     });
   });
 

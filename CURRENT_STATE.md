@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-17
+Last reconciled: 2026-08-18
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -98,8 +98,8 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Operational Context Assembly V0 Comprehensive Hardening: PASS
 - Operational Context Assembly V0 Fresh Independent QA: PASS
 - Operational Context Assembly V0 ACCEPTED: YES
-- Execution Input Preflight V0: IMPLEMENTED
-- Execution Input Preflight V0 Comprehensive Hardening: PENDING
+- Execution Input Preflight V0: HARDENED
+- Execution Input Preflight V0 Comprehensive Hardening: PASS
 - Execution Input Preflight V0 Fresh Independent QA: PENDING
 - Execution Input Preflight V0 ACCEPTED: NO
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
@@ -107,12 +107,12 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Execution Input Preflight V0 Comprehensive Hardening**
+**Execution Input Preflight V0 Fresh Independent QA**
 
-- Harden the trusted serialization, UTF-8 measurement, fixed byte-budget
-  decision, fail-closed errors, and read-only boundary.
-- Do not mark Execution Input Preflight V0 ACCEPTED before hardening and Fresh
-  Independent QA pass.
+- Independently verify the hardened trusted serialization, UTF-8 measurement,
+  fixed byte-budget decision, fail-closed errors, and read-only boundary.
+- Do not mark Execution Input Preflight V0 ACCEPTED before Fresh Independent QA
+  passes.
 
 Hanlin manual QA: NOT REQUIRED
 
