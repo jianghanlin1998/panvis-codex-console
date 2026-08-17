@@ -9,6 +9,7 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
+import { devNull } from "node:os";
 import { join } from "node:path";
 import { TextDecoder } from "node:util";
 
@@ -79,6 +80,49 @@ interface WorktreeObservation {
   readonly unmergedEntries: number;
 }
 
+interface RepositoryIdentity {
+  readonly device: bigint;
+  readonly inode: bigint;
+}
+
+interface VerifiedRepositoryRoot {
+  readonly path: string;
+  readonly identity: RepositoryIdentity;
+}
+
+interface RepositoryStateObservation extends WorktreeObservation {
+  readonly head: string;
+  readonly branch: string | null;
+}
+
+interface LocalTrackingRefObservation {
+  readonly ref: string;
+  readonly commitSha: string | null;
+}
+
+interface RepositoryObservation {
+  readonly state: RepositoryStateObservation;
+  readonly tracking: LocalTrackingRefObservation;
+  readonly canonicalRuleContent: Buffer | null;
+}
+
+interface FileState {
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly mode: bigint;
+  readonly size: bigint;
+  readonly modifiedNanoseconds: bigint;
+  readonly changedNanoseconds: bigint;
+}
+
+type CanonicalRuleFileObservation =
+  | Readonly<{ readonly kind: "MISSING" }>
+  | Readonly<{
+      readonly kind: "PRESENT";
+      readonly state: FileState;
+      readonly content: Buffer;
+    }>;
+
 const sourceError = (
   code: TrustedRepositorySourceErrorCode,
   message: string,
@@ -94,6 +138,18 @@ const probeFailed = (): TrustedRepositorySourceError =>
   sourceError(
     "REPOSITORY_PROBE_FAILED",
     "The local repository probe could not be completed.",
+  );
+
+const repositoryRootMismatch = (): TrustedRepositorySourceError =>
+  sourceError(
+    "REPOSITORY_ROOT_MISMATCH",
+    "The configured path does not designate the probed Git repository root.",
+  );
+
+const unsafeCanonicalRuleSource = (): TrustedRepositorySourceError =>
+  sourceError(
+    "UNSAFE_CANONICAL_RULE_SOURCE",
+    "The repository rule source is not a stable safe regular file.",
   );
 
 const freezeRecursively = <T>(value: T): T => {
@@ -152,31 +208,83 @@ const decodeSingleLine = (value: Buffer): string | null => {
   return withoutTerminator;
 };
 
-const runLocalGit = (
+const readRepositoryIdentity = (repositoryRoot: string): RepositoryIdentity => {
+  try {
+    const observation = statSync(repositoryRoot, { bigint: true });
+    if (!observation.isDirectory()) {
+      throw repositoryRootMismatch();
+    }
+    return Object.freeze({
+      device: observation.dev,
+      inode: observation.ino,
+    });
+  } catch (error) {
+    if (error instanceof TrustedRepositorySourceError) {
+      throw error;
+    }
+    throw repositoryRootMismatch();
+  }
+};
+
+const repositoryIdentitiesEqual = (
+  left: RepositoryIdentity,
+  right: RepositoryIdentity,
+): boolean => left.device === right.device && left.inode === right.inode;
+
+const assertRepositoryIdentity = (
   repositoryRoot: string,
+  expectedIdentity: RepositoryIdentity,
+): void => {
+  if (
+    !repositoryIdentitiesEqual(
+      readRepositoryIdentity(repositoryRoot),
+      expectedIdentity,
+    )
+  ) {
+    throw repositoryRootMismatch();
+  }
+};
+
+const localGitEnvironment = (): NodeJS.ProcessEnv => {
+  const inheritedRuntimeEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) => !name.toUpperCase().startsWith("GIT_"),
+    ),
+  );
+  return {
+    ...inheritedRuntimeEnvironment,
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+};
+
+const runLocalGit = (
+  repository: VerifiedRepositoryRoot,
   arguments_: readonly string[],
 ): GitResult => {
+  assertRepositoryIdentity(repository.path, repository.identity);
   const result = (() => {
     try {
       return spawnSync(
         "git",
         [
+          "--no-pager",
           "-c",
           "core.fsmonitor=false",
           "-c",
           "core.untrackedCache=false",
           "-c",
           "core.quotePath=false",
+          "-c",
+          "submodule.recurse=false",
           "-C",
-          repositoryRoot,
+          repository.path,
           ...arguments_,
         ],
         {
-          env: {
-            ...process.env,
-            GIT_OPTIONAL_LOCKS: "0",
-            GIT_TERMINAL_PROMPT: "0",
-          },
+          env: localGitEnvironment(),
           maxBuffer: GIT_OUTPUT_MAX_BYTES,
           shell: false,
           timeout: GIT_TIMEOUT_MILLISECONDS,
@@ -187,6 +295,7 @@ const runLocalGit = (
       throw probeFailed();
     }
   })();
+  assertRepositoryIdentity(repository.path, repository.identity);
   if (
     result.error !== undefined ||
     result.signal !== null ||
@@ -198,10 +307,14 @@ const runLocalGit = (
   return { status: result.status, stdout: result.stdout };
 };
 
-const resolveVerifiedRepositoryRoot = (configuredPath: string): string => {
+const resolveVerifiedRepositoryRoot = (
+  configuredPath: string,
+): VerifiedRepositoryRoot => {
   let configuredRoot: string;
+  let identity: RepositoryIdentity;
   try {
     configuredRoot = realpathSync.native(configuredPath);
+    identity = readRepositoryIdentity(configuredRoot);
     if (!statSync(configuredRoot).isDirectory()) {
       throw new Error("not a directory");
     }
@@ -212,7 +325,8 @@ const resolveVerifiedRepositoryRoot = (configuredPath: string): string => {
     );
   }
 
-  const rootResult = runLocalGit(configuredRoot, [
+  const repository = Object.freeze({ path: configuredRoot, identity });
+  const rootResult = runLocalGit(repository, [
     "rev-parse",
     "--path-format=absolute",
     "--show-toplevel",
@@ -232,48 +346,123 @@ const resolveVerifiedRepositoryRoot = (configuredPath: string): string => {
   try {
     resolvedReportedRoot = realpathSync.native(reportedRoot);
   } catch {
-    throw sourceError(
-      "REPOSITORY_ROOT_MISMATCH",
-      "The configured path does not designate the probed Git repository root.",
-    );
+    throw repositoryRootMismatch();
   }
   if (resolvedReportedRoot !== configuredRoot) {
-    throw sourceError(
-      "REPOSITORY_ROOT_MISMATCH",
-      "The configured path does not designate the probed Git repository root.",
-    );
+    throw repositoryRootMismatch();
   }
-  return configuredRoot;
+  assertRepositoryIdentity(configuredRoot, identity);
+  return repository;
 };
 
-const splitRuleContent = (content: string): readonly string[] => {
+const avoidsSurrogateSplit = (content: string, end: number): number => {
+  if (
+    end < content.length &&
+    end > 0 &&
+    content.charCodeAt(end - 1) >= 0xd800 &&
+    content.charCodeAt(end - 1) <= 0xdbff &&
+    content.charCodeAt(end) >= 0xdc00 &&
+    content.charCodeAt(end) <= 0xdfff
+  ) {
+    return end - 1;
+  }
+  return end;
+};
+
+const lastNonWhitespaceCodePointStart = (
+  content: string,
+  start: number,
+  end: number,
+): number | null => {
+  for (let index = end - 1; index >= start; index -= 1) {
+    if (content.slice(index, index + 1).trim().length === 0) {
+      continue;
+    }
+    if (
+      content.charCodeAt(index) >= 0xdc00 &&
+      content.charCodeAt(index) <= 0xdfff &&
+      index > start &&
+      content.charCodeAt(index - 1) >= 0xd800 &&
+      content.charCodeAt(index - 1) <= 0xdbff
+    ) {
+      return index - 1;
+    }
+    return index;
+  }
+  return null;
+};
+
+const splitRuleContent = (content: string): readonly string[] | null => {
   const chunks: string[] = [];
   let offset = 0;
   while (offset < content.length) {
-    let end = Math.min(offset + PACKET_BODY_MAX_LENGTH, content.length);
+    let end = avoidsSurrogateSplit(
+      content,
+      Math.min(offset + PACKET_BODY_MAX_LENGTH, content.length),
+    );
     if (
       end < content.length &&
-      end > offset &&
-      content.charCodeAt(end - 1) >= 0xd800 &&
-      content.charCodeAt(end - 1) <= 0xdbff &&
-      content.charCodeAt(end) >= 0xdc00 &&
-      content.charCodeAt(end) <= 0xdfff
+      content
+        .slice(end, Math.min(end + PACKET_BODY_MAX_LENGTH, content.length))
+        .trim().length === 0
     ) {
-      end -= 1;
+      const retainedNonWhitespace = lastNonWhitespaceCodePointStart(
+        content,
+        offset,
+        end,
+      );
+      if (
+        retainedNonWhitespace === null ||
+        retainedNonWhitespace === offset ||
+        content.slice(offset, retainedNonWhitespace).trim().length === 0
+      ) {
+        return null;
+      }
+      end = retainedNonWhitespace;
     }
-    chunks.push(content.slice(offset, end));
+    const chunk = content.slice(offset, end);
+    if (chunk.trim().length === 0) {
+      return null;
+    }
+    chunks.push(chunk);
     offset = end;
   }
   return chunks;
 };
 
-const readCanonicalProjectRules = (
-  repositoryRoot: string,
-): readonly TrustedRepositorySourceTextBlock[] => {
-  const rulesPath = join(repositoryRoot, "AGENTS.md");
+const fileState = (observation: {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}): FileState =>
+  Object.freeze({
+    device: observation.dev,
+    inode: observation.ino,
+    mode: observation.mode,
+    size: observation.size,
+    modifiedNanoseconds: observation.mtimeNs,
+    changedNanoseconds: observation.ctimeNs,
+  });
+
+const fileStatesEqual = (left: FileState, right: FileState): boolean =>
+  left.device === right.device &&
+  left.inode === right.inode &&
+  left.mode === right.mode &&
+  left.size === right.size &&
+  left.modifiedNanoseconds === right.modifiedNanoseconds &&
+  left.changedNanoseconds === right.changedNanoseconds;
+
+const readCanonicalRuleFileOnce = (
+  repository: VerifiedRepositoryRoot,
+): CanonicalRuleFileObservation => {
+  assertRepositoryIdentity(repository.path, repository.identity);
+  const rulesPath = join(repository.path, "AGENTS.md");
   let pathStat;
   try {
-    pathStat = lstatSync(rulesPath);
+    pathStat = lstatSync(rulesPath, { bigint: true });
   } catch (error) {
     if (
       typeof error === "object" &&
@@ -281,7 +470,8 @@ const readCanonicalProjectRules = (
       "code" in error &&
       error.code === "ENOENT"
     ) {
-      return Object.freeze([]);
+      assertRepositoryIdentity(repository.path, repository.identity);
+      return Object.freeze({ kind: "MISSING" });
     }
     throw sourceError(
       "FILESYSTEM_READ_FAILED",
@@ -289,31 +479,35 @@ const readCanonicalProjectRules = (
     );
   }
   if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
-    throw sourceError(
-      "UNSAFE_CANONICAL_RULE_SOURCE",
-      "The repository rule source is not a safe regular file.",
-    );
+    throw unsafeCanonicalRuleSource();
   }
 
   let fileDescriptor: number | undefined;
   let contentBytes: Buffer;
+  let openedState: FileState;
   try {
     fileDescriptor = openSync(
       rulesPath,
       constants.O_RDONLY | constants.O_NOFOLLOW,
     );
-    const openedStat = fstatSync(fileDescriptor);
+    const openedBefore = fstatSync(fileDescriptor, { bigint: true });
     if (
-      !openedStat.isFile() ||
-      openedStat.dev !== pathStat.dev ||
-      openedStat.ino !== pathStat.ino
+      !openedBefore.isFile() ||
+      openedBefore.dev !== pathStat.dev ||
+      openedBefore.ino !== pathStat.ino
     ) {
-      throw sourceError(
-        "UNSAFE_CANONICAL_RULE_SOURCE",
-        "The repository rule source is not a safe regular file.",
-      );
+      throw unsafeCanonicalRuleSource();
     }
+    openedState = fileState(openedBefore);
     contentBytes = readFileSync(fileDescriptor);
+    const openedAfter = fstatSync(fileDescriptor, { bigint: true });
+    if (
+      !openedAfter.isFile() ||
+      !fileStatesEqual(openedState, fileState(openedAfter)) ||
+      BigInt(contentBytes.byteLength) !== openedAfter.size
+    ) {
+      throw unsafeCanonicalRuleSource();
+    }
   } catch (error) {
     if (error instanceof TrustedRepositorySourceError) {
       throw error;
@@ -332,6 +526,56 @@ const readCanonicalProjectRules = (
     }
   }
 
+  try {
+    const pathAfter = lstatSync(rulesPath, { bigint: true });
+    if (
+      !pathAfter.isFile() ||
+      pathAfter.isSymbolicLink() ||
+      !fileStatesEqual(openedState, fileState(pathAfter))
+    ) {
+      throw unsafeCanonicalRuleSource();
+    }
+  } catch (error) {
+    if (error instanceof TrustedRepositorySourceError) {
+      throw error;
+    }
+    throw unsafeCanonicalRuleSource();
+  }
+  assertRepositoryIdentity(repository.path, repository.identity);
+  return Object.freeze({
+    kind: "PRESENT",
+    state: openedState,
+    content: contentBytes,
+  });
+};
+
+const readStableCanonicalRuleContent = (
+  repository: VerifiedRepositoryRoot,
+): Buffer | null => {
+  const first = readCanonicalRuleFileOnce(repository);
+  const second = readCanonicalRuleFileOnce(repository);
+  if (first.kind !== second.kind) {
+    throw unsafeCanonicalRuleSource();
+  }
+  if (first.kind === "MISSING" || second.kind === "MISSING") {
+    return null;
+  }
+  if (
+    !fileStatesEqual(first.state, second.state) ||
+    !first.content.equals(second.content)
+  ) {
+    throw unsafeCanonicalRuleSource();
+  }
+  return Buffer.from(first.content);
+};
+
+const readCanonicalProjectRules = (
+  contentBytes: Buffer | null,
+): readonly TrustedRepositorySourceTextBlock[] => {
+  if (contentBytes === null) {
+    return Object.freeze([]);
+  }
+
   const content = decodeUtf8(contentBytes);
   if (content === null) {
     throw sourceError(
@@ -344,6 +588,12 @@ const readCanonicalProjectRules = (
   }
 
   const chunks = splitRuleContent(content);
+  if (chunks === null) {
+    throw sourceError(
+      "UNSAFE_CANONICAL_RULE_SOURCE",
+      "The repository rule source cannot satisfy the packet text-block contract.",
+    );
+  }
   const blocks = chunks.map((body, index) => {
     const part = index + 1;
     const sourceReference =
@@ -366,48 +616,27 @@ const readCanonicalProjectRules = (
   return Object.freeze(blocks);
 };
 
-const parseCommitSha = (output: Buffer): string => {
-  const commitSha = decodeSingleLine(output);
-  if (commitSha === null || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha)) {
+const parseCommitShaText = (commitSha: string): string => {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha)) {
     throw malformedRuntimeObservation();
   }
   return commitSha;
 };
 
-const readHead = (repositoryRoot: string): string => {
-  const result = runLocalGit(repositoryRoot, ["rev-parse", "--verify", "HEAD"]);
-  if (result.status !== 0) {
-    throw probeFailed();
-  }
-  return parseCommitSha(result.stdout);
-};
-
-const readBranch = (repositoryRoot: string): string | null => {
-  const result = runLocalGit(repositoryRoot, [
-    "symbolic-ref",
-    "--quiet",
-    "--short",
-    "HEAD",
-  ]);
-  if (result.status === 1) {
-    return null;
-  }
-  if (result.status !== 0) {
-    throw probeFailed();
-  }
-  const branch = decodeSingleLine(result.stdout);
-  if (branch === null || branch.length > PACKET_BODY_MAX_LENGTH) {
+const parseCommitSha = (output: Buffer): string => {
+  const commitSha = decodeSingleLine(output);
+  if (commitSha === null) {
     throw malformedRuntimeObservation();
   }
-  return branch;
+  return parseCommitShaText(commitSha);
 };
 
 const readLocalTrackingRef = (
-  repositoryRoot: string,
+  repository: VerifiedRepositoryRoot,
   defaultBranch: string,
-): Readonly<{ ref: string; commitSha: string | null }> => {
+): LocalTrackingRefObservation => {
   const ref = `refs/remotes/origin/${defaultBranch}`;
-  const checkResult = runLocalGit(repositoryRoot, [
+  const checkResult = runLocalGit(repository, [
     "check-ref-format",
     "--normalize",
     ref,
@@ -415,31 +644,28 @@ const readLocalTrackingRef = (
   if (checkResult.status !== 0 || decodeSingleLine(checkResult.stdout) !== ref) {
     throw malformedRuntimeObservation();
   }
-  const presence = runLocalGit(repositoryRoot, [
-    "show-ref",
+  const result = runLocalGit(repository, [
+    "rev-parse",
     "--verify",
     "--quiet",
-    ref,
+    `${ref}^{commit}`,
   ]);
-  if (presence.status === 1 && presence.stdout.length === 0) {
+  if (result.status === 1 && result.stdout.length === 0) {
     return Object.freeze({ ref, commitSha: null });
   }
-  if (presence.status !== 0) {
-    throw probeFailed();
-  }
-  const result = runLocalGit(repositoryRoot, ["rev-parse", "--verify", ref]);
   if (result.status !== 0) {
     throw probeFailed();
   }
   return Object.freeze({ ref, commitSha: parseCommitSha(result.stdout) });
 };
 
-const readWorktreeObservation = (
-  repositoryRoot: string,
-): WorktreeObservation => {
-  const result = runLocalGit(repositoryRoot, [
+const readRepositoryState = (
+  repository: VerifiedRepositoryRoot,
+): RepositoryStateObservation => {
+  const result = runLocalGit(repository, [
     "status",
     "--porcelain=v2",
+    "--branch",
     "--untracked-files=all",
     "--ignore-submodules=all",
     "-z",
@@ -451,19 +677,13 @@ const readWorktreeObservation = (
   if (decoded === null) {
     throw malformedRuntimeObservation();
   }
-  if (decoded.length === 0) {
-    return Object.freeze({
-      clean: true,
-      trackedChanges: 0,
-      untrackedEntries: 0,
-      unmergedEntries: 0,
-    });
-  }
-  if (!decoded.endsWith("\0")) {
+  if (decoded.length === 0 || !decoded.endsWith("\0")) {
     throw malformedRuntimeObservation();
   }
 
   const records = decoded.slice(0, -1).split("\0");
+  let head: string | undefined;
+  let branch: string | null | undefined;
   let trackedChanges = 0;
   let untrackedEntries = 0;
   let unmergedEntries = 0;
@@ -472,7 +692,30 @@ const readWorktreeObservation = (
     if (record === undefined) {
       throw malformedRuntimeObservation();
     }
-    if (record.startsWith("1 ")) {
+    if (record.startsWith("# branch.oid ")) {
+      if (head !== undefined) {
+        throw malformedRuntimeObservation();
+      }
+      head = parseCommitShaText(record.slice("# branch.oid ".length));
+    } else if (record.startsWith("# branch.head ")) {
+      if (branch !== undefined) {
+        throw malformedRuntimeObservation();
+      }
+      const observedBranch = record.slice("# branch.head ".length);
+      if (
+        observedBranch.length === 0 ||
+        observedBranch.length > PACKET_BODY_MAX_LENGTH ||
+        /[\0\r\n]/.test(observedBranch)
+      ) {
+        throw malformedRuntimeObservation();
+      }
+      branch = observedBranch === "(detached)" ? null : observedBranch;
+    } else if (
+      record.startsWith("# branch.upstream ") ||
+      record.startsWith("# branch.ab ")
+    ) {
+      // Local status metadata that is not copied into the evidence model.
+    } else if (record.startsWith("1 ")) {
       trackedChanges += 1;
     } else if (record.startsWith("2 ")) {
       trackedChanges += 1;
@@ -488,7 +731,12 @@ const readWorktreeObservation = (
       throw malformedRuntimeObservation();
     }
   }
+  if (head === undefined || branch === undefined) {
+    throw malformedRuntimeObservation();
+  }
   return Object.freeze({
+    head,
+    branch,
     clean: trackedChanges + untrackedEntries + unmergedEntries === 0,
     trackedChanges,
     untrackedEntries,
@@ -496,8 +744,8 @@ const readWorktreeObservation = (
   });
 };
 
-const readGitVersion = (repositoryRoot: string): string => {
-  const result = runLocalGit(repositoryRoot, ["--version"]);
+const readGitVersion = (repository: VerifiedRepositoryRoot): string => {
+  const result = runLocalGit(repository, ["--version"]);
   if (result.status !== 0) {
     throw probeFailed();
   }
@@ -510,6 +758,63 @@ const readGitVersion = (repositoryRoot: string): string => {
     throw malformedRuntimeObservation();
   }
   return version;
+};
+
+const worktreeObservationsEqual = (
+  left: WorktreeObservation,
+  right: WorktreeObservation,
+): boolean =>
+  left.clean === right.clean &&
+  left.trackedChanges === right.trackedChanges &&
+  left.untrackedEntries === right.untrackedEntries &&
+  left.unmergedEntries === right.unmergedEntries;
+
+const repositoryStatesEqual = (
+  left: RepositoryStateObservation,
+  right: RepositoryStateObservation,
+): boolean =>
+  left.head === right.head &&
+  left.branch === right.branch &&
+  worktreeObservationsEqual(left, right);
+
+const trackingObservationsEqual = (
+  left: LocalTrackingRefObservation,
+  right: LocalTrackingRefObservation,
+): boolean => left.ref === right.ref && left.commitSha === right.commitSha;
+
+const readRepositoryObservationOnce = (
+  repository: VerifiedRepositoryRoot,
+  defaultBranch: string,
+): RepositoryObservation =>
+  Object.freeze({
+    state: readRepositoryState(repository),
+    tracking: readLocalTrackingRef(repository, defaultBranch),
+    canonicalRuleContent: readStableCanonicalRuleContent(repository),
+  });
+
+const readStableRepositoryObservation = (
+  repository: VerifiedRepositoryRoot,
+  defaultBranch: string,
+): RepositoryObservation => {
+  const first = readRepositoryObservationOnce(repository, defaultBranch);
+  const second = readRepositoryObservationOnce(repository, defaultBranch);
+  if (
+    !repositoryStatesEqual(first.state, second.state) ||
+    !trackingObservationsEqual(first.tracking, second.tracking)
+  ) {
+    throw probeFailed();
+  }
+  if (
+    (first.canonicalRuleContent === null) !==
+      (second.canonicalRuleContent === null) ||
+    (first.canonicalRuleContent !== null &&
+      second.canonicalRuleContent !== null &&
+      !first.canonicalRuleContent.equals(second.canonicalRuleContent))
+  ) {
+    throw unsafeCanonicalRuleSource();
+  }
+  assertRepositoryIdentity(repository.path, repository.identity);
+  return first;
 };
 
 const runtimeAtom = (value: unknown): string => {
@@ -537,14 +842,11 @@ const evidenceBlock = (
 };
 
 const readRepositoryRuntimeEvidence = (
-  repositoryRoot: string,
-  defaultBranch: string,
+  observation: RepositoryObservation,
+  gitVersion: string,
 ): readonly TrustedRepositorySourceTextBlock[] => {
-  const head = readHead(repositoryRoot);
-  const branch = readBranch(repositoryRoot);
-  const tracking = readLocalTrackingRef(repositoryRoot, defaultBranch);
-  const worktree = readWorktreeObservation(repositoryRoot);
-  const gitVersion = readGitVersion(repositoryRoot);
+  const { head, branch, ...worktree } = observation.state;
+  const tracking = observation.tracking;
   const blocks = [
     evidenceBlock(
       "repo:git#head",
@@ -628,16 +930,23 @@ export class TrustedRepositorySourceReader {
     }
 
     const repositoryRoot = resolveVerifiedRepositoryRoot(project.repository.path);
+    const gitVersion = readGitVersion(repositoryRoot);
+    const observation = readStableRepositoryObservation(
+      repositoryRoot,
+      project.defaultBranch,
+    );
     const snapshot: TrustedRepositorySourceSnapshot = {
       projectId: project.id,
       repository: {
         kind: "PATH",
         path: project.repository.path,
       },
-      canonicalProjectRules: readCanonicalProjectRules(repositoryRoot),
+      canonicalProjectRules: readCanonicalProjectRules(
+        observation.canonicalRuleContent,
+      ),
       repositoryRuntimeEvidence: readRepositoryRuntimeEvidence(
-        repositoryRoot,
-        project.defaultBranch,
+        observation,
+        gitVersion,
       ),
     };
     return freezeRecursively(snapshot);

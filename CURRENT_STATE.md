@@ -90,14 +90,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PASS
 - Profile-aware Trusted Storage Snapshot Fresh Independent QA: PASS
 - Profile-aware Trusted Storage Snapshot ACCEPTED: YES
-- Trusted Repository Source Snapshot: IMPLEMENTED
-- Trusted Repository Source Snapshot Comprehensive Hardening: PENDING
+- Trusted Repository Source Snapshot: HARDENED
+- Trusted Repository Source Snapshot Comprehensive Hardening: PASS
 - Trusted Repository Source Snapshot Fresh Independent QA: PENDING
 - Trusted Repository Source Snapshot ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Trusted Repository Source Snapshot Comprehensive Hardening**
+**Trusted Repository Source Snapshot Fresh Independent QA**
 
 Hanlin manual QA: NOT REQUIRED
 
