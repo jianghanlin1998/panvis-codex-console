@@ -750,7 +750,8 @@ describe.sequential("trusted repository source snapshot", () => {
   });
 
   it("is Packet Core and QA-class compatible without packet assembly or an S2D6a bridge", () => {
-    withSyntheticRepository({ agentsContent: "packet compatible rules" }, (repository) =>
+    const indentedRule = "  - preserve indentation\r\n    - nested rule\n";
+    withSyntheticRepository({ agentsContent: indentedRule }, (repository) =>
       withMemoryStorage((storage) => {
         seedHierarchy(storage, { kind: "PATH", path: repository.path });
         const snapshot = readSnapshot(storage);
@@ -761,19 +762,18 @@ describe.sequential("trusted repository source snapshot", () => {
           throw new Error("Expected canonical fixture hierarchy.");
         }
 
-        expect(
-          JitContextPacketCompilationInputSchema.safeParse({
-            profile: "FRESH_INDEPENDENT_QA",
-            project,
-            bigTask,
-            subtask,
-            canonicalProjectRules: snapshot.canonicalProjectRules,
-            repositoryRuntimeEvidence: snapshot.repositoryRuntimeEvidence,
-            lockedInvariants: [],
-            qaInstructions: [],
-            boundedRetestTargets: [],
-          }).success,
-        ).toBe(true);
+        const parsed = JitContextPacketCompilationInputSchema.parse({
+          profile: "FRESH_INDEPENDENT_QA",
+          project,
+          bigTask,
+          subtask,
+          canonicalProjectRules: snapshot.canonicalProjectRules,
+          repositoryRuntimeEvidence: snapshot.repositoryRuntimeEvidence,
+          lockedInvariants: [],
+          qaInstructions: [],
+          boundedRetestTargets: [],
+        });
+        expect(parsed.canonicalProjectRules[0]?.body).toBe(indentedRule);
 
         const candidates = [
           ...snapshot.canonicalProjectRules.map(({ sourceReference }) => ({

@@ -115,6 +115,12 @@ authenticate their provenance. S2D6a `DeterministicEngineeringFactData` is not
 automatically converted into trusted evidence. S2D5a snapshot-shaped DATA is
 not an input and no accepted Promoted Context field or retrieval bridge exists.
 
+For every Packet text block, `sourceReference` and `title` remain
+trim-normalized and non-empty. A valid `body` preserves the caller's original
+string and whitespace exactly, must be nonblank after trimming, and is bounded
+to 4,000 JavaScript UTF-16 code units before any trimming. These DATA-shape
+rules add no trust, provenance, authorization, or compiler-origin semantics.
+
 The packet contains no raw history, chat, Digest, search result, Promoted
 Context payload, provider message array, final prompt string, Codex request, or
 budget result. The accepted compiled-context policy remains a 10,000-token

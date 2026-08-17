@@ -82,10 +82,11 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-S2D6A-HARD-002: CLOSED
 - CTC-S2D6A-HARD-003: CLOSED
 - S2D6a ACCEPTED: YES
-- JIT Context Packet Core Contract: ACCEPTED
+- JIT Context Packet Core Contract: HARDENED / REOPENED FOR WHITESPACE REPAIR
 - JIT Context Packet Core Comprehensive Hardening: PASS
-- JIT Context Packet Core Fresh Independent QA: PASS
-- JIT Context Packet Core ACCEPTED: YES
+- JIT Context Packet Core prior Fresh Independent QA: PASS on pre-repair SHA
+- JIT Context Packet Core Focused Fresh Re-QA — text-block body whitespace: PENDING
+- JIT Context Packet Core ACCEPTED: NO — pending focused re-QA
 - Profile-aware Trusted Storage Snapshot: ACCEPTED
 - Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PASS
 - Profile-aware Trusted Storage Snapshot Fresh Independent QA: PASS
@@ -97,10 +98,10 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**JIT Operational Integration — Trusted QA Source Integration Product Decision**
+**JIT Context Packet Core Focused Fresh Re-QA — text-block body whitespace**
 
-- Determine the smallest deterministic trusted source for `QA_INSTRUCTION`; `LOCKED_INVARIANT`, if any trusted explicit source exists; and future `BOUNDED_RETEST_TARGET` origin and timing.
-- Integration caveat: Trusted Repository Source Snapshot preserves rule-source content, but the ACCEPTED JIT Packet Core text-block schema normalizes outer whitespace. Before operational packet assembly, verify that repository-rule semantics are not silently altered at that boundary.
+- Re-verify the repaired Packet text-block body contract independently.
+- Keep operational packet assembly deferred until focused re-QA passes.
 
 Hanlin manual QA: NOT REQUIRED
 

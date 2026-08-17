@@ -15,11 +15,16 @@ import {
 const compactText = (maximumLength: number) =>
   z.string().trim().min(1).max(maximumLength);
 
+const preservedPacketBody = z
+  .string()
+  .max(4_000)
+  .refine((value) => value.trim().length > 0);
+
 const PacketTextBlockSchema = z
   .object({
     sourceReference: compactText(2_048),
     title: compactText(256),
-    body: compactText(4_000),
+    body: preservedPacketBody,
   })
   .strict();
 

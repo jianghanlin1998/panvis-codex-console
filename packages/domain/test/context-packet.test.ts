@@ -82,6 +82,9 @@ const block = (sourceReference: string, body = `Body for ${sourceReference}.`) =
   body,
 });
 
+const preservedWhitespaceBody =
+  "\n\t  - Markdown rule: 雪😀\r\n    continued indentation\t \n";
+
 const makeContextItem = (
   id: string,
   scope: "PROJECT" | "BIG_TASK" | "SUBTASK",
@@ -395,6 +398,126 @@ describe("strict classified blocks and clean QA inputs", () => {
         }).success,
       ).toBe(false);
     }
+  });
+
+  it("preserves every Packet text-block body during compilation-input parsing", () => {
+    const input = makeFocusedReQaInput();
+    input.canonicalProjectRules = [block("rule://whitespace", preservedWhitespaceBody)];
+    input.repositoryRuntimeEvidence = [
+      block("evidence://whitespace", preservedWhitespaceBody),
+    ];
+    input.lockedInvariants = [block("invariant://whitespace", preservedWhitespaceBody)];
+    input.qaInstructions = [block("qa://whitespace", preservedWhitespaceBody)];
+
+    const parsed = JitContextPacketCompilationInputSchema.parse(input);
+    if (parsed.profile === "STANDARD_SUBTASK_EXECUTION") {
+      throw new Error("Expected a QA compilation input.");
+    }
+    expect(parsed.canonicalProjectRules[0]?.body).toBe(preservedWhitespaceBody);
+    expect(parsed.repositoryRuntimeEvidence[0]?.body).toBe(preservedWhitespaceBody);
+    expect(parsed.lockedInvariants[0]?.body).toBe(preservedWhitespaceBody);
+    expect(parsed.qaInstructions[0]?.body).toBe(preservedWhitespaceBody);
+  });
+
+  it("preserves Packet text-block bodies during final packet parsing", () => {
+    const compiledPacket = requirePacket(makeFocusedReQaInput());
+    if (compiledPacket.profile !== "FOCUSED_RE_QA") {
+      throw new Error("Expected a Focused Re-QA packet.");
+    }
+    const packet = structuredClone(compiledPacket);
+    packet.sections[0].blocks[0]!.body = preservedWhitespaceBody;
+    packet.sections[1].blocks[0]!.body = preservedWhitespaceBody;
+    packet.sections[6].blocks[0]!.body = preservedWhitespaceBody;
+    packet.sections[7].blocks[0]!.body = preservedWhitespaceBody;
+
+    const parsed = JitContextPacketSchema.parse(packet);
+    if (parsed.profile !== "FOCUSED_RE_QA") {
+      throw new Error("Expected a Focused Re-QA packet.");
+    }
+    expect(parsed.sections[0].blocks[0]?.body).toBe(preservedWhitespaceBody);
+    expect(parsed.sections[1].blocks[0]?.body).toBe(preservedWhitespaceBody);
+    expect(parsed.sections[6].blocks[0]?.body).toBe(preservedWhitespaceBody);
+    expect(parsed.sections[7].blocks[0]?.body).toBe(preservedWhitespaceBody);
+  });
+
+  it("preserves Packet text-block bodies through every compiler profile", () => {
+    const standard = makeStandardInput();
+    standard.canonicalProjectRules = [block("rule://standard", preservedWhitespaceBody)];
+    standard.repositoryRuntimeEvidence = [
+      block("evidence://standard", preservedWhitespaceBody),
+    ];
+    const standardPacket = requirePacket(standard);
+    expect(standardPacket.sections[0].blocks[0]?.body).toBe(preservedWhitespaceBody);
+    expect(standardPacket.sections[1].blocks[0]?.body).toBe(preservedWhitespaceBody);
+
+    const fresh = makeFreshQaInput();
+    fresh.canonicalProjectRules = [block("rule://fresh", preservedWhitespaceBody)];
+    fresh.repositoryRuntimeEvidence = [block("evidence://fresh", preservedWhitespaceBody)];
+    fresh.lockedInvariants = [block("invariant://fresh", preservedWhitespaceBody)];
+    fresh.qaInstructions = [block("qa://fresh", preservedWhitespaceBody)];
+    const freshPacket = requireFreshQaPacket(fresh);
+    for (const sectionIndex of [0, 1, 6, 7] as const) {
+      expect(freshPacket.sections[sectionIndex].blocks[0]?.body).toBe(
+        preservedWhitespaceBody,
+      );
+    }
+
+    const focused = makeFocusedReQaInput();
+    focused.canonicalProjectRules = [block("rule://focused", preservedWhitespaceBody)];
+    focused.repositoryRuntimeEvidence = [
+      block("evidence://focused", preservedWhitespaceBody),
+    ];
+    focused.lockedInvariants = [block("invariant://focused", preservedWhitespaceBody)];
+    focused.qaInstructions = [block("qa://focused", preservedWhitespaceBody)];
+    const focusedPacket = requirePacket(focused);
+    if (focusedPacket.profile !== "FOCUSED_RE_QA") {
+      throw new Error("Expected a Focused Re-QA packet.");
+    }
+    for (const sectionIndex of [0, 1, 6, 7] as const) {
+      expect(focusedPacket.sections[sectionIndex].blocks[0]?.body).toBe(
+        preservedWhitespaceBody,
+      );
+    }
+  });
+
+  it("bounds the original preserved body and rejects every blank whitespace form", () => {
+    const parseBody = (body: string) =>
+      JitContextPacketCompilationInputSchema.safeParse({
+        ...makeStandardInput(),
+        canonicalProjectRules: [block("rule://body-bound", body)],
+      });
+
+    const exactBound = `${"x".repeat(3_998)}😀`;
+    const exactResult = parseBody(exactBound);
+    expect(exactBound).toHaveLength(4_000);
+    expect(exactResult.success).toBe(true);
+    if (exactResult.success) {
+      expect(exactResult.data.canonicalProjectRules[0]?.body).toBe(exactBound);
+    }
+    expect(parseBody(`${exactBound}x`).success).toBe(false);
+    expect(parseBody(`${" ".repeat(4_000)}x`).success).toBe(false);
+
+    for (const blankBody of [" ", "\n", "\r\n", "\t", " \n\r\n\t  "]) {
+      expect(parseBody(blankBody).success).toBe(false);
+    }
+  });
+
+  it("keeps sourceReference and title trim-normalized while preserving body", () => {
+    const parsed = JitContextPacketCompilationInputSchema.parse({
+      ...makeStandardInput(),
+      canonicalProjectRules: [
+        {
+          sourceReference: "  rule://trimmed  ",
+          title: "  Trimmed title  ",
+          body: preservedWhitespaceBody,
+        },
+      ],
+    });
+    expect(parsed.canonicalProjectRules[0]).toEqual({
+      sourceReference: "rule://trimmed",
+      title: "Trimmed title",
+      body: preservedWhitespaceBody,
+    });
   });
 
   it("treats structurally valid evidence as DATA without asserting trust", () => {
