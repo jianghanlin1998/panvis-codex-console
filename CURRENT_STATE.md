@@ -90,14 +90,17 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PASS
 - Profile-aware Trusted Storage Snapshot Fresh Independent QA: PASS
 - Profile-aware Trusted Storage Snapshot ACCEPTED: YES
-- Trusted Repository Source Snapshot: HARDENED
+- Trusted Repository Source Snapshot: ACCEPTED
 - Trusted Repository Source Snapshot Comprehensive Hardening: PASS
-- Trusted Repository Source Snapshot Fresh Independent QA: PENDING
-- Trusted Repository Source Snapshot ACCEPTED: NO
+- Trusted Repository Source Snapshot Fresh Independent QA: PASS
+- Trusted Repository Source Snapshot ACCEPTED: YES
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Trusted Repository Source Snapshot Fresh Independent QA**
+**JIT Operational Integration — Trusted QA Source Integration Product Decision**
+
+- Determine the smallest deterministic trusted source for `QA_INSTRUCTION`; `LOCKED_INVARIANT`, if any trusted explicit source exists; and future `BOUNDED_RETEST_TARGET` origin and timing.
+- Integration caveat: Trusted Repository Source Snapshot preserves rule-source content, but the ACCEPTED JIT Packet Core text-block schema normalizes outer whitespace. Before operational packet assembly, verify that repository-rule semantics are not silently altered at that boundary.
 
 Hanlin manual QA: NOT REQUIRED
 
