@@ -23,3 +23,13 @@ export type {
   JitContextStorageSourceSnapshot,
   OpenTaskDatabaseOptions,
 } from "./task-storage.js";
+
+export {
+  TrustedRepositorySourceError,
+  TrustedRepositorySourceReader,
+} from "./trusted-repository-source.js";
+export type {
+  TrustedRepositorySourceErrorCode,
+  TrustedRepositorySourceSnapshot,
+  TrustedRepositorySourceTextBlock,
+} from "./trusted-repository-source.js";

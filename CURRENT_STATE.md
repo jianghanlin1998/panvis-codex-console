@@ -90,12 +90,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Profile-aware Trusted Storage Snapshot Comprehensive Hardening: PASS
 - Profile-aware Trusted Storage Snapshot Fresh Independent QA: PASS
 - Profile-aware Trusted Storage Snapshot ACCEPTED: YES
+- Trusted Repository Source Snapshot: IMPLEMENTED
+- Trusted Repository Source Snapshot Comprehensive Hardening: PENDING
+- Trusted Repository Source Snapshot Fresh Independent QA: PENDING
+- Trusted Repository Source Snapshot ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**JIT Operational Integration — Trusted Classified Source Integration Product Decision**
-
-Determine how future packet assembly obtains and classifies additional trusted sources such as canonical Project rules, repository/runtime evidence, and QA instructions or bounded retest targets where applicable.
+**Trusted Repository Source Snapshot Comprehensive Hardening**
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -103,7 +105,9 @@ Hanlin manual QA: NOT REQUIRED
 - browser Console UI or daemon/local service
 - TODO -> IN_PROGRESS start orchestration, repair/re-entry, or later maturity mutation
 - scheduling, concurrency control, or `WHEN_READY` execution
-- trusted classified Project-rule and repository/runtime-evidence integration
+- operational use of the trusted repository source snapshot in packet assembly
+- trusted QA-instruction or locked-invariant source
+- trusted bounded-retest-target source
 - operational JIT packet assembly or orchestration
 - accepted Promoted Context retrieval or injection
 - Digest integration or raw-history injection

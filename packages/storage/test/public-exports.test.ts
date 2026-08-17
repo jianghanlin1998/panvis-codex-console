@@ -13,6 +13,8 @@ import {
   taskDependenciesTable,
   TaskStorage,
   TaskStorageError,
+  TrustedRepositorySourceError,
+  TrustedRepositorySourceReader,
 } from "@codex-task-console/storage";
 import type {
   ActiveContextItemBucket,
@@ -20,6 +22,9 @@ import type {
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
   JitContextStorageSourceSnapshot,
+  TrustedRepositorySourceErrorCode,
+  TrustedRepositorySourceSnapshot,
+  TrustedRepositorySourceTextBlock,
 } from "@codex-task-console/storage";
 
 describe("storage package public exports", () => {
@@ -27,6 +32,8 @@ describe("storage package public exports", () => {
     expect(openTaskDatabase).toBeTypeOf("function");
     expect(TaskStorage).toBeTypeOf("function");
     expect(TaskStorageError).toBeTypeOf("function");
+    expect(TrustedRepositorySourceReader).toBeTypeOf("function");
+    expect(TrustedRepositorySourceError).toBeTypeOf("function");
     expect(STORAGE_ERROR_CODES).toContain("MIGRATION_FAILED");
     expect(projectsTable).toBeDefined();
     expect(bigTasksTable).toBeDefined();
@@ -41,5 +48,8 @@ describe("storage package public exports", () => {
     expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
     expectTypeOf<AllowedRawContextItemSnapshot>().toBeObject();
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
+    expectTypeOf<TrustedRepositorySourceSnapshot>().toBeObject();
+    expectTypeOf<TrustedRepositorySourceTextBlock>().toBeObject();
+    expectTypeOf<TrustedRepositorySourceErrorCode>().toBeString();
   });
 });

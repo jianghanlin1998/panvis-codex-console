@@ -1560,7 +1560,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
     });
   });
 
-  it("adds no schema, migration, write, compiler, consumer, or deferred integration", () => {
+  it("adds no schema, migration, write, compiler, or deferred integration and limits the approved consumer", () => {
     withTemporaryDatabasePath((databasePath) => {
       const storage = openTaskDatabase({ databasePath, clock: fixedClock });
       seedTopology(storage);
@@ -1618,14 +1618,23 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
       .filter(({ path }) => path.includes("/storage/src/"))
       .map(({ source }) => source)
       .join("\n");
-    const allSource = sources.map(({ source }) => source).join("\n");
+    const consumers = sources.flatMap(({ path, source }) =>
+      (source.match(/\.readJitContextSourceSnapshotForSubtask\s*\(/g) ?? []).map(
+        () => path,
+      ),
+    );
     expect(
       (storageSource.match(/compileJitContextPacket\s*\(/g) ?? []).length,
     ).toBe(0);
-    expect(
-      (allSource.match(/\.readJitContextSourceSnapshotForSubtask\s*\(/g) ?? [])
-        .length,
-    ).toBe(0);
+    expect(consumers).toHaveLength(1);
+    expect(consumers[0]?.endsWith("/storage/src/trusted-repository-source.ts"))
+      .toBe(true);
+    const trustedRepositorySource = sources.find(({ path }) =>
+      path.endsWith("/storage/src/trusted-repository-source.ts"),
+    )?.source;
+    expect(trustedRepositorySource).toMatch(
+      /readJitContextSourceSnapshotForSubtask\(\s*input,\s*"FRESH_INDEPENDENT_QA",\s*\)/,
+    );
     expect(storageSource).not.toMatch(
       /acceptedPromotedContext|rawHistory|providerSerialization|tokenMeter|budgetPrun|Codex App Server/i,
     );
