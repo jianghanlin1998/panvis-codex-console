@@ -4,6 +4,7 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -275,6 +276,25 @@ const applicationRows = (databasePath: string): string => {
   }
 };
 
+const applicationDatabaseFingerprint = (databasePath: string): object => {
+  const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return {
+      rows: applicationRows(databasePath),
+      schema: sqlite
+        .prepare(
+          "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name",
+        )
+        .all(),
+      migrations: sqlite
+        .prepare("SELECT * FROM __drizzle_migrations ORDER BY id")
+        .all(),
+    };
+  } finally {
+    sqlite.close();
+  }
+};
+
 const fileHash = (path: string): string =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
 
@@ -311,6 +331,17 @@ const collectPropertyNames = (
   }
   return names;
 };
+
+const storageProductionSource = (): string =>
+  readdirSync(new URL("../src/", import.meta.url), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) =>
+      readFileSync(new URL(`../src/${entry.name}`, import.meta.url), {
+        encoding: "utf8",
+      }),
+    )
+    .join("\n");
 
 describe.sequential("Operational Context Assembly V0", () => {
   it("assembles the exact Standard vertical packet from trusted producers", () => {
@@ -384,6 +415,278 @@ describe.sequential("Operational Context Assembly V0", () => {
     );
   });
 
+  it("composes only the independently expected Standard sources in accepted storage order", () => {
+    withSyntheticRepository(RULES_BODY, (repository) =>
+      withMemoryStorage((storage) => {
+        const project = storage.createProject(
+          ProjectSchema.parse({
+            ...makeProject(PROJECT_ID, "operational-context-exact"),
+            name: "Exact target Project",
+            repository: { kind: "PATH", path: repository.path },
+          }),
+        );
+        const bigTask = storage.createBigTask({
+          ...makeBigTask(BIG_TASK_ID, PROJECT_ID),
+          title: "Exact target Big Task",
+          goal: "Keep exact source ownership.",
+          rationale: "Prevent cross-source widening.",
+          scopeIn: ["Exact assembly"],
+          scopeOut: ["Ranking", "Conflict resolution"],
+          acceptanceCriteria: ["Big Task criterion A", "Big Task criterion B"],
+        });
+        const subtask = storage.createSubtask({
+          ...makeSubtask(SUBTASK_ID, BIG_TASK_ID),
+          title: "Exact target Subtask",
+          goal: "Compile one exact packet.",
+          scopeIn: ["Trusted composition"],
+          scopeOut: ["Provider execution"],
+          acceptanceCriteria: ["Subtask criterion A", "Subtask criterion B"],
+          untouchedAreas: ["Accepted producers"],
+          recommendedReasoningLevel: "MEDIUM",
+          promptSeed: "Use only exact accepted sources.",
+        });
+
+        storage.createBigTask(
+          makeBigTask("bt_operational_sibling", PROJECT_ID),
+        );
+        storage.createSubtask(
+          makeSubtask("st_operational_sibling", BIG_TASK_ID),
+        );
+        storage.createSubtask(
+          makeSubtask("st_other_big", "bt_operational_sibling"),
+        );
+        const foreignProjectId = ProjectIdSchema.parse(
+          "prj_operational_foreign",
+        );
+        storage.createProject(
+          ProjectSchema.parse({
+            ...makeProject(foreignProjectId, "operational-context-foreign"),
+            repository: { kind: "PATH", path: repository.path },
+          }),
+        );
+        storage.createBigTask(
+          makeBigTask("bt_operational_foreign", foreignProjectId),
+        );
+        storage.createSubtask(
+          makeSubtask("st_operational_foreign", "bt_operational_foreign"),
+        );
+
+        const projectScope = ContextScopeSchema.parse({
+          scopeType: "PROJECT",
+          projectId: PROJECT_ID,
+        });
+        const bigTaskScope = ContextScopeSchema.parse({
+          scopeType: "BIG_TASK",
+          projectId: PROJECT_ID,
+          bigTaskId: BIG_TASK_ID,
+        });
+        const subtaskScope = ContextScopeSchema.parse({
+          scopeType: "SUBTASK",
+          projectId: PROJECT_ID,
+          bigTaskId: BIG_TASK_ID,
+          subtaskId: SUBTASK_ID,
+        });
+        const projectLater = storage.createContextItem(
+          makeContextItem("ctx_exact_project_later", projectScope, {
+            body: "CONTRADICTORY_MODE=B",
+            effectiveAt: "2026-08-17T02:00:00.000Z",
+          }),
+        );
+        const projectEarlier = storage.createContextItem(
+          makeContextItem("ctx_exact_project_earlier", projectScope, {
+            body: "CONTRADICTORY_MODE=A",
+            effectiveAt: "2026-08-17T01:00:00.000Z",
+          }),
+        );
+        const bigTaskContext = storage.createContextItem(
+          makeContextItem("ctx_exact_big_task", bigTaskScope),
+        );
+        const subtaskContext = storage.createContextItem(
+          makeContextItem("ctx_exact_subtask", subtaskScope),
+        );
+        storage.createContextItem(
+          makeContextItem("ctx_exact_non_active", projectScope, {
+            status: "PROPOSED",
+            body: "NON_ACTIVE_LEAK_SENTINEL",
+          }),
+        );
+        storage.createContextItem(
+          makeContextItem(
+            "ctx_exact_sibling_subtask",
+            ContextScopeSchema.parse({
+              scopeType: "SUBTASK",
+              projectId: PROJECT_ID,
+              bigTaskId: BIG_TASK_ID,
+              subtaskId: "st_operational_sibling",
+            }),
+            { body: "SIBLING_SUBTASK_LEAK_SENTINEL" },
+          ),
+        );
+        storage.createContextItem(
+          makeContextItem(
+            "ctx_exact_sibling_big_task",
+            ContextScopeSchema.parse({
+              scopeType: "BIG_TASK",
+              projectId: PROJECT_ID,
+              bigTaskId: "bt_operational_sibling",
+            }),
+            { body: "SIBLING_BIG_TASK_LEAK_SENTINEL" },
+          ),
+        );
+        storage.createContextItem(
+          makeContextItem(
+            "ctx_exact_foreign",
+            ContextScopeSchema.parse({
+              scopeType: "PROJECT",
+              projectId: foreignProjectId,
+            }),
+            { body: "FOREIGN_PROJECT_LEAK_SENTINEL" },
+          ),
+        );
+
+        writeFileSync(join(repository.path, "tracked.txt"), "dirty tracked\n", {
+          encoding: "utf8",
+        });
+        writeFileSync(join(repository.path, "untracked.txt"), "untracked\n", {
+          encoding: "utf8",
+        });
+
+        const packet = new OperationalJitContextAssembler(
+          storage,
+        ).assembleOperationalJitContextPacketForSubtask(
+          SUBTASK_ID,
+          "STANDARD_SUBTASK_EXECUTION",
+        );
+        const gitVersion = gitOutput(repository.path, ["--version"]);
+
+        expect(packet).toEqual({
+          profile: "STANDARD_SUBTASK_EXECUTION",
+          sections: [
+            {
+              sectionType: "CANONICAL_PROJECT_RULES",
+              reasonIncluded: "CANONICAL_PROJECT_RULES",
+              blocks: [
+                {
+                  sourceReference: "repo:AGENTS.md",
+                  title: "Repository root AGENTS.md",
+                  body: RULES_BODY,
+                },
+              ],
+            },
+            {
+              sectionType: "REPOSITORY_RUNTIME_EVIDENCE",
+              reasonIncluded: "REPOSITORY_RUNTIME_EVIDENCE",
+              blocks: [
+                {
+                  sourceReference: "repo:git#head",
+                  title: "Local repository HEAD",
+                  body: `Local repository HEAD commit observation: ${repository.head}.`,
+                },
+                {
+                  sourceReference: "repo:git#branch",
+                  title: "Local repository branch state",
+                  body: 'Local repository branch state: ATTACHED "main".',
+                },
+                {
+                  sourceReference: "repo:git#local-origin-default-branch",
+                  title: "Local origin/default-branch tracking ref",
+                  body: `Local remote-tracking ref "refs/remotes/origin/main": ${repository.head}. This is local state only and is not live origin or GitHub truth.`,
+                },
+                {
+                  sourceReference: "repo:git#worktree",
+                  title: "Local repository worktree state",
+                  body: "Local worktree state: DIRTY; tracked changes 1; untracked entries 1; unmerged/conflict entries 0.",
+                },
+                {
+                  sourceReference: "probe:runtime#toolchain",
+                  title: "Producer/probe runtime observation",
+                  body: `Producer/probe runtime: Node ${JSON.stringify(process.version)}; OS/platform ${JSON.stringify(process.platform)}; architecture ${JSON.stringify(process.arch)}; Git ${JSON.stringify(gitVersion)}. These are producer observations, not target repository requirements.`,
+                },
+              ],
+            },
+            {
+              sectionType: "PROJECT_CORE",
+              reasonIncluded: "CURRENT_PROJECT_CORE",
+              project: {
+                id: project.id,
+                name: project.name,
+                slug: project.slug,
+                repository: project.repository,
+                defaultBranch: project.defaultBranch,
+              },
+            },
+            {
+              sectionType: "BIG_TASK_CONTRACT",
+              reasonIncluded: "CURRENT_BIG_TASK_CONTRACT",
+              bigTask: {
+                id: bigTask.id,
+                projectId: bigTask.projectId,
+                title: bigTask.title,
+                goal: bigTask.goal,
+                rationale: bigTask.rationale,
+                scopeIn: bigTask.scopeIn,
+                scopeOut: bigTask.scopeOut,
+              },
+            },
+            {
+              sectionType: "SUBTASK_CONTRACT",
+              reasonIncluded: "CURRENT_SUBTASK_CONTRACT",
+              subtask: {
+                id: subtask.id,
+                bigTaskId: subtask.bigTaskId,
+                title: subtask.title,
+                goal: subtask.goal,
+                scopeIn: subtask.scopeIn,
+                scopeOut: subtask.scopeOut,
+                untouchedAreas: subtask.untouchedAreas,
+              },
+            },
+            {
+              sectionType: "ACCEPTANCE_CRITERIA",
+              reasonIncluded: "CURRENT_ACCEPTANCE_CRITERIA",
+              acceptanceCriteria: {
+                bigTask: {
+                  bigTaskId: bigTask.id,
+                  criteria: bigTask.acceptanceCriteria,
+                },
+                subtask: {
+                  subtaskId: subtask.id,
+                  criteria: subtask.acceptanceCriteria,
+                },
+              },
+            },
+            {
+              sectionType: "EXECUTION_INTENT",
+              reasonIncluded: "STANDARD_EXECUTION_INTENT",
+              executionIntent: {
+                recommendedReasoningLevel: subtask.recommendedReasoningLevel,
+                promptSeed: subtask.promptSeed,
+              },
+            },
+            {
+              sectionType: "ACTIVE_PROJECT_CONTEXT",
+              reasonIncluded: "ALREADY_SELECTED_ACTIVE_PROJECT_CONTEXT",
+              items: [projectEarlier, projectLater],
+            },
+            {
+              sectionType: "ACTIVE_BIG_TASK_CONTEXT",
+              reasonIncluded: "ALREADY_SELECTED_ACTIVE_BIG_TASK_CONTEXT",
+              items: [bigTaskContext],
+            },
+            {
+              sectionType: "ACTIVE_SUBTASK_CONTEXT",
+              reasonIncluded: "ALREADY_SELECTED_ACTIVE_SUBTASK_CONTEXT",
+              items: [subtaskContext],
+            },
+          ],
+        });
+        expect(JSON.stringify(packet)).not.toMatch(
+          /NON_ACTIVE_LEAK|SIBLING_(?:SUBTASK|BIG_TASK)_LEAK|FOREIGN_PROJECT_LEAK/,
+        );
+      }),
+    );
+  });
+
   it("assembles Fresh QA with zero generic Context Item retrieval or leakage", () => {
     withSyntheticRepository(RULES_BODY, (repository) =>
       withMemoryStorage((storage) => {
@@ -430,6 +733,43 @@ describe.sequential("Operational Context Assembly V0", () => {
     );
   });
 
+  it("assembles Fresh QA when any generic Context Item retrieval would fail", () => {
+    withSyntheticRepository(RULES_BODY, (repository) =>
+      withTemporaryDatabasePath((databasePath) => {
+        const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+        try {
+          seedHierarchy(storage, repository.path);
+          seedActiveContext(storage, "ctx_forbidden_query");
+          mutateDatabase(
+            databasePath,
+            "ALTER TABLE context_items RENAME TO context_items_blocked",
+          );
+
+          const assembler = new OperationalJitContextAssembler(storage);
+          const packet = assembler.assembleOperationalJitContextPacketForSubtask(
+            SUBTASK_ID,
+            "FRESH_INDEPENDENT_QA",
+          );
+          expect(packet.profile).toBe("FRESH_INDEPENDENT_QA");
+          expect(JSON.stringify(packet)).not.toMatch(
+            /CTX_FORBIDDEN_QUERY_SENTINEL|context_items_blocked/,
+          );
+
+          expect(
+            captureAssemblyError(() =>
+              assembler.assembleOperationalJitContextPacketForSubtask(
+                SUBTASK_ID,
+                "STANDARD_SUBTASK_EXECUTION",
+              ),
+            ).code,
+          ).toBe("TRUSTED_STORAGE_SOURCE_FAILED");
+        } finally {
+          storage.close();
+        }
+      }),
+    );
+  });
+
   it("fails closed for Focused Re-QA and unknown profiles", () => {
     withMemoryStorage((storage) => {
       const assembler = new OperationalJitContextAssembler(storage);
@@ -449,6 +789,50 @@ describe.sequential("Operational Context Assembly V0", () => {
           ),
         ).code,
       ).toBe("UNSUPPORTED_PROFILE");
+    });
+  });
+
+  it.each([
+    { name: "empty string", profile: "", code: "UNSUPPORTED_PROFILE" },
+    { name: "whitespace string", profile: "   ", code: "UNSUPPORTED_PROFILE" },
+    { name: "number", profile: 0, code: "INVALID_INPUT" },
+    { name: "null", profile: null, code: "INVALID_INPUT" },
+    { name: "array", profile: [], code: "INVALID_INPUT" },
+    {
+      name: "plain object",
+      profile: { profile: "FRESH_INDEPENDENT_QA" },
+      code: "INVALID_INPUT",
+    },
+    { name: "symbol", profile: Symbol("PROFILE_SENTINEL"), code: "INVALID_INPUT" },
+    {
+      name: "function",
+      profile: () => "PROFILE_SENTINEL",
+      code: "INVALID_INPUT",
+    },
+    {
+      name: "hostile Proxy",
+      profile: new Proxy(
+        {},
+        {
+          get() {
+            throw new Error("PROFILE_PROXY_SENTINEL");
+          },
+        },
+      ),
+      code: "INVALID_INPUT",
+    },
+  ] as const)("fails closed before trusted reads for a $name profile", ({ profile, code }) => {
+    withMemoryStorage((storage) => {
+      const assembler = new OperationalJitContextAssembler(storage);
+      const invoke =
+        assembler.assembleOperationalJitContextPacketForSubtask.bind(
+          assembler,
+        ) as (subtaskId: unknown, requestedProfile: unknown) => unknown;
+      const error = captureAssemblyError(() => invoke(SUBTASK_ID, profile));
+      expect(error.code).toBe(code);
+      expect(error.message).not.toMatch(
+        /PROFILE_(?:PROXY_)?SENTINEL|sqlite|Zod|Proxy/i,
+      );
     });
   });
 
@@ -573,6 +957,78 @@ describe.sequential("Operational Context Assembly V0", () => {
     );
   });
 
+  it.each([
+    {
+      name: "Subtask contract",
+      profile: "FRESH_INDEPENDENT_QA",
+      mutate: (databasePath: string) =>
+        mutateDatabase(
+          databasePath,
+          "UPDATE subtasks SET goal = ? WHERE id = ?",
+          "DRIFTED_SUBTASK_CONTRACT",
+          SUBTASK_ID,
+        ),
+    },
+    {
+      name: "acceptance criteria",
+      profile: "FRESH_INDEPENDENT_QA",
+      mutate: (databasePath: string) =>
+        mutateDatabase(
+          databasePath,
+          "UPDATE subtasks SET acceptance_criteria = ? WHERE id = ?",
+          '["DRIFTED_ACCEPTANCE_CRITERION"]',
+          SUBTASK_ID,
+        ),
+    },
+    {
+      name: "Standard ACTIVE Context Item status",
+      profile: "STANDARD_SUBTASK_EXECUTION",
+      mutate: (databasePath: string) =>
+        mutateDatabase(
+          databasePath,
+          "UPDATE context_items SET status = ? WHERE id = ?",
+          "REJECTED",
+          "ctx_operational_0",
+        ),
+    },
+  ] as const)(
+    "detects $name drift and returns no packet",
+    ({ profile, mutate }) => {
+      withSyntheticRepository(RULES_BODY, (repository) =>
+        withTemporaryDatabasePath((databasePath) => {
+          const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+          try {
+            seedHierarchy(storage, repository.path);
+            if (profile === "STANDARD_SUBTASK_EXECUTION") {
+              seedActiveContext(storage);
+            }
+            interceptStorageSnapshotReads(storage, (readNumber, invoke) => {
+              if (readNumber === 3) {
+                mutate(databasePath);
+              }
+              return invoke();
+            });
+
+            const error = captureAssemblyError(() =>
+              new OperationalJitContextAssembler(
+                storage,
+              ).assembleOperationalJitContextPacketForSubtask(
+                SUBTASK_ID,
+                profile,
+              ),
+            );
+            expect(error.code).toBe("SOURCE_DRIFT");
+            expect(error.message).not.toMatch(
+              /DRIFTED_(?:SUBTASK|ACCEPTANCE)|ctx_operational|sqlite/i,
+            );
+          } finally {
+            storage.close();
+          }
+        }),
+      );
+    },
+  );
+
   it("detects Standard ACTIVE context drift and returns no mixed packet", () => {
     withSyntheticRepository(RULES_BODY, (repository) =>
       withMemoryStorage((storage) => {
@@ -635,6 +1091,42 @@ describe.sequential("Operational Context Assembly V0", () => {
           ).code,
         ).toBe("SOURCE_DRIFT");
       }),
+    );
+  });
+
+  it("fails closed when repository-source repository identity does not correspond", () => {
+    withSyntheticRepository("target repository rules\n", (target) =>
+      withSyntheticRepository("ALTERNATE_REPOSITORY_SENTINEL\n", (alternate) =>
+        withMemoryStorage((storage) => {
+          seedHierarchy(storage, target.path);
+          interceptStorageSnapshotReads(storage, (readNumber, invoke) => {
+            const snapshot = invoke();
+            if (readNumber !== 2) {
+              return snapshot;
+            }
+            return {
+              ...snapshot,
+              project: {
+                ...snapshot.project,
+                repository: { kind: "PATH", path: alternate.path },
+              },
+            } as JitContextStorageSourceSnapshot;
+          });
+
+          const error = captureAssemblyError(() =>
+            new OperationalJitContextAssembler(
+              storage,
+            ).assembleOperationalJitContextPacketForSubtask(
+              SUBTASK_ID,
+              "FRESH_INDEPENDENT_QA",
+            ),
+          );
+          expect(error.code).toBe("SOURCE_DRIFT");
+          expect(error.message).not.toMatch(
+            /ALTERNATE_REPOSITORY_SENTINEL|ctc-operational-context/,
+          );
+        }),
+      ),
     );
   });
 
@@ -718,6 +1210,36 @@ describe.sequential("Operational Context Assembly V0", () => {
     });
   });
 
+  it("translates repository probe failure without leaking process details", () => {
+    withSyntheticRepository(RULES_BODY, (repository) =>
+      withMemoryStorage((storage) => {
+        seedHierarchy(storage, repository.path);
+        const originalPath = process.env.PATH;
+        let error: OperationalJitContextAssemblyError;
+        try {
+          process.env.PATH = "";
+          error = captureAssemblyError(() =>
+            new OperationalJitContextAssembler(
+              storage,
+            ).assembleOperationalJitContextPacketForSubtask(
+              SUBTASK_ID,
+              "FRESH_INDEPENDENT_QA",
+            ),
+          );
+        } finally {
+          if (originalPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = originalPath;
+          }
+        }
+        expect(error.code).toBe("TRUSTED_REPOSITORY_SOURCE_FAILED");
+        expect(error.message).not.toContain(repository.path);
+        expect(error.message).not.toMatch(/ENOENT|spawn|PATH|stderr|Git/i);
+      }),
+    );
+  });
+
   it("sanitizes malformed hierarchy and Packet compilation failures", () => {
     withSyntheticRepository(RULES_BODY, (repository) =>
       withTemporaryDatabasePath((databasePath) => {
@@ -772,27 +1294,68 @@ describe.sequential("Operational Context Assembly V0", () => {
     );
   });
 
-  it("performs no application database or target repository write", () => {
+  it("delegates packet structure and projections only to the accepted compiler", () => {
+    const assemblySource = readFileSync(
+      new URL("../src/operational-context-assembly.ts", import.meta.url),
+      { encoding: "utf8" },
+    );
+    const storageSource = storageProductionSource();
+
+    expect(
+      (assemblySource.match(/compileJitContextPacket\s*\(/g) ?? []).length,
+    ).toBe(1);
+    expect(
+      (storageSource.match(/compileJitContextPacket\s*\(/g) ?? []).length,
+    ).toBe(1);
+    expect(storageSource).not.toMatch(/sectionType\s*:|reasonIncluded\s*:/);
+    expect(assemblySource).not.toMatch(
+      /acceptanceCriteria\s*:|recommendedReasoningLevel|promptSeed|\.sections\b/,
+    );
+  });
+
+  it("keeps the V0 trust boundary narrow and deferred scope absent", () => {
+    const assemblySource = readFileSync(
+      new URL("../src/operational-context-assembly.ts", import.meta.url),
+      { encoding: "utf8" },
+    );
+    const storageSource = storageProductionSource();
+
+    expect(assemblySource).not.toMatch(
+      /candidateClass|callerSource|trusted\s*:|verified\s*:|authorized\s*:|signature\s*:|capability\s*:/i,
+    );
+    expect(assemblySource).not.toContain("FOCUSED_RE_QA");
+    expect(assemblySource).not.toMatch(
+      /acceptedPromotedContext|ContextDigest|rawHistory|tokenMeter|tokenBudget|budgetPrun|providerSerial|Codex App Server|executionRecord|threadRecord|worktree|daemon|scheduler|user interface/i,
+    );
+    expect(storageSource).not.toMatch(
+      /trustJitContextPacket|verifyJitContextPacket|authorizeJitContextPacket/,
+    );
+    expect(assemblySource).toContain("lockedInvariants: []");
+    expect(assemblySource).toContain("boundedRetestTargets: []");
+  });
+
+  it.each([
+    "STANDARD_SUBTASK_EXECUTION",
+    "FRESH_INDEPENDENT_QA",
+  ] as const)("performs no application database or target repository write for %s", (profile) => {
     withSyntheticRepository(RULES_BODY, (repository) =>
       withTemporaryDatabasePath((databasePath) => {
         const storage = openTaskDatabase({ databasePath, clock: fixedClock });
         try {
           seedHierarchy(storage, repository.path);
           seedActiveContext(storage);
-          const beforeDatabase = applicationRows(databasePath);
+          const beforeDatabase = applicationDatabaseFingerprint(databasePath);
           const beforeRepository = repositoryFingerprint(repository.path);
           const assembler = new OperationalJitContextAssembler(storage);
 
           assembler.assembleOperationalJitContextPacketForSubtask(
             SUBTASK_ID,
-            "STANDARD_SUBTASK_EXECUTION",
-          );
-          assembler.assembleOperationalJitContextPacketForSubtask(
-            SUBTASK_ID,
-            "FRESH_INDEPENDENT_QA",
+            profile,
           );
 
-          expect(applicationRows(databasePath)).toBe(beforeDatabase);
+          expect(applicationDatabaseFingerprint(databasePath)).toEqual(
+            beforeDatabase,
+          );
           expect(repositoryFingerprint(repository.path)).toEqual(
             beforeRepository,
           );

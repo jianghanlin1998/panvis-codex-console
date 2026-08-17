@@ -94,17 +94,17 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Trusted Repository Source Snapshot Comprehensive Hardening: PASS
 - Trusted Repository Source Snapshot Fresh Independent QA: PASS
 - Trusted Repository Source Snapshot ACCEPTED: YES
-- Operational Context Assembly V0: IMPLEMENTED
-- Operational Context Assembly V0 Comprehensive Hardening: PENDING
+- Operational Context Assembly V0: HARDENED
+- Operational Context Assembly V0 Comprehensive Hardening: PASS
 - Operational Context Assembly V0 Fresh Independent QA: PENDING
 - Operational Context Assembly V0 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Operational Context Assembly V0 Comprehensive Hardening**
+**Operational Context Assembly V0 Fresh Independent QA**
 
-- Harden the accepted V0 Standard/Fresh composition boundary without expanding
-  into deferred Focused Re-QA, token-budget, provider, persistence, or UI work.
+- Independently verify the hardened V0 Standard/Fresh composition boundary.
+- Do not mark the assembly ACCEPTED until Fresh Independent QA passes.
 
 Hanlin manual QA: NOT REQUIRED
 
