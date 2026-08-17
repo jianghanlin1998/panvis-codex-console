@@ -23,7 +23,7 @@ ACL
 -> trusted retrieval
 -> trusted selection
 -> Context Packet Core
--> deterministic budget enforcement
+-> deterministic execution-input serialization and UTF-8 byte preflight
 -> provider serialization
 -> execution
 ```
@@ -123,12 +123,12 @@ rules add no trust, provenance, authorization, or compiler-origin semantics.
 
 The packet contains no raw history, chat, Digest, search result, Promoted
 Context payload, provider message array, final prompt string, Codex request, or
-budget result. The accepted compiled-context policy remains a 10,000-token
-normal target and 16,000-token absolute cap, but this slice performs no token
-measurement, estimation, truncation, pruning, or enforcement. A future
-deterministic token-meter/budget layer must enforce that policy before provider
-execution, and a later adapter must serialize the structured packet for the
-provider.
+budget result. Packet Core itself performs no measurement, truncation, pruning,
+or enforcement. The downstream Execution Input Preflight V0 serializes the
+exact Console-owned context text, measures its UTF-8 byte length, applies a
+40,000-byte normal target and 64,000-byte absolute cap, and blocks only above
+the cap. Bytes are not tokens. Provider-reported actual token usage remains a
+separate post-start accounting signal.
 
 Compilation is pure and deterministic. Runtime inputs pass through the shared
 fail-closed structural-capture boundary, successful output is detached from

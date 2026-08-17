@@ -7,8 +7,8 @@ const BudgetPolicyShapeSchema = z
   .object({
     compiledContext: z
       .object({
-        normalTargetTokens: positiveInteger,
-        absoluteCapTokens: positiveInteger,
+        normalTargetBytes: positiveInteger,
+        absoluteCapBytes: positiveInteger,
       })
       .strict(),
     rawHistory: z
@@ -85,6 +85,22 @@ export type BudgetPolicyValidationResult =
   | { readonly valid: true; readonly policy: BudgetPolicy; readonly errors: readonly [] }
   | { readonly valid: false; readonly errors: readonly BudgetPolicyValidationError[] };
 
+export type CompiledContextByteBudgetDecision =
+  | Readonly<{
+      status: "WITHIN_TARGET" | "ABOVE_TARGET";
+      allowed: true;
+      utf8Bytes: number;
+      normalTargetBytes: 40_000;
+      absoluteCapBytes: 64_000;
+    }>
+  | Readonly<{
+      status: "HARD_CAP_EXCEEDED";
+      allowed: false;
+      utf8Bytes: number;
+      normalTargetBytes: 40_000;
+      absoluteCapBytes: 64_000;
+    }>;
+
 const validateBudgetInvariants = (
   policy: BudgetPolicy,
 ): readonly BudgetPolicyValidationError[] => {
@@ -97,10 +113,10 @@ const validateBudgetInvariants = (
     errors.push({ code, path, message });
   };
 
-  if (policy.compiledContext.normalTargetTokens > policy.compiledContext.absoluteCapTokens) {
+  if (policy.compiledContext.normalTargetBytes > policy.compiledContext.absoluteCapBytes) {
     addError(
       "COMPILED_CONTEXT_TARGET_EXCEEDS_CAP",
-      ["compiledContext", "normalTargetTokens"],
+      ["compiledContext", "normalTargetBytes"],
       "The compiled-context normal target cannot exceed its absolute cap.",
     );
   }
@@ -228,8 +244,8 @@ export const validateBudgetPolicy = (input: unknown): BudgetPolicyValidationResu
 
 export const DEFAULT_V1_BUDGET_POLICY = Object.freeze({
   compiledContext: Object.freeze({
-    normalTargetTokens: 10_000,
-    absoluteCapTokens: 16_000,
+    normalTargetBytes: 40_000,
+    absoluteCapBytes: 64_000,
   }),
   rawHistory: Object.freeze({
     singleRetrievalTokens: 4_000,
@@ -261,3 +277,43 @@ export const DEFAULT_V1_BUDGET_POLICY = Object.freeze({
     automaticSemanticRetryLoops: 0,
   }),
 }) satisfies Readonly<BudgetPolicy>;
+
+/**
+ * Classifies supplied byte-count DATA under the fixed V1 compiled-context
+ * policy. This does not measure trusted execution input or authorize execution.
+ */
+export const evaluateCompiledContextByteBudget = (
+  utf8Bytes: number,
+): CompiledContextByteBudgetDecision => {
+  if (!Number.isSafeInteger(utf8Bytes) || utf8Bytes < 0) {
+    throw new TypeError("The compiled-context UTF-8 byte measurement is invalid.");
+  }
+
+  const { normalTargetBytes, absoluteCapBytes } =
+    DEFAULT_V1_BUDGET_POLICY.compiledContext;
+  if (utf8Bytes <= normalTargetBytes) {
+    return Object.freeze({
+      status: "WITHIN_TARGET",
+      allowed: true,
+      utf8Bytes,
+      normalTargetBytes,
+      absoluteCapBytes,
+    });
+  }
+  if (utf8Bytes <= absoluteCapBytes) {
+    return Object.freeze({
+      status: "ABOVE_TARGET",
+      allowed: true,
+      utf8Bytes,
+      normalTargetBytes,
+      absoluteCapBytes,
+    });
+  }
+  return Object.freeze({
+    status: "HARD_CAP_EXCEEDED",
+    allowed: false,
+    utf8Bytes,
+    normalTargetBytes,
+    absoluteCapBytes,
+  });
+};

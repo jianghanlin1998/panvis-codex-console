@@ -5,6 +5,8 @@ import {
   bigTasksTable,
   contextDigestsTable,
   contextItemsTable,
+  ExecutionInputPreflight,
+  ExecutionInputPreflightError,
   openTaskDatabase,
   OperationalJitContextAssembler,
   OperationalJitContextAssemblyError,
@@ -23,6 +25,8 @@ import type {
   ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
+  ExecutionInputPreflightErrorCode,
+  ExecutionInputPreflightResult,
   JitContextStorageSourceSnapshot,
   OperationalJitContextAssemblyErrorCode,
   OperationalJitContextProfile,
@@ -38,6 +42,8 @@ describe("storage package public exports", () => {
     expect(TaskStorageError).toBeTypeOf("function");
     expect(OperationalJitContextAssembler).toBeTypeOf("function");
     expect(OperationalJitContextAssemblyError).toBeTypeOf("function");
+    expect(ExecutionInputPreflight).toBeTypeOf("function");
+    expect(ExecutionInputPreflightError).toBeTypeOf("function");
     expect(TrustedRepositorySourceReader).toBeTypeOf("function");
     expect(TrustedRepositorySourceError).toBeTypeOf("function");
     expect(STORAGE_ERROR_CODES).toContain("MIGRATION_FAILED");
@@ -56,6 +62,8 @@ describe("storage package public exports", () => {
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
     expectTypeOf<OperationalJitContextAssemblyErrorCode>().toBeString();
     expectTypeOf<OperationalJitContextProfile>().toBeString();
+    expectTypeOf<ExecutionInputPreflightErrorCode>().toBeString();
+    expectTypeOf<ExecutionInputPreflightResult>().toBeObject();
     expectTypeOf<TrustedRepositorySourceSnapshot>().toBeObject();
     expectTypeOf<TrustedRepositorySourceTextBlock>().toBeObject();
     expectTypeOf<TrustedRepositorySourceErrorCode>().toBeString();

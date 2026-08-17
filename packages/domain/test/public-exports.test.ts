@@ -46,6 +46,7 @@ import {
   compileJitContextPacket,
   deriveContextScope,
   evaluateContextScopeAccess,
+  evaluateCompiledContextByteBudget,
   evaluatePromotedContextAcceptanceRequirement,
   evaluatePromotedContextHumanConfirmationEvidence,
   evaluatePromotedContextRoute,
@@ -123,6 +124,7 @@ describe("domain package public exports", () => {
     expect(validateSubtaskMaturityTransition).toBeTypeOf("function");
     expect(validateSubtaskTransition).toBeTypeOf("function");
     expect(validateBudgetPolicy).toBeTypeOf("function");
+    expect(evaluateCompiledContextByteBudget).toBeTypeOf("function");
     expect(domainExports).not.toHaveProperty(
       "acceptPromotedContextFromTrustedHumanAction",
     );

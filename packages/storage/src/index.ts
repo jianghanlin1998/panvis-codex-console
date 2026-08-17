@@ -42,3 +42,12 @@ export type {
   OperationalJitContextAssemblyErrorCode,
   OperationalJitContextProfile,
 } from "./operational-context-assembly.js";
+
+export {
+  ExecutionInputPreflight,
+  ExecutionInputPreflightError,
+} from "./execution-input-preflight.js";
+export type {
+  ExecutionInputPreflightErrorCode,
+  ExecutionInputPreflightResult,
+} from "./execution-input-preflight.js";

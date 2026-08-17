@@ -1905,10 +1905,10 @@ describe("JIT Context Packet detachment, immutability, and determinism", () => {
 });
 
 describe("JIT Context Packet budget, resource, provider, and I/O boundaries", () => {
-  it("keeps the accepted 10K/16K policy unchanged without enforcement fields", () => {
+  it("keeps byte-budget enforcement outside Packet Core", () => {
     expect(DEFAULT_V1_BUDGET_POLICY.compiledContext).toEqual({
-      normalTargetTokens: 10_000,
-      absoluteCapTokens: 16_000,
+      normalTargetBytes: 40_000,
+      absoluteCapBytes: 64_000,
     });
     const packet = compileOrThrow(makeStandardInput("budget_boundary"));
     const keys = collectKeys(packet);
@@ -2325,8 +2325,8 @@ const SOURCE_TO_TEST_MAPPING = [
   "cycles contained -> cycle matrix",
   "late schedules rejected -> temporal matrix",
   "forward/reverse relay rejected -> joint relay test",
-  "10K normal target unchanged -> budget test",
-  "16K absolute cap unchanged -> budget test",
+  "40,000-byte normal target remains outside Packet Core -> budget test",
+  "64,000-byte absolute cap remains outside Packet Core -> budget test",
   "no token measurement -> source audit",
   "no character proxy -> source audit",
   "no pruning or truncation -> large packet test",

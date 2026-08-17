@@ -267,6 +267,7 @@ export {
   BudgetPolicySchema,
   BudgetPolicyValidationErrorCodeSchema,
   DEFAULT_V1_BUDGET_POLICY,
+  evaluateCompiledContextByteBudget,
   validateBudgetPolicy,
 } from "./budgets.js";
 export type {
@@ -274,6 +275,7 @@ export type {
   BudgetPolicyValidationError,
   BudgetPolicyValidationErrorCode,
   BudgetPolicyValidationResult,
+  CompiledContextByteBudgetDecision,
 } from "./budgets.js";
 
 export {

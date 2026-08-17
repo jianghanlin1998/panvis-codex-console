@@ -94,17 +94,25 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Trusted Repository Source Snapshot Comprehensive Hardening: PASS
 - Trusted Repository Source Snapshot Fresh Independent QA: PASS
 - Trusted Repository Source Snapshot ACCEPTED: YES
-- Operational Context Assembly V0: HARDENED
+- Operational Context Assembly V0: ACCEPTED
 - Operational Context Assembly V0 Comprehensive Hardening: PASS
-- Operational Context Assembly V0 Fresh Independent QA: PENDING
-- Operational Context Assembly V0 ACCEPTED: NO
+- Operational Context Assembly V0 Fresh Independent QA: PASS
+- Operational Context Assembly V0 ACCEPTED: YES
+- Execution Input Preflight V0: IMPLEMENTED
+- Execution Input Preflight V0 Comprehensive Hardening: PENDING
+- Execution Input Preflight V0 Fresh Independent QA: PENDING
+- Execution Input Preflight V0 ACCEPTED: NO
+- Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
+- Live Codex compatibility: REVALIDATION REQUIRED before execution; installed `codex-cli 0.148.0-alpha.9`, tested `codex-cli 0.147.0-alpha.6.5`.
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Operational Context Assembly V0 Fresh Independent QA**
+**Execution Input Preflight V0 Comprehensive Hardening**
 
-- Independently verify the hardened V0 Standard/Fresh composition boundary.
-- Do not mark the assembly ACCEPTED until Fresh Independent QA passes.
+- Harden the trusted serialization, UTF-8 measurement, fixed byte-budget
+  decision, fail-closed errors, and read-only boundary.
+- Do not mark Execution Input Preflight V0 ACCEPTED before hardening and Fresh
+  Independent QA pass.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -117,7 +125,7 @@ Hanlin manual QA: NOT REQUIRED
 - trusted bounded-retest-target source
 - accepted Promoted Context retrieval or injection
 - Digest integration or raw-history injection
-- token meter or budget pruning
+- token-based pre-execution metering or automatic budget pruning
 - provider serialization or live Codex App Server execution
 - execution/thread/run persistence
 - trusted deterministic evidence producer/verifier or automatic deterministic `ENGINEERING_FACT` acceptance

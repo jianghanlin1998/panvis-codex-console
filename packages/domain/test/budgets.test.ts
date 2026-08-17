@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   BudgetPolicySchema,
   DEFAULT_V1_BUDGET_POLICY,
+  evaluateCompiledContextByteBudget,
   validateBudgetPolicy,
 } from "../src/index.js";
 
@@ -14,7 +15,7 @@ const validationCodes = (policy: unknown): readonly string[] => {
 describe("V1 budget policy", () => {
   it("exactly matches every approved default", () => {
     expect(DEFAULT_V1_BUDGET_POLICY).toEqual({
-      compiledContext: { normalTargetTokens: 10_000, absoluteCapTokens: 16_000 },
+      compiledContext: { normalTargetBytes: 40_000, absoluteCapBytes: 64_000 },
       rawHistory: {
         singleRetrievalTokens: 4_000,
         automaticPerTurnTokens: 8_000,
@@ -43,12 +44,56 @@ describe("V1 budget policy", () => {
     expect(Object.isFrozen(DEFAULT_V1_BUDGET_POLICY.subtask)).toBe(true);
   });
 
+  it("rejects the superseded compiled-context token field names", () => {
+    expect(
+      BudgetPolicySchema.safeParse({
+        ...DEFAULT_V1_BUDGET_POLICY,
+        compiledContext: {
+          normalTargetTokens: 10_000,
+          absoluteCapTokens: 16_000,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects a compiled target above its cap", () => {
     const policy = {
       ...DEFAULT_V1_BUDGET_POLICY,
-      compiledContext: { ...DEFAULT_V1_BUDGET_POLICY.compiledContext, normalTargetTokens: 16_001 },
+      compiledContext: {
+        ...DEFAULT_V1_BUDGET_POLICY.compiledContext,
+        normalTargetBytes: 64_001,
+      },
     };
     expect(validationCodes(policy)).toContain("COMPILED_CONTEXT_TARGET_EXCEEDS_CAP");
+  });
+
+  it.each([
+    [0, "WITHIN_TARGET", true],
+    [1, "WITHIN_TARGET", true],
+    [39_999, "WITHIN_TARGET", true],
+    [40_000, "WITHIN_TARGET", true],
+    [40_001, "ABOVE_TARGET", true],
+    [63_999, "ABOVE_TARGET", true],
+    [64_000, "ABOVE_TARGET", true],
+    [64_001, "HARD_CAP_EXCEEDED", false],
+  ] as const)(
+    "classifies %i UTF-8 bytes with the exact fixed policy",
+    (utf8Bytes, status, allowed) => {
+      expect(evaluateCompiledContextByteBudget(utf8Bytes)).toEqual({
+        status,
+        allowed,
+        utf8Bytes,
+        normalTargetBytes: 40_000,
+        absoluteCapBytes: 64_000,
+      });
+    },
+  );
+
+  it("rejects invalid supplied measurements and accepts no caller policy", () => {
+    expect(evaluateCompiledContextByteBudget).toHaveLength(1);
+    for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => evaluateCompiledContextByteBudget(value)).toThrow(TypeError);
+    }
   });
 
   it("rejects raw-history limits in the wrong order", () => {

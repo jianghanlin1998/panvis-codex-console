@@ -63,11 +63,11 @@ capability.
 ## Readiness and deferred layers
 
 The structured packet is **not execution-ready**. The next operational layer is
-deterministic token-budget enforcement. V0 does not meter, estimate, truncate,
-prune, serialize, send, execute, persist, cache, create a thread, or modify the
-application database or target repository.
+deterministic execution-input serialization and UTF-8 byte-budget preflight.
+Assembly V0 does not meter, truncate, prune, serialize, send, execute, persist,
+cache, create a thread, or modify the application database or target repository.
 
 Focused operational assembly, a trusted bounded-retest source, a trusted locked
-invariant source, Promoted Context, Context Digests or raw history, token-budget
-enforcement, provider serialization, live Codex execution, execution records,
+invariant source, Promoted Context, Context Digests or raw history, provider
+serialization, live Codex execution, execution records,
 worktree lifecycle, scheduling, daemon behavior, and UI remain deferred.
