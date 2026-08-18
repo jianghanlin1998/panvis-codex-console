@@ -4,7 +4,7 @@ S0C establishes version-aware protocol test fixtures and an explicit repository 
 
 ## Validated protocol boundary
 
-S0C was checked on 2026-08-09 against installed `codex-cli 0.147.0-alpha.6.5`, the installed CLI's default generated TypeScript and JSON Schema bundles, and the official OpenAI Codex documentation for App Server, Skills, subagents, and configuration.
+S0C was revalidated on 2026-08-18 against installed `codex-cli 0.148.0-alpha.9`, the installed CLI's default generated TypeScript and JSON Schema bundles, and the [official OpenAI Codex App Server documentation](https://developers.openai.com/codex/app-server/). The generation used no `--experimental` flag and produced 934 temporary files. The aggregate JSON Schema bundle SHA-256 values were `9ebe992f44965fb6b033b90bc12b3283b0ce9b117d20b9120ab94a7534886970` for `codex_app_server_protocol.schemas.json` and `f63c8dd74f724835cd88c1a392cb451f903f46d8f72fec4a257df61d52867891` for `codex_app_server_protocol.v2.schemas.json`.
 
 The fixture contract covers:
 
@@ -21,7 +21,7 @@ The installed CLI labels the `app-server` command and schema-generator commands 
 
 ## Mock fixtures
 
-`fixtures/mock-app-server` provides a deterministic Node child process over stdio JSONL, a bounded test harness, and small transcripts. Scenarios cover initialization errors, thread start and resume, goal state, skill listing, ordered message streaming, fixed token usage, accepted and declined command and file approvals, interruption, sanitized failure, malformed JSON, missing and mismatched IDs, unknown methods, and disconnect with a pending approval.
+`fixtures/mock-app-server` provides a deterministic Node child process over stdio JSONL, a bounded test harness, and small transcripts. Fixture contract `1.1.0` includes the required 0.148 initialization and thread response fields while preserving the existing supported scenarios: initialization errors, thread start and resume, goal state, skill listing, ordered message streaming, fixed token usage, accepted and declined command and file approvals, interruption, sanitized failure, malformed JSON, missing and mismatched IDs, unknown methods, and disconnect with a pending approval.
 
 The mock writes protocol JSONL only to stdout and diagnostics only to stderr. It does not use network access, credentials, Codex, arbitrary shell execution, or repository writes. Fixture paths are confined to the fake `/fixture/workspace` namespace.
 

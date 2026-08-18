@@ -5,7 +5,7 @@ import {
   SUPPORTED_SERVER_REQUEST_METHODS,
 } from "./protocol.js";
 
-export const TESTED_CODEX_VERSION = "codex-cli 0.147.0-alpha.6.5" as const;
+export const TESTED_CODEX_VERSION = "codex-cli 0.148.0-alpha.9" as const;
 
 export const EXCLUDED_EXPERIMENTAL_CAPABILITIES = [
   "dynamicTools",
@@ -23,10 +23,10 @@ export interface ProtocolCompatibilityRecord {
 }
 
 export const S0C_PROTOCOL_COMPATIBILITY: ProtocolCompatibilityRecord = {
-  checkedOn: "2026-08-09",
+  checkedOn: "2026-08-18",
   codexVersion: TESTED_CODEX_VERSION,
   excludedExperimentalCapabilities: EXCLUDED_EXPERIMENTAL_CAPABILITIES,
-  fixtureVersion: "1.0.0",
+  fixtureVersion: "1.1.0",
   stableMethodsCovered: [
     ...SUPPORTED_CLIENT_REQUEST_METHODS,
     ...SUPPORTED_CLIENT_NOTIFICATION_METHODS,

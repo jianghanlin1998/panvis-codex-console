@@ -18,7 +18,12 @@ describe("mock initialization and thread lifecycle", () => {
     });
     expect(response).toMatchObject({
       id: 1,
-      result: { platformFamily: "unix", userAgent: "codex-task-console-mock/1.0.0" },
+      result: {
+        codexHome: "/fixture/codex-home",
+        platformFamily: "unix",
+        platformOs: "fixture-os",
+        userAgent: "codex-task-console-mock/1.0.0",
+      },
     });
     harness.notify("initialized");
     const thread = await harness.request(2, "thread/start");
@@ -42,13 +47,34 @@ describe("mock initialization and thread lifecycle", () => {
     });
   });
 
+  it("rejects initialize without the required client identity", async () => {
+    harness = startHarness("stream");
+    await expect(harness.request(1, "initialize")).resolves.toEqual({
+      error: { code: -32_600, message: "Valid client info is required." },
+      id: 1,
+    });
+  });
+
   it("starts a deterministic thread", async () => {
     harness = startHarness("stream");
     await initializeHarness(harness);
     const response = await harness.request(2, "thread/start");
     expect(response).toMatchObject({
       id: 2,
-      result: { thread: { id: "thread-fixture-1", sessionId: "thread-fixture-1" } },
+      result: {
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        cwd: "/fixture/workspace",
+        model: "fixture-model",
+        modelProvider: "fixture",
+        sandbox: { networkAccess: false, type: "readOnly" },
+        thread: {
+          cliVersion: "0.148.0-alpha.9",
+          id: "thread-fixture-1",
+          sessionId: "thread-fixture-1",
+          source: "cli",
+        },
+      },
     });
   });
 
@@ -71,7 +97,19 @@ describe("mock initialization and thread lifecycle", () => {
       harness.request(2, "thread/resume", { threadId: "thread-fixture-known" }),
     ).resolves.toMatchObject({
       id: 2,
-      result: { thread: { id: "thread-fixture-known" } },
+      result: {
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        cwd: "/fixture/workspace",
+        model: "fixture-model",
+        modelProvider: "fixture",
+        sandbox: { networkAccess: false, type: "readOnly" },
+        thread: {
+          cliVersion: "0.148.0-alpha.9",
+          id: "thread-fixture-known",
+          source: "cli",
+        },
+      },
     });
   });
 

@@ -81,7 +81,7 @@ describe("mock JSONL transport failures", () => {
   it("rejects an unexpected response ID", async () => {
     const result = await runRawProcess(
       [
-        '{"id":1,"method":"initialize","params":{}}',
+        '{"id":1,"method":"initialize","params":{"clientInfo":{"name":"fixture-client","version":"1.0.0"}}}',
         '{"method":"initialized","params":{}}',
         '{"id":"unexpected","result":{"decision":"accept"}}',
         "",
@@ -94,7 +94,7 @@ describe("mock JSONL transport failures", () => {
   it("fails cleanly when the client disconnects with an approval pending", async () => {
     const result = await runRawProcess(
       [
-        '{"id":1,"method":"initialize","params":{}}',
+        '{"id":1,"method":"initialize","params":{"clientInfo":{"name":"fixture-client","version":"1.0.0"}}}',
         '{"method":"initialized","params":{}}',
         '{"id":2,"method":"thread/start","params":{}}',
         '{"id":3,"method":"turn/start","params":{"threadId":"thread-fixture-1","input":[]}}',

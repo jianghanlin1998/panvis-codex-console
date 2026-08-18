@@ -1,4 +1,4 @@
 {"direction":"server-to-client","message":{"method":"item/agentMessage/delta","params":{"threadId":"thread-fixture-1","turnId":"turn-fixture-1","itemId":"item-agent-fixture-1","delta":"Partial fixture response."}}}
 {"direction":"client-to-server","message":{"id":4,"method":"turn/interrupt","params":{"threadId":"thread-fixture-1","turnId":"turn-fixture-1"}}}
 {"direction":"server-to-client","message":{"id":4,"result":{}}}
-{"direction":"server-to-client","message":{"method":"turn/completed","params":{"threadId":"thread-fixture-1","turn":{"id":"turn-fixture-1","status":"interrupted"}}}}
+{"direction":"server-to-client","message":{"method":"turn/completed","params":{"threadId":"thread-fixture-1","turn":{"id":"turn-fixture-1","items":[],"status":"interrupted"}}}}

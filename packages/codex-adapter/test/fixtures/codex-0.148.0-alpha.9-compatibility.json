@@ -1,0 +1,106 @@
+{
+  "codexVersion": "codex-cli 0.148.0-alpha.9",
+  "generatedOn": "2026-08-18",
+  "generatedWithoutExperimental": true,
+  "schemaFileCount": 934,
+  "schemaBundleSha256": {
+    "codex_app_server_protocol.schemas.json": "9ebe992f44965fb6b033b90bc12b3283b0ce9b117d20b9120ab94a7534886970",
+    "codex_app_server_protocol.v2.schemas.json": "f63c8dd74f724835cd88c1a392cb451f903f46d8f72fec4a257df61d52867891"
+  },
+  "methods": {
+    "clientRequests": [
+      "initialize",
+      "thread/start",
+      "thread/resume",
+      "turn/start",
+      "turn/interrupt",
+      "thread/goal/set",
+      "thread/goal/get",
+      "skills/list"
+    ],
+    "clientNotifications": ["initialized"],
+    "serverNotifications": [
+      "thread/started",
+      "thread/goal/updated",
+      "turn/started",
+      "item/started",
+      "item/agentMessage/delta",
+      "item/completed",
+      "thread/tokenUsage/updated",
+      "turn/completed",
+      "serverRequest/resolved"
+    ],
+    "serverRequests": [
+      "item/commandExecution/requestApproval",
+      "item/fileChange/requestApproval"
+    ]
+  },
+  "requiredRequestParams": {
+    "initialize": ["clientInfo"],
+    "thread/start": [],
+    "thread/resume": ["threadId"],
+    "turn/start": ["input", "threadId"],
+    "turn/interrupt": ["threadId", "turnId"],
+    "thread/goal/set": ["threadId"],
+    "thread/goal/get": ["threadId"],
+    "skills/list": []
+  },
+  "consumedShapes": {
+    "initializeResponseRequired": [
+      "codexHome",
+      "platformFamily",
+      "platformOs",
+      "userAgent"
+    ],
+    "threadStartResponseRequired": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread"
+    ],
+    "threadRequired": [
+      "cliVersion",
+      "createdAt",
+      "cwd",
+      "ephemeral",
+      "id",
+      "modelProvider",
+      "preview",
+      "sessionId",
+      "source",
+      "status",
+      "turns",
+      "updatedAt"
+    ],
+    "turnRequired": ["id", "items", "status"],
+    "textInputRequired": ["text", "type"],
+    "textInputDefaultFields": ["text_elements"],
+    "turnStartProperties": ["input", "model", "threadId"],
+    "threadStartProperties": [
+      "baseInstructions",
+      "developerInstructions",
+      "model",
+      "modelProvider"
+    ],
+    "threadTokenUsageRequired": ["last", "total"],
+    "threadTokenUsageProperties": ["last", "modelContextWindow", "total"],
+    "tokenUsageBreakdownRequired": [
+      "cachedInputTokens",
+      "inputTokens",
+      "outputTokens",
+      "reasoningOutputTokens",
+      "totalTokens"
+    ],
+    "commandApprovalRequired": ["itemId", "startedAtMs", "threadId", "turnId"],
+    "fileChangeApprovalRequired": ["itemId", "startedAtMs", "threadId", "turnId"],
+    "supportedApprovalDecisions": [
+      "accept",
+      "acceptForSession",
+      "cancel",
+      "decline"
+    ]
+  }
+}

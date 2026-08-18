@@ -35,6 +35,9 @@ describe("Codex provider descriptor", () => {
     expect(CODEX_APP_SERVER_PROVIDER_DESCRIPTOR.runtimeVersion).toBe(
       TESTED_CODEX_VERSION,
     );
+    expect(CODEX_APP_SERVER_PROVIDER_DESCRIPTOR.runtimeVersion).toBe(
+      "codex-cli 0.148.0-alpha.9",
+    );
   });
 
   it("claims only capabilities supported by the S0C surface", () => {
@@ -89,6 +92,26 @@ describe("Codex provider mappings", () => {
       totalTokens: 140,
     });
     expect(fixtureUsage).toEqual(before);
+  });
+
+  it("preserves optional normalized usage and rejects invalid values", () => {
+    expect(
+      mapCodexTokenUsage({
+        ...fixtureUsage,
+        reasoningOutputTokens: undefined,
+      } as unknown as TokenUsageBreakdown),
+    ).toEqual({
+      cachedInputTokens: 20,
+      inputTokens: 100,
+      outputTokens: 40,
+      totalTokens: 140,
+    });
+    expect(() =>
+      mapCodexTokenUsage({
+        ...fixtureUsage,
+        totalTokens: -1,
+      }),
+    ).toThrow();
   });
 
   it("keeps the mapping module free of filesystem, network, and process work", () => {

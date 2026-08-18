@@ -98,21 +98,21 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Operational Context Assembly V0 Comprehensive Hardening: PASS
 - Operational Context Assembly V0 Fresh Independent QA: PASS
 - Operational Context Assembly V0 ACCEPTED: YES
-- Execution Input Preflight V0: HARDENED
+- Execution Input Preflight V0: ACCEPTED
 - Execution Input Preflight V0 Comprehensive Hardening: PASS
-- Execution Input Preflight V0 Fresh Independent QA: PENDING
-- Execution Input Preflight V0 ACCEPTED: NO
+- Execution Input Preflight V0 Fresh Independent QA: PASS
+- Execution Input Preflight V0 ACCEPTED: YES
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
-- Live Codex compatibility: REVALIDATION REQUIRED before execution; installed `codex-cli 0.148.0-alpha.9`, tested `codex-cli 0.147.0-alpha.6.5`.
+- Codex App Server protocol compatibility: VALIDATED for exact installed `codex-cli 0.148.0-alpha.9`; exact-version fail-closed policy preserved.
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Execution Input Preflight V0 Fresh Independent QA**
+**Separately approved execution integration planning**
 
-- Independently verify the hardened trusted serialization, UTF-8 measurement,
-  fixed byte-budget decision, fail-closed errors, and read-only boundary.
-- Do not mark Execution Input Preflight V0 ACCEPTED before Fresh Independent QA
-  passes.
+- Design the live adapter, security boundary, lifecycle, and operational behavior
+  before authentication or model execution.
+- Do not treat protocol schema compatibility as authentication, model-turn,
+  streaming-failure, worktree-write, or production-orchestration proof.
 
 Hanlin manual QA: NOT REQUIRED
 

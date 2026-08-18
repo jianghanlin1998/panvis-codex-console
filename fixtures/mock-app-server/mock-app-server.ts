@@ -93,10 +93,15 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       sendError(id, -32_002, "Already initialized.");
       return;
     }
+    if (!hasValidClientInfo(params)) {
+      sendError(id, -32_600, "Valid client info is required.");
+      return;
+    }
     initializeReceived = true;
     send({
       id,
       result: {
+        codexHome: "/fixture/codex-home",
         platformFamily: "unix",
         platformOs: "fixture-os",
         userAgent: "codex-task-console-mock/1.0.0",
@@ -140,7 +145,7 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
 function startThread(id: RequestId): void {
   knownThreads.add(THREAD_ID);
   const thread = fixtureThread(THREAD_ID);
-  send({ id, result: { instructionSources: [], thread } });
+  send({ id, result: fixtureThreadResponse(thread) });
   send({ method: "thread/started", params: { thread } });
 }
 
@@ -150,7 +155,7 @@ function resumeThread(id: RequestId, params: JsonRecord): void {
     sendError(id, -32_004, "Unknown fixture thread.");
     return;
   }
-  send({ id, result: { instructionSources: [], thread: fixtureThread(threadId) } });
+  send({ id, result: fixtureThreadResponse(fixtureThread(threadId)) });
 }
 
 function setGoal(id: RequestId, params: JsonRecord): void {
@@ -447,6 +452,7 @@ function fileItem(status: "completed" | "declined" | "inProgress"): JsonRecord {
 
 function fixtureThread(id: string): JsonRecord {
   return {
+    cliVersion: "0.148.0-alpha.9",
     createdAt: FIXED_SECONDS,
     cwd: "/fixture/workspace",
     ephemeral: false,
@@ -454,9 +460,25 @@ function fixtureThread(id: string): JsonRecord {
     modelProvider: "fixture",
     preview: "",
     sessionId: id,
+    source: "cli",
     status: { type: "idle" },
     turns: [],
     updatedAt: FIXED_SECONDS,
+  };
+}
+
+function fixtureThreadResponse(thread: JsonRecord): JsonRecord {
+  return {
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    cwd: "/fixture/workspace",
+    instructionSources: [],
+    model: "fixture-model",
+    modelProvider: "fixture",
+    reasoningEffort: null,
+    sandbox: { networkAccess: false, type: "readOnly" },
+    serviceTier: null,
+    thread,
   };
 }
 
@@ -481,6 +503,15 @@ function readThreadId(params: JsonRecord): string | undefined {
 
 function getParams(message: JsonRecord): JsonRecord {
   return isRecord(message.params) ? message.params : {};
+}
+
+function hasValidClientInfo(params: JsonRecord): boolean {
+  const clientInfo = params.clientInfo;
+  return (
+    isRecord(clientInfo) &&
+    typeof clientInfo.name === "string" &&
+    typeof clientInfo.version === "string"
+  );
 }
 
 function sendError(id: RequestId | null, code: number, message: string): void {
