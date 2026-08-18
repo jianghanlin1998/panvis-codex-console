@@ -103,16 +103,20 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Execution Input Preflight V0 Fresh Independent QA: PASS
 - Execution Input Preflight V0 ACCEPTED: YES
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
-- Codex App Server protocol compatibility: VALIDATED for exact installed `codex-cli 0.148.0-alpha.9`; exact-version fail-closed policy preserved.
+- Codex App Server 0.148 Compatibility Revalidation: HARDENED
+- Codex App Server 0.148 Compatibility Revalidation / Bounded Hardening: PASS
+- Codex App Server 0.148 Fresh Independent Compatibility QA: PENDING
+- Codex App Server 0.148 Compatibility ACCEPTED: NO
+- Installed Codex: `codex-cli 0.148.0-alpha.9`
+- Tested Codex: `codex-cli 0.148.0-alpha.9`
+- Live Codex compatibility gate: OPEN — pending Fresh Independent Compatibility QA
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Separately approved execution integration planning**
+**Codex App Server 0.148 Fresh Independent Compatibility QA**
 
-- Design the live adapter, security boundary, lifecycle, and operational behavior
-  before authentication or model execution.
-- Do not treat protocol schema compatibility as authentication, model-turn,
-  streaming-failure, worktree-write, or production-orchestration proof.
+- Independently verify the exact-version stable protocol contract and fixture evidence.
+- Do not begin provider request construction or live execution until it passes.
 
 Hanlin manual QA: NOT REQUIRED
 
