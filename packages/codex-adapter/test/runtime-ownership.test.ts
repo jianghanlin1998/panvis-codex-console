@@ -3,12 +3,16 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -166,6 +170,151 @@ describe("owned Codex candidate resolution", () => {
     );
   });
 
+  it("rejects runtime-root, releases-root, release-directory, and binary symlinks", () => {
+    const actualRoot = mkdtempSync(join(tmpdir(), "ctc-owned-codex-actual-"));
+    const linkedRoot = `${actualRoot}-link`;
+    symlinkSync(actualRoot, linkedRoot);
+    expect(() =>
+      deriveOwnedCodexExecutablePath(CURRENT_SELECTION, {
+        trustedRuntimeRoot: linkedRoot,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_TRUSTED_RUNTIME_ROOT" }));
+    unlinkSync(linkedRoot);
+    rmSync(actualRoot, { recursive: true });
+
+    const releasesPath = join(
+      runtimeRoot,
+      "standalone-home",
+      "packages",
+      "standalone",
+      "releases",
+    );
+    const outsideReleases = mkdtempSync(join(tmpdir(), "ctc-outside-releases-"));
+    mkdirSync(join(releasesPath, ".."), { recursive: true });
+    symlinkSync(outsideReleases, releasesPath);
+    expect(() => resolveOwnedCodexCandidate(CURRENT_SELECTION, options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_PATH_ESCAPE" }),
+    );
+    unlinkSync(releasesPath);
+    rmSync(outsideReleases, { recursive: true });
+
+    const executablePath = installFakeCandidate(CURRENT_SELECTION);
+    const releasePath = join(executablePath, "..", "..");
+    const realReleasePath = `${releasePath}-real`;
+    renameSync(releasePath, realReleasePath);
+    symlinkSync(realReleasePath, releasePath);
+    expect(() => resolveOwnedCodexCandidate(CURRENT_SELECTION, options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_PATH_ESCAPE" }),
+    );
+  });
+
+  it("fails closed when the executable inode is replaced during --version", () => {
+    const executablePath = installFakeCandidate(CURRENT_SELECTION);
+    const replacementPath = `${executablePath}.replacement`;
+    writeFakeExecutable(replacementPath, TESTED_CODEX_VERSION);
+    writeExecutableBody(
+      executablePath,
+      [
+        `mv '${replacementPath}' '${executablePath}'`,
+        `printf '%s\\n' '${TESTED_CODEX_VERSION}'`,
+      ].join("\n"),
+    );
+
+    expect(() => resolveOwnedCodexCandidate(CURRENT_SELECTION, options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_VERSION_CHECK_FAILED" }),
+    );
+  });
+
+  it("fails closed when the runtime root is replaced during --version", () => {
+    const executablePath = installFakeCandidate(CURRENT_SELECTION);
+    const replacementRoot = `${runtimeRoot}.replacement`;
+    const displacedRoot = `${runtimeRoot}.displaced`;
+    mkdirSync(replacementRoot);
+    const replacementExecutable = join(
+      replacementRoot,
+      "standalone-home",
+      "packages",
+      "standalone",
+      "releases",
+      `${CURRENT_SELECTION.version}-${CURRENT_SELECTION.target}`,
+      "bin",
+      "codex",
+    );
+    mkdirSync(join(replacementExecutable, ".."), { recursive: true });
+    writeFakeExecutable(replacementExecutable, TESTED_CODEX_VERSION);
+    writeExecutableBody(
+      executablePath,
+      [
+        `/bin/mv '${runtimeRoot}' '${displacedRoot}'`,
+        `/bin/mv '${replacementRoot}' '${runtimeRoot}'`,
+        `printf '%s\\n' '${TESTED_CODEX_VERSION}'`,
+      ].join("\n"),
+    );
+
+    expect(() => resolveOwnedCodexCandidate(CURRENT_SELECTION, options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_VERSION_CHECK_FAILED" }),
+    );
+    rmSync(runtimeRoot, { force: true, recursive: true });
+    renameSync(displacedRoot, runtimeRoot);
+  });
+
+  it("accepts one optional LF or CRLF and rejects all other stdout shapes", () => {
+    const executablePath = installFakeCandidate(CURRENT_SELECTION);
+    for (const body of [
+      `printf '%s' '${TESTED_CODEX_VERSION}'`,
+      `printf '%s\\n' '${TESTED_CODEX_VERSION}'`,
+      `printf '%s\\r\\n' '${TESTED_CODEX_VERSION}'`,
+    ]) {
+      writeExecutableBody(executablePath, body);
+      expect(resolveOwnedCodexCandidate(CURRENT_SELECTION, options).exactVersionOutput).toBe(
+        TESTED_CODEX_VERSION,
+      );
+    }
+
+    for (const body of [
+      `printf ' %s\\n' '${TESTED_CODEX_VERSION}'`,
+      `printf '%s \\n' '${TESTED_CODEX_VERSION}'`,
+      `printf '%s\\nextra\\n' '${TESTED_CODEX_VERSION}'`,
+      `printf '%s\\n\\n' '${TESTED_CODEX_VERSION}'`,
+    ]) {
+      writeExecutableBody(executablePath, body);
+      expect(() => resolveOwnedCodexCandidate(CURRENT_SELECTION, options)).toThrowError(
+        expect.objectContaining({ code: "RUNTIME_VERSION_MISMATCH" }),
+      );
+    }
+  });
+
+  it("sanitizes nonzero stderr, signal, and oversized-output failures", () => {
+    const executablePath = installFakeCandidate(CURRENT_SELECTION);
+    writeExecutableBody(executablePath, "printf 'private diagnostic' >&2\nexit 7");
+    expectSanitizedVersionCheckFailure(executablePath);
+
+    writeExecutableBody(executablePath, "kill -TERM $$");
+    expectSanitizedVersionCheckFailure(executablePath);
+
+    writeExecutableBody(executablePath, "yes x | head -c 8192");
+    expectSanitizedVersionCheckFailure(executablePath);
+  });
+
+  it("executes a confined candidate whose path contains shell metacharacters literally", () => {
+    const metacharacterRoot = mkdtempSync(join(tmpdir(), "ctc runtime ;$() "));
+    const metacharacterOptions = { trustedRuntimeRoot: metacharacterRoot };
+    const previousRoot = runtimeRoot;
+    const previousOptions = options;
+    runtimeRoot = metacharacterRoot;
+    options = metacharacterOptions;
+    try {
+      installFakeCandidate(CURRENT_SELECTION);
+      expect(resolveOwnedCodexCandidate(CURRENT_SELECTION, options).releaseVersion).toBe(
+        CURRENT_SELECTION.version,
+      );
+    } finally {
+      runtimeRoot = previousRoot;
+      options = previousOptions;
+      rmSync(metacharacterRoot, { force: true, recursive: true });
+    }
+  });
+
   it("rejects hostile version and target input before path derivation", () => {
     expect(() =>
       deriveOwnedCodexExecutablePath(
@@ -234,6 +383,57 @@ describe("owned Codex selector parsing", () => {
       expect.objectContaining({ code: "INVALID_SELECTOR" }),
     );
   });
+
+  it("rejects invalid UTF-8, oversized, blank, trailing, duplicate, and aliased selectors", () => {
+    const selectorPath = join(runtimeRoot, "active.json");
+    const invalidSelectors: Array<string | Buffer> = [
+      Buffer.from([0xc3, 0x28]),
+      Buffer.alloc(4_097, 0x20),
+      "",
+      `${JSON.stringify({ active: null, previous: null, schemaVersion: 1 })} trailing`,
+      '{"schemaVersion":1,"active":null,"active":null,"previous":null}',
+      '{"schemaVersion":1,"active":{"version":"0.148.0-alpha.9","version":"0.148.0-alpha.9","target":"aarch64-apple-darwin"},"previous":null}',
+      JSON.stringify({
+        active: CURRENT_SELECTION,
+        previous: CURRENT_SELECTION,
+        schemaVersion: 1,
+      }),
+    ];
+
+    for (const contents of invalidSelectors) {
+      writeFileSync(selectorPath, contents, { mode: 0o600 });
+      expect(() => readOwnedCodexRuntimeSelector(options)).toThrowError(
+        expect.objectContaining({ code: "INVALID_SELECTOR" }),
+      );
+    }
+  });
+
+  it("rejects selector symlinks, directories, and FIFOs without following or blocking", () => {
+    const selectorPath = join(runtimeRoot, "active.json");
+    const outsideSelector = join(runtimeRoot, "outside-selector.json");
+    writeFileSync(
+      outsideSelector,
+      `${JSON.stringify({ active: null, previous: null, schemaVersion: 1 })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    symlinkSync(outsideSelector, selectorPath);
+    expect(() => readOwnedCodexRuntimeSelector(options)).toThrowError(
+      expect.objectContaining({ code: "INVALID_SELECTOR" }),
+    );
+
+    unlinkSync(selectorPath);
+    mkdirSync(selectorPath);
+    expect(() => readOwnedCodexRuntimeSelector(options)).toThrowError(
+      expect.objectContaining({ code: "INVALID_SELECTOR" }),
+    );
+
+    rmSync(selectorPath, { recursive: true });
+    const fifoResult = spawnSync("mkfifo", [selectorPath], { encoding: "utf8" });
+    expect(fifoResult.status).toBe(0);
+    expect(() => readOwnedCodexRuntimeSelector(options)).toThrowError(
+      expect.objectContaining({ code: "INVALID_SELECTOR" }),
+    );
+  });
 });
 
 describe("owned Codex activation and rollback", () => {
@@ -271,6 +471,61 @@ describe("owned Codex activation and rollback", () => {
       expect.objectContaining({ code: "SELECTOR_WRITE_FAILED" }),
     );
     expect(readFileSync(join(runtimeRoot, "active.json"), "utf8")).toBe(beforeFailure);
+    expect(
+      readdirSync(runtimeRoot).filter(
+        (name) => name.includes(".active.json.") || name === ".active.lock",
+      ),
+    ).toEqual([]);
+  });
+
+  it("fails closed under mutation-lock contention without changing the selector", () => {
+    installFakeCandidate(CURRENT_SELECTION);
+    installFakeCandidate(NEXT_SELECTION);
+    activateOwnedCodexRuntime(CURRENT_SELECTION, options);
+    const selectorPath = join(runtimeRoot, "active.json");
+    const beforeContention = readFileSync(selectorPath, "utf8");
+    const lockPath = join(runtimeRoot, ".active.lock");
+    writeFileSync(lockPath, "", { mode: 0o600 });
+
+    expect(() => activateOwnedCodexRuntime(NEXT_SELECTION, options)).toThrowError(
+      expect.objectContaining({ code: "SELECTOR_MUTATION_BUSY" }),
+    );
+    expect(() => rollbackOwnedCodexRuntime(options)).toThrowError(
+      expect.objectContaining({ code: "SELECTOR_MUTATION_BUSY" }),
+    );
+    expect(readFileSync(selectorPath, "utf8")).toBe(beforeContention);
+    unlinkSync(lockPath);
+  });
+
+  it("keeps the private directory and selector modes and removes mutation artifacts", () => {
+    installFakeCandidate(CURRENT_SELECTION);
+    activateOwnedCodexRuntime(CURRENT_SELECTION, options);
+
+    expect(lstatSync(runtimeRoot).mode & 0o777).toBe(0o700);
+    expect(lstatSync(join(runtimeRoot, "active.json")).mode & 0o777).toBe(0o600);
+    expect(
+      readdirSync(runtimeRoot).filter(
+        (name) => name.includes(".active.json.") || name === ".active.lock",
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not mutate the selector before a new activation candidate verifies", () => {
+    installFakeCandidate(CURRENT_SELECTION);
+    activateOwnedCodexRuntime(CURRENT_SELECTION, options);
+    const selectorPath = join(runtimeRoot, "active.json");
+    const beforeFailure = readFileSync(selectorPath, "utf8");
+
+    expect(() => activateOwnedCodexRuntime(NEXT_SELECTION, options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_CANDIDATE_UNAVAILABLE" }),
+    );
+    expect(readFileSync(selectorPath, "utf8")).toBe(beforeFailure);
+
+    installFakeCandidate(NEXT_SELECTION, "codex-cli 0.148.0-alpha.8");
+    expect(() => activateOwnedCodexRuntime(NEXT_SELECTION, options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_VERSION_MISMATCH" }),
+    );
+    expect(readFileSync(selectorPath, "utf8")).toBe(beforeFailure);
   });
 
   it("rolls back only after verifying and atomically swapping previous", () => {
@@ -344,6 +599,22 @@ describe("future execution resolution", () => {
     );
   });
 
+  it("fails closed when the tested active binary is missing or mismatched", () => {
+    writeSelectorFixture({
+      active: CURRENT_SELECTION,
+      previous: null,
+      schemaVersion: 1,
+    });
+    expect(() => resolveActiveOwnedCodexRuntime(options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_CANDIDATE_UNAVAILABLE" }),
+    );
+
+    installFakeCandidate(CURRENT_SELECTION, "codex-cli 0.148.0-alpha.8");
+    expect(() => resolveActiveOwnedCodexRuntime(options)).toThrowError(
+      expect.objectContaining({ code: "RUNTIME_VERSION_MISMATCH" }),
+    );
+  });
+
   it("does not fall back to PATH when no owned runtime is active", () => {
     const pathBinaryDirectory = join(runtimeRoot, "ambient-bin");
     const ambientBinary = join(pathBinaryDirectory, "codex");
@@ -389,6 +660,23 @@ describe("CTC_CODEX_BINARY development override", () => {
       expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
     );
   });
+
+  it.each([undefined, "production"])(
+    "rejects an arbitrary exact-version override outside a development/test environment: %s",
+    (nodeEnvironment) => {
+      const overridePath = join(runtimeRoot, "production-codex");
+      writeFakeExecutable(overridePath, TESTED_CODEX_VERSION);
+      process.env.CTC_CODEX_BINARY = overridePath;
+      restoreEnvironmentVariable("NODE_ENV", nodeEnvironment);
+
+      expect(() => resolveDevelopmentCodexOverride(TESTED_CODEX_VERSION)).toThrowError(
+        expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+      );
+      expect(() => resolveCodexExecutionRuntime(options)).toThrowError(
+        expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+      );
+    },
+  );
 });
 
 function installFakeCandidate(
@@ -402,16 +690,32 @@ function installFakeCandidate(
 }
 
 function writeFakeExecutable(path: string, output: string): void {
-  writeFileSync(
+  writeExecutableBody(
     path,
     [
-      "#!/bin/sh",
       '[ "$#" -eq 1 ] && [ "$1" = "--version" ] || exit 9',
       `printf '%s\\n' '${output}'`,
-      "",
     ].join("\n"),
+  );
+}
+
+function writeExecutableBody(path: string, body: string): void {
+  writeFileSync(
+    path,
+    ["#!/bin/sh", body, ""].join("\n"),
     { encoding: "utf8", mode: 0o700 },
   );
+}
+
+function expectSanitizedVersionCheckFailure(executablePath: string): void {
+  try {
+    resolveOwnedCodexCandidate(CURRENT_SELECTION, options);
+    throw new Error("expected version check failure");
+  } catch (error: unknown) {
+    expect(error).toMatchObject({ code: "RUNTIME_VERSION_CHECK_FAILED" });
+    expect((error as Error).message).not.toContain("private diagnostic");
+    expect((error as Error).message).not.toContain(executablePath);
+  }
 }
 
 function writeSelectorFixture(value: unknown): void {
