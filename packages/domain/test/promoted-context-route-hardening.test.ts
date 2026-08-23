@@ -1308,92 +1308,129 @@ describe("S2D1 readiness separation and S2A raw ACL non-expansion", () => {
   });
 });
 
+const DENSE_ROUTE_CAMPAIGN_DECISIONS = 2_000;
+const DENSE_ROUTE_CAMPAIGN_SHARD_SIZE = 200;
+const denseRouteCampaignShards = Array.from(
+  {
+    length:
+      DENSE_ROUTE_CAMPAIGN_DECISIONS / DENSE_ROUTE_CAMPAIGN_SHARD_SIZE,
+  },
+  (_, shardIndex) => ({
+    shard: shardIndex + 1,
+    startDecision: shardIndex * DENSE_ROUTE_CAMPAIGN_SHARD_SIZE,
+    endDecision: (shardIndex + 1) * DENSE_ROUTE_CAMPAIGN_SHARD_SIZE,
+  }),
+);
+
 describe("S2D1 dense exact-edge property campaign", () => {
-  it("matches 2,000 ordered-pair decisions over 120 nodes and 540 edges", () => {
-    const projects = Array.from({ length: 3 }, (_, projectIndex) => ({
-      id: `prj_scale_${projectIndex}`,
-    }));
-    const bigTasks = projects.flatMap((project) =>
-      Array.from({ length: 4 }, (_, bigTaskIndex) => ({
-        id: `bt_scale_${project.id.slice("prj_scale_".length)}_${bigTaskIndex}`,
-        projectId: project.id,
-      })),
+  it("retains exactly 2,000 ordered-pair decisions across deterministic shards", () => {
+    expect(denseRouteCampaignShards).toHaveLength(10);
+    expect(denseRouteCampaignShards[0]?.startDecision).toBe(0);
+    expect(denseRouteCampaignShards.at(-1)?.endDecision).toBe(
+      DENSE_ROUTE_CAMPAIGN_DECISIONS,
     );
-    const subtasks = bigTasks.flatMap((bigTask) =>
-      Array.from({ length: 10 }, (_, subtaskIndex) => ({
-        id: `st_scale_${bigTask.id.slice("bt_scale_".length)}_${subtaskIndex}`,
-        bigTaskId: bigTask.id,
-      })),
-    );
-    const dependencies = bigTasks.flatMap((bigTask) => {
-      const ids = subtasks
-        .filter(({ bigTaskId }) => bigTaskId === bigTask.id)
-        .map(({ id }) => id);
-      const edges: SubtaskDependency[] = [];
-      for (let upstreamIndex = 0; upstreamIndex < ids.length; upstreamIndex += 1) {
-        for (
-          let downstreamIndex = upstreamIndex + 1;
-          downstreamIndex < ids.length;
-          downstreamIndex += 1
-        ) {
-          const form = (upstreamIndex + downstreamIndex) % 3;
-          edges.push(
-            form === 0
-              ? dependency(
-                  ids[upstreamIndex]!,
-                  ids[downstreamIndex]!,
-                  "BLOCKING",
-                  "HARDENED",
-                )
-              : form === 1
+    expect(
+      denseRouteCampaignShards.reduce(
+        (total, { startDecision, endDecision }) =>
+          total + endDecision - startDecision,
+        0,
+      ),
+    ).toBe(DENSE_ROUTE_CAMPAIGN_DECISIONS);
+  });
+
+  it.each(denseRouteCampaignShards)(
+    "matches 2,000 ordered-pair decisions over 120 nodes and 540 edges (shard $shard of 10)",
+    ({ startDecision, endDecision }) => {
+      const projects = Array.from({ length: 3 }, (_, projectIndex) => ({
+        id: `prj_scale_${projectIndex}`,
+      }));
+      const bigTasks = projects.flatMap((project) =>
+        Array.from({ length: 4 }, (_, bigTaskIndex) => ({
+          id: `bt_scale_${project.id.slice("prj_scale_".length)}_${bigTaskIndex}`,
+          projectId: project.id,
+        })),
+      );
+      const subtasks = bigTasks.flatMap((bigTask) =>
+        Array.from({ length: 10 }, (_, subtaskIndex) => ({
+          id: `st_scale_${bigTask.id.slice("bt_scale_".length)}_${subtaskIndex}`,
+          bigTaskId: bigTask.id,
+        })),
+      );
+      const dependencies = bigTasks.flatMap((bigTask) => {
+        const ids = subtasks
+          .filter(({ bigTaskId }) => bigTaskId === bigTask.id)
+          .map(({ id }) => id);
+        const edges: SubtaskDependency[] = [];
+        for (let upstreamIndex = 0; upstreamIndex < ids.length; upstreamIndex += 1) {
+          for (
+            let downstreamIndex = upstreamIndex + 1;
+            downstreamIndex < ids.length;
+            downstreamIndex += 1
+          ) {
+            const form = (upstreamIndex + downstreamIndex) % 3;
+            edges.push(
+              form === 0
                 ? dependency(
                     ids[upstreamIndex]!,
                     ids[downstreamIndex]!,
                     "BLOCKING",
-                    "ACCEPTED",
+                    "HARDENED",
                   )
-                : dependency(
-                    ids[upstreamIndex]!,
-                    ids[downstreamIndex]!,
-                    "INFORMATIONAL",
-                    "NONE",
-                  ),
-          );
+                : form === 1
+                  ? dependency(
+                      ids[upstreamIndex]!,
+                      ids[downstreamIndex]!,
+                      "BLOCKING",
+                      "ACCEPTED",
+                    )
+                  : dependency(
+                      ids[upstreamIndex]!,
+                      ids[downstreamIndex]!,
+                      "INFORMATIONAL",
+                      "NONE",
+                    ),
+            );
+          }
+        }
+        return edges;
+      });
+      const topology = { projects, bigTasks, subtasks, dependencies } as PromotedContextRouteTopology;
+      const mismatches: Array<{
+        readonly route: PromotedContextRoute;
+        readonly expected: PromotedContextRouteEvaluation;
+        readonly actual: PromotedContextRouteEvaluation;
+      }> = [];
+      let falseEligible = 0;
+      for (
+        let decisionIndex = startDecision;
+        decisionIndex < endDecision;
+        decisionIndex += 1
+      ) {
+        const sourceIndex = Math.floor(decisionIndex / subtasks.length);
+        const targetIndex = decisionIndex % subtasks.length;
+        const route = downstreamRoute(
+          subtasks[sourceIndex]!.id,
+          subtasks[targetIndex]!.id,
+        );
+        const expected = routeOracle(topology, route);
+        const actual = evaluatePromotedContextRoute(topology, route);
+        if (actual.eligible && !expected.eligible) {
+          falseEligible += 1;
+        }
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          mismatches.push({ route, expected, actual });
         }
       }
-      return edges;
-    });
-    const topology = { projects, bigTasks, subtasks, dependencies } as PromotedContextRouteTopology;
-    const mismatches: Array<{
-      readonly route: PromotedContextRoute;
-      readonly expected: PromotedContextRouteEvaluation;
-      readonly actual: PromotedContextRouteEvaluation;
-    }> = [];
-    let falseEligible = 0;
-    for (let decisionIndex = 0; decisionIndex < 2_000; decisionIndex += 1) {
-      const sourceIndex = Math.floor(decisionIndex / subtasks.length);
-      const targetIndex = decisionIndex % subtasks.length;
-      const route = downstreamRoute(
-        subtasks[sourceIndex]!.id,
-        subtasks[targetIndex]!.id,
-      );
-      const expected = routeOracle(topology, route);
-      const actual = evaluatePromotedContextRoute(topology, route);
-      if (actual.eligible && !expected.eligible) {
-        falseEligible += 1;
-      }
-      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-        mismatches.push({ route, expected, actual });
-      }
-    }
 
-    expect(projects).toHaveLength(3);
-    expect(bigTasks).toHaveLength(12);
-    expect(subtasks).toHaveLength(120);
-    expect(dependencies).toHaveLength(540);
-    expect(falseEligible).toBe(0);
-    expect(mismatches).toEqual([]);
-  }, 20_000);
+      expect(projects).toHaveLength(3);
+      expect(bigTasks).toHaveLength(12);
+      expect(subtasks).toHaveLength(120);
+      expect(dependencies).toHaveLength(540);
+      expect(falseEligible).toBe(0);
+      expect(mismatches).toEqual([]);
+    },
+    20_000,
+  );
 });
 
 const mutationHypotheses = [

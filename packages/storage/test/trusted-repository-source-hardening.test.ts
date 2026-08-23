@@ -1113,76 +1113,49 @@ done`;
   });
 });
 
-describe.sequential("trusted repository source property and trust-boundary hardening", () => {
-  it("matches a 300-evaluation deterministic producer oracle with zero material mismatch", () => {
-    withSyntheticRepository({ agentsContent: "campaign rules\n" }, (repository) => {
-      const nested = join(repository.path, "ordinary nested path");
-      mkdirSync(nested);
-      const before = repositoryFingerprint(repository.path);
-      const metrics = {
-        evaluations: 0,
-        mismatches: 0,
-        falseSuccesses: 0,
-        falseFailures: 0,
-        trustSourceMisclassifications: 0,
-        mutationEvents: 0,
-        networkHelperEvents: 0,
-        exceptionLeaks: 0,
-      };
-      const evaluate = (
-        expectedSuccess: boolean,
-        operation: () => TrustedRepositorySourceSnapshot,
-      ): void => {
-        metrics.evaluations += 1;
-        try {
-          const snapshot = operation();
-          if (!expectedSuccess) {
-            metrics.falseSuccesses += 1;
-            return;
-          }
-          const sourceReferences = [
-            ...snapshot.canonicalProjectRules.map(({ sourceReference }) =>
-              sourceReference.startsWith("repo:AGENTS.md"),
-            ),
-            ...snapshot.repositoryRuntimeEvidence.map(({ sourceReference }) =>
-              sourceReference.startsWith("repo:git#") ||
-              sourceReference === "probe:runtime#toolchain",
-            ),
-          ];
-          if (
-            sourceReferences.some((valid) => !valid) ||
-            JSON.stringify(snapshot).includes("candidateClass") ||
-            !evidence(snapshot, "repo:git#head").includes(repository.head)
-          ) {
-            metrics.trustSourceMisclassifications += 1;
-          }
-        } catch (error) {
-          if (expectedSuccess) {
-            metrics.falseFailures += 1;
-          }
-          if (!(error instanceof TrustedRepositorySourceError)) {
-            metrics.exceptionLeaks += 1;
-          }
-        }
-      };
+const TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD = 50;
+const TRUSTED_REPOSITORY_CAMPAIGN_ENVIRONMENT_CONTROLS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
+] as const;
 
-      const environmentControls = [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_SYSTEM",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_PARAMETERS",
-      ] as const;
-      withMemoryStorage((validStorage) => {
-        seedHierarchy(validStorage, { kind: "PATH", path: repository.path });
-        const validReader = new TrustedRepositorySourceReader(validStorage);
-        for (let index = 0; index < 50; index += 1) {
-          const key = environmentControls[index % environmentControls.length];
+type TrustedRepositoryCampaignEvaluate = (
+  expectedSuccess: boolean,
+  operation: () => TrustedRepositorySourceSnapshot,
+) => void;
+
+interface TrustedRepositoryCampaignShard {
+  readonly label: string;
+  readonly run: (
+    repository: SyntheticRepository,
+    evaluate: TrustedRepositoryCampaignEvaluate,
+  ) => void;
+}
+
+const trustedRepositoryCampaignShards: readonly TrustedRepositoryCampaignShard[] = [
+  {
+    label: "hostile Git environment",
+    run: (repository, evaluate) => {
+      withMemoryStorage((storage) => {
+        seedHierarchy(storage, { kind: "PATH", path: repository.path });
+        const reader = new TrustedRepositorySourceReader(storage);
+        for (
+          let index = 0;
+          index < TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD;
+          index += 1
+        ) {
+          const key =
+            TRUSTED_REPOSITORY_CAMPAIGN_ENVIRONMENT_CONTROLS[
+              index % TRUSTED_REPOSITORY_CAMPAIGN_ENVIRONMENT_CONTROLS.length
+            ];
           if (key === undefined) {
             throw new Error("Missing generated Git environment control.");
           }
@@ -1190,69 +1163,189 @@ describe.sequential("trusted repository source property and trust-boundary harde
             withProcessEnvironment(
               { [key]: `campaign-hostile-${index}` },
               () =>
-                validReader.readTrustedRepositorySourceSnapshotForSubtask(
+                reader.readTrustedRepositorySourceSnapshotForSubtask(
                   SUBTASK_ID,
                 ),
             ),
           );
         }
-        for (let index = 0; index < 50; index += 1) {
+      });
+    },
+  },
+  {
+    label: "noncanonical Subtask identifiers",
+    run: (repository, evaluate) => {
+      withMemoryStorage((storage) => {
+        seedHierarchy(storage, { kind: "PATH", path: repository.path });
+        const reader = new TrustedRepositorySourceReader(storage);
+        for (
+          let index = 0;
+          index < TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD;
+          index += 1
+        ) {
           evaluate(false, () =>
-            validReader.readTrustedRepositorySourceSnapshotForSubtask(
+            reader.readTrustedRepositorySourceSnapshotForSubtask(
               ` ${SUBTASK_ID}-${index} ` as SubtaskId,
             ),
           );
         }
-        for (let index = 0; index < 50; index += 1) {
+      });
+    },
+  },
+  {
+    label: "missing Subtask identifiers",
+    run: (repository, evaluate) => {
+      withMemoryStorage((storage) => {
+        seedHierarchy(storage, { kind: "PATH", path: repository.path });
+        const reader = new TrustedRepositorySourceReader(storage);
+        for (
+          let index = 0;
+          index < TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD;
+          index += 1
+        ) {
           evaluate(false, () =>
-            validReader.readTrustedRepositorySourceSnapshotForSubtask(
+            reader.readTrustedRepositorySourceSnapshotForSubtask(
               SubtaskIdSchema.parse(`st_campaign_missing_${index}`),
             ),
           );
         }
       });
-
-      withMemoryStorage((referenceStorage) => {
-        seedHierarchy(referenceStorage, {
+    },
+  },
+  {
+    label: "unsupported repository references",
+    run: (_repository, evaluate) => {
+      withMemoryStorage((storage) => {
+        seedHierarchy(storage, {
           kind: "REFERENCE",
           reference: "https://network.invalid/campaign-private.git",
         });
-        for (let index = 0; index < 50; index += 1) {
-          evaluate(false, () => readSnapshot(referenceStorage));
+        for (
+          let index = 0;
+          index < TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD;
+          index += 1
+        ) {
+          evaluate(false, () => readSnapshot(storage));
         }
       });
-      withMemoryStorage((nestedStorage) => {
-        seedHierarchy(nestedStorage, { kind: "PATH", path: nested });
-        for (let index = 0; index < 50; index += 1) {
-          evaluate(false, () => readSnapshot(nestedStorage));
+    },
+  },
+  {
+    label: "nested repository paths",
+    run: (repository, evaluate) => {
+      const nested = join(repository.path, "ordinary nested path");
+      mkdirSync(nested);
+      withMemoryStorage((storage) => {
+        seedHierarchy(storage, { kind: "PATH", path: nested });
+        for (
+          let index = 0;
+          index < TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD;
+          index += 1
+        ) {
+          evaluate(false, () => readSnapshot(storage));
         }
       });
-      withMemoryStorage((invalidRefStorage) => {
+    },
+  },
+  {
+    label: "invalid tracking references",
+    run: (repository, evaluate) => {
+      withMemoryStorage((storage) => {
         seedHierarchy(
-          invalidRefStorage,
+          storage,
           { kind: "PATH", path: repository.path },
           "invalid campaign branch",
         );
-        for (let index = 0; index < 50; index += 1) {
-          evaluate(false, () => readSnapshot(invalidRefStorage));
+        for (
+          let index = 0;
+          index < TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD;
+          index += 1
+        ) {
+          evaluate(false, () => readSnapshot(storage));
         }
       });
+    },
+  },
+];
 
-      metrics.mutationEvents += Number(
-        repositoryFingerprint(repository.path) !== before,
-      );
-      expect(metrics).toEqual({
-        evaluations: 300,
-        mismatches: 0,
-        falseSuccesses: 0,
-        falseFailures: 0,
-        trustSourceMisclassifications: 0,
-        mutationEvents: 0,
-        networkHelperEvents: 0,
-        exceptionLeaks: 0,
-      });
-    });
+describe.sequential("trusted repository source property and trust-boundary hardening", () => {
+  it("retains exactly 300 evaluations across six deterministic producer-oracle shards", () => {
+    expect(trustedRepositoryCampaignShards).toHaveLength(6);
+    expect(
+      trustedRepositoryCampaignShards.length *
+        TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD,
+    ).toBe(300);
   });
+
+  it.each(trustedRepositoryCampaignShards)(
+    "matches the 300-evaluation deterministic producer oracle with zero material mismatch: $label shard",
+    ({ run }) => {
+      withSyntheticRepository({ agentsContent: "campaign rules\n" }, (repository) => {
+        const before = repositoryFingerprint(repository.path);
+        const metrics = {
+          evaluations: 0,
+          mismatches: 0,
+          falseSuccesses: 0,
+          falseFailures: 0,
+          trustSourceMisclassifications: 0,
+          mutationEvents: 0,
+          networkHelperEvents: 0,
+          exceptionLeaks: 0,
+        };
+        const evaluate: TrustedRepositoryCampaignEvaluate = (
+          expectedSuccess,
+          operation,
+        ) => {
+          metrics.evaluations += 1;
+          try {
+            const snapshot = operation();
+            if (!expectedSuccess) {
+              metrics.falseSuccesses += 1;
+              return;
+            }
+            const sourceReferences = [
+              ...snapshot.canonicalProjectRules.map(({ sourceReference }) =>
+                sourceReference.startsWith("repo:AGENTS.md"),
+              ),
+              ...snapshot.repositoryRuntimeEvidence.map(({ sourceReference }) =>
+                sourceReference.startsWith("repo:git#") ||
+                sourceReference === "probe:runtime#toolchain",
+              ),
+            ];
+            if (
+              sourceReferences.some((valid) => !valid) ||
+              JSON.stringify(snapshot).includes("candidateClass") ||
+              !evidence(snapshot, "repo:git#head").includes(repository.head)
+            ) {
+              metrics.trustSourceMisclassifications += 1;
+            }
+          } catch (error) {
+            if (expectedSuccess) {
+              metrics.falseFailures += 1;
+            }
+            if (!(error instanceof TrustedRepositorySourceError)) {
+              metrics.exceptionLeaks += 1;
+            }
+          }
+        };
+
+        run(repository, evaluate);
+        metrics.mutationEvents += Number(
+          repositoryFingerprint(repository.path) !== before,
+        );
+        expect(metrics).toEqual({
+          evaluations: TRUSTED_REPOSITORY_CAMPAIGN_EVALUATIONS_PER_SHARD,
+          mismatches: 0,
+          falseSuccesses: 0,
+          falseFailures: 0,
+          trustSourceMisclassifications: 0,
+          mutationEvents: 0,
+          networkHelperEvents: 0,
+          exceptionLeaks: 0,
+        });
+      });
+    },
+  );
 
   it("keeps classification producer-owned and the storage consumer hierarchy-only", () => {
     const trustedSource = readFileSync(

@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-18
+Last reconciled: 2026-08-23
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -105,17 +105,21 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
 - Codex App Server 0.148 Compatibility Revalidation: HARDENED
 - Codex App Server 0.148 Compatibility Revalidation / Bounded Hardening: PASS
-- Codex App Server 0.148 Fresh Independent Compatibility QA: PENDING
+- Codex App Server 0.148 Fresh Independent Compatibility QA: FAIL — prior run, timeout blockers repaired
+- Codex App Server 0.148 compatibility evidence: PASS; prior Fresh QA failed only on unrelated regression-timeout blockers
+- CTC-COMPAT-FQA-001: CLOSED pending Fresh Re-QA
+- CTC-COMPAT-FQA-002: CLOSED pending Fresh Re-QA
+- Codex App Server 0.148 Fresh Compatibility Re-QA: PENDING
 - Codex App Server 0.148 Compatibility ACCEPTED: NO
 - Installed Codex: `codex-cli 0.148.0-alpha.9`
 - Tested Codex: `codex-cli 0.148.0-alpha.9`
-- Live Codex compatibility gate: OPEN — pending Fresh Independent Compatibility QA
+- Live Codex compatibility gate: BLOCKED pending Fresh Re-QA
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Codex App Server 0.148 Fresh Independent Compatibility QA**
+**Codex App Server 0.148 Focused Fresh Compatibility Re-QA**
 
-- Independently verify the exact-version stable protocol contract and fixture evidence.
+- Re-run Fresh compatibility QA with the repaired deterministic regression campaigns.
 - Do not begin provider request construction or live execution until it passes.
 
 Hanlin manual QA: NOT REQUIRED
