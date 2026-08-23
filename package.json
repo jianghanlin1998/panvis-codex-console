@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "tsc -b packages/shared/tsconfig.build.json packages/domain/tsconfig.build.json packages/storage/tsconfig.build.json packages/codex-adapter/tsconfig.build.json --pretty false",
+    "codex:runtime:install": "./scripts/install-owned-codex-runtime.sh",
     "codex:schema:generate": "tsc -p packages/codex-adapter/tsconfig.build.json --pretty false && node packages/codex-adapter/dist/generate-schema-cli.js",
     "lint": "eslint . --max-warnings 0",
     "public:check": "./scripts/check-public-repo-hygiene.sh",

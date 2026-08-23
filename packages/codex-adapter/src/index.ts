@@ -54,6 +54,30 @@ export type {
 } from "./schema-generation.js";
 
 export {
+  CODEX_RUNTIME_OWNERSHIP_ERROR_CODES,
+  CODEX_RUNTIME_TARGETS,
+  CodexRuntimeOwnershipError,
+  activateOwnedCodexRuntime,
+  deriveOwnedCodexExecutablePath,
+  getCodexRuntimeTarget,
+  getDefaultCodexRuntimeRoot,
+  readOwnedCodexRuntimeSelector,
+  resolveActiveOwnedCodexRuntime,
+  resolveCodexExecutionRuntime,
+  resolveDevelopmentCodexOverride,
+  resolveOwnedCodexCandidate,
+  rollbackOwnedCodexRuntime,
+} from "./runtime-ownership.js";
+export type {
+  CodexRuntimeOwnershipErrorCode,
+  CodexRuntimeOwnershipOptions,
+  CodexRuntimeSelection,
+  CodexRuntimeSelector,
+  CodexRuntimeTarget,
+  ResolvedCodexRuntime,
+} from "./runtime-ownership.js";
+
+export {
   CODEX_APP_SERVER_PROVIDER_DESCRIPTOR,
   CODEX_APP_SERVER_PROVIDER_ID,
   mapCodexThreadReference,

@@ -103,24 +103,33 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Execution Input Preflight V0 Fresh Independent QA: PASS
 - Execution Input Preflight V0 ACCEPTED: YES
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
+- Console-Owned Codex Runtime Ownership V0: IMPLEMENTED
+- Runtime ownership baseline: official standalone exact-release installer
+- Owned candidate: `0.148.0-alpha.9` INSTALLED, INACTIVE
+- Owned active runtime: NONE — pending C-lite validation and explicit activation
+- Ambient PATH/ChatGPT Codex: `codex-cli 0.148.0-alpha.15`; informational only, not Console execution authority
+- C-lite Compatibility Check V0: PENDING
+- Runtime Ownership Comprehensive Hardening: PENDING
+- Runtime Ownership Fresh QA: PENDING
+- Runtime Ownership ACCEPTED: NO
 - Codex App Server 0.148 Compatibility Revalidation: HARDENED
 - Codex App Server 0.148 Compatibility Revalidation / Bounded Hardening: PASS
 - Codex App Server 0.148 Fresh Independent Compatibility QA: FAIL — prior run, timeout blockers repaired
 - Codex App Server 0.148 compatibility evidence: PASS; prior Fresh QA failed only on unrelated regression-timeout blockers
 - CTC-COMPAT-FQA-001: CLOSED pending Fresh Re-QA
 - CTC-COMPAT-FQA-002: CLOSED pending Fresh Re-QA
-- Codex App Server 0.148 Fresh Compatibility Re-QA: PENDING
+- Codex App Server 0.148 Focused Fresh Compatibility Re-QA: PENDING; the latest attempt was interrupted because the ambient ChatGPT bundle drifted from `.9` to `.15` before runtime ownership existed
 - Codex App Server 0.148 Compatibility ACCEPTED: NO
-- Installed Codex: `codex-cli 0.148.0-alpha.9`
 - Tested Codex: `codex-cli 0.148.0-alpha.9`
-- Live Codex compatibility gate: BLOCKED pending Fresh Re-QA
+- Live execution: BLOCKED
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Codex App Server 0.148 Focused Fresh Compatibility Re-QA**
+**C-lite Codex Compatibility Check V0 — Implementation against the owned `0.148.0-alpha.9` candidate**
 
-- Re-run Fresh compatibility QA with the repaired deterministic regression campaigns.
-- Do not begin provider request construction or live execution until it passes.
+- Validate only the current Console-consumed stable App Server contract.
+- Keep the candidate inactive until C-lite passes and Hanlin explicitly approves activation.
+- Do not begin live execution or broader compatibility Re-QA automatically.
 
 Hanlin manual QA: NOT REQUIRED
 
