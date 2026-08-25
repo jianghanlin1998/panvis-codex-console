@@ -89,7 +89,7 @@ const ERROR_MESSAGES: Readonly<Record<CodexRuntimeOwnershipErrorCode, string>> =
   ACTIVE_RUNTIME_VERSION_MISMATCH:
     "The active owned Codex runtime is not the exact tested version.",
   DEVELOPMENT_OVERRIDE_INVALID:
-    "CTC_CODEX_BINARY is available only in development or test and must name an absolute executable with the exact tested version.",
+    "CTC_CODEX_BINARY is available only in development or test and must name the canonical regular executable with the exact tested version.",
   INVALID_RUNTIME_SELECTION: "The owned Codex runtime selection is invalid.",
   INVALID_SELECTOR: "The owned Codex runtime selector is invalid.",
   INVALID_TRUSTED_RUNTIME_ROOT: "The trusted Codex runtime root override is invalid.",
@@ -366,21 +366,26 @@ export function resolveActiveOwnedCodexRuntime(
   return resolveOwnedCodexCandidate(selector.active, options);
 }
 
-export function resolveDevelopmentCodexOverride(
-  expectedVersionOutput: string,
-): ResolvedCodexRuntime {
+export function resolveDevelopmentCodexOverride(): ResolvedCodexRuntime {
   if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
     throw new CodexRuntimeOwnershipError("DEVELOPMENT_OVERRIDE_INVALID");
   }
   const overridePath = process.env.CTC_CODEX_BINARY;
-  const expectedReleaseVersion = releaseVersionFromExactOutput(expectedVersionOutput);
   if (overridePath === undefined || !isAbsolute(overridePath)) {
     throw new CodexRuntimeOwnershipError("DEVELOPMENT_OVERRIDE_INVALID");
   }
 
   let canonicalExecutablePath: string;
   try {
+    const overrideStat = lstatSync(overridePath);
     canonicalExecutablePath = realpathSync(overridePath);
+    if (
+      !overrideStat.isFile() ||
+      overrideStat.isSymbolicLink() ||
+      canonicalExecutablePath !== overridePath
+    ) {
+      throw new Error("noncanonical development override");
+    }
   } catch {
     throw new CodexRuntimeOwnershipError("DEVELOPMENT_OVERRIDE_INVALID");
   }
@@ -388,7 +393,7 @@ export function resolveDevelopmentCodexOverride(
   try {
     return verifyExecutable(
       canonicalExecutablePath,
-      expectedReleaseVersion,
+      releaseVersionFromExactOutput(TESTED_CODEX_VERSION),
       getCodexRuntimeTarget(),
       "DEVELOPMENT_OVERRIDE",
     );
@@ -401,7 +406,7 @@ export function resolveCodexExecutionRuntime(
   options: CodexRuntimeOwnershipOptions = {},
 ): ResolvedCodexRuntime {
   if (process.env.CTC_CODEX_BINARY !== undefined) {
-    return resolveDevelopmentCodexOverride(TESTED_CODEX_VERSION);
+    return resolveDevelopmentCodexOverride();
   }
   return resolveActiveOwnedCodexRuntime(options);
 }

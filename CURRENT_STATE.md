@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-23
+Last reconciled: 2026-08-25
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -109,7 +109,9 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Owned active runtime: NONE
 - Ambient PATH/ChatGPT Codex: `codex-cli 0.148.0-alpha.15`; informational only, not Console execution authority
 - Runtime Ownership Comprehensive Hardening: PASS
-- Runtime Ownership Fresh Independent QA: PENDING
+- Runtime Ownership Fresh Independent QA: FAIL
+- CTC-RUNTIME-FQA-001: REPAIRED — pending Focused Fresh Re-QA
+- CTC-RUNTIME-FQA-002 evidence gap: ADDRESSED — pending Focused Fresh Re-QA
 - Runtime Ownership ACCEPTED: NO
 - C-lite Compatibility Check V0: PENDING — blocked on Runtime Ownership ACCEPTED
 - Codex App Server 0.148 Compatibility Revalidation: HARDENED
@@ -125,10 +127,10 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Console-Owned Codex Runtime Ownership V0 Fresh Independent QA**
+**Console-Owned Codex Runtime Ownership V0 Focused Fresh Re-QA**
 
-- Independently verify executable identity, path confinement, selector authority,
-  development-override isolation, activation/rollback, and concurrency behavior.
+- Independently re-verify CTC-RUNTIME-FQA-001 and CTC-RUNTIME-FQA-002 after the
+  bounded repair.
 - Do not start C-lite until Runtime Ownership Fresh QA passes and acceptance is reconciled.
 - Keep the real owned candidate inactive and live execution blocked.
 

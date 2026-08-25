@@ -629,47 +629,99 @@ describe("future execution resolution", () => {
 });
 
 describe("CTC_CODEX_BINARY development override", () => {
-  it("accepts only an absolute executable with the exact expected version", () => {
-    const overridePath = join(runtimeRoot, "development-codex");
-    writeFakeExecutable(overridePath, TESTED_CODEX_VERSION);
-    process.env.CTC_CODEX_BINARY = overridePath;
+  it.each(["development", "test"])(
+    "accepts the exact canonical tested executable in %s",
+    (nodeEnvironment) => {
+      process.env.NODE_ENV = nodeEnvironment;
+      const overridePath = join(runtimeRoot, "development-codex");
+      writeFakeExecutable(overridePath, TESTED_CODEX_VERSION);
+      const canonicalOverridePath = realpathSync(overridePath);
+      process.env.CTC_CODEX_BINARY = canonicalOverridePath;
 
-    expect(resolveDevelopmentCodexOverride(TESTED_CODEX_VERSION)).toMatchObject({
-      canonicalExecutablePath: realpathSync(overridePath),
-      exactVersionOutput: TESTED_CODEX_VERSION,
-      source: "DEVELOPMENT_OVERRIDE",
-    });
-    expect(resolveCodexExecutionRuntime(options).source).toBe("DEVELOPMENT_OVERRIDE");
-  });
-
-  it.each(["relative/codex", join(tmpdir(), "missing-ctc-codex")])(
-    "rejects invalid override path %s",
-    (overridePath) => {
-      process.env.CTC_CODEX_BINARY = overridePath;
-      expect(() => resolveDevelopmentCodexOverride(TESTED_CODEX_VERSION)).toThrowError(
-        expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+      expect(resolveDevelopmentCodexOverride()).toMatchObject({
+        canonicalExecutablePath: canonicalOverridePath,
+        exactVersionOutput: TESTED_CODEX_VERSION,
+        source: "DEVELOPMENT_OVERRIDE",
+      });
+      expect(resolveCodexExecutionRuntime(options).source).toBe(
+        "DEVELOPMENT_OVERRIDE",
       );
     },
   );
 
-  it("rejects an override version mismatch without weakening the expected version", () => {
-    const overridePath = join(runtimeRoot, "mismatched-development-codex");
-    writeFakeExecutable(overridePath, "codex-cli 0.148.0-alpha.8");
-    process.env.CTC_CODEX_BINARY = overridePath;
-    expect(() => resolveDevelopmentCodexOverride(TESTED_CODEX_VERSION)).toThrowError(
+  it("rejects a symlink even when its target is the exact tested executable", () => {
+    const overridePath = join(runtimeRoot, "development-codex");
+    writeFakeExecutable(overridePath, TESTED_CODEX_VERSION);
+    const canonicalOverridePath = realpathSync(overridePath);
+    const symlinkPath = join(realpathSync(runtimeRoot), "development-codex-link");
+    symlinkSync(canonicalOverridePath, symlinkPath);
+    process.env.CTC_CODEX_BINARY = symlinkPath;
+
+    expect(() => resolveDevelopmentCodexOverride()).toThrowError(
       expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
     );
   });
 
-  it.each([undefined, "production"])(
+  it("rejects relative, missing, and noncanonical override paths", () => {
+    const overridePath = join(runtimeRoot, "canonical-codex");
+    writeFakeExecutable(overridePath, TESTED_CODEX_VERSION);
+    const canonicalOverridePath = realpathSync(overridePath);
+    for (const invalidPath of [
+      "relative/codex",
+      join(tmpdir(), "missing-ctc-codex"),
+      `${realpathSync(runtimeRoot)}/./canonical-codex`,
+    ]) {
+      expect(invalidPath).not.toBe(canonicalOverridePath);
+      process.env.CTC_CODEX_BINARY = invalidPath;
+      expect(() => resolveDevelopmentCodexOverride()).toThrowError(
+        expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+      );
+    }
+  });
+
+  it("rejects non-regular and non-executable canonical paths", () => {
+    const directoryPath = join(realpathSync(runtimeRoot), "override-directory");
+    mkdirSync(directoryPath);
+    process.env.CTC_CODEX_BINARY = directoryPath;
+    expect(() => resolveDevelopmentCodexOverride()).toThrowError(
+      expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+    );
+
+    const nonExecutablePath = join(runtimeRoot, "non-executable-codex");
+    writeFakeExecutable(nonExecutablePath, TESTED_CODEX_VERSION);
+    chmodSync(nonExecutablePath, 0o600);
+    process.env.CTC_CODEX_BINARY = realpathSync(nonExecutablePath);
+    expect(() => resolveDevelopmentCodexOverride()).toThrowError(
+      expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+    );
+  });
+
+  it("cannot accept an alternate binary through caller-controlled version input", () => {
+    const overridePath = join(runtimeRoot, "mismatched-development-codex");
+    writeFakeExecutable(overridePath, "codex-cli 0.148.0-alpha.8");
+    process.env.CTC_CODEX_BINARY = realpathSync(overridePath);
+
+    expect(() =>
+      Reflect.apply(resolveDevelopmentCodexOverride, undefined, [
+        "codex-cli 0.148.0-alpha.8",
+      ]),
+    ).toThrowError(
+      expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+    );
+    expect(() => resolveCodexExecutionRuntime(options)).toThrowError(
+      expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+    );
+  });
+
+  it.each([undefined, "production", "staging", "Test"])(
     "rejects an arbitrary exact-version override outside a development/test environment: %s",
     (nodeEnvironment) => {
       const overridePath = join(runtimeRoot, "production-codex");
       writeFakeExecutable(overridePath, TESTED_CODEX_VERSION);
-      process.env.CTC_CODEX_BINARY = overridePath;
+      process.env.CTC_CODEX_BINARY = realpathSync(overridePath);
       restoreEnvironmentVariable("NODE_ENV", nodeEnvironment);
 
-      expect(() => resolveDevelopmentCodexOverride(TESTED_CODEX_VERSION)).toThrowError(
+      expect(() => resolveDevelopmentCodexOverride()).toThrowError(
         expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
       );
       expect(() => resolveCodexExecutionRuntime(options)).toThrowError(
@@ -677,6 +729,21 @@ describe("CTC_CODEX_BINARY development override", () => {
       );
     },
   );
+
+  it("never substitutes an owned or PATH runtime for an invalid override", () => {
+    installFakeCandidate(CURRENT_SELECTION);
+    activateOwnedCodexRuntime(CURRENT_SELECTION, options);
+    const pathBinaryDirectory = join(runtimeRoot, "ambient-override-bin");
+    const ambientBinary = join(pathBinaryDirectory, "codex");
+    mkdirSync(pathBinaryDirectory);
+    writeFakeExecutable(ambientBinary, TESTED_CODEX_VERSION);
+    process.env.PATH = `${pathBinaryDirectory}:${originalPath ?? ""}`;
+    process.env.CTC_CODEX_BINARY = "relative/invalid-override";
+
+    expect(() => resolveCodexExecutionRuntime(options)).toThrowError(
+      expect.objectContaining({ code: "DEVELOPMENT_OVERRIDE_INVALID" }),
+    );
+  });
 });
 
 function installFakeCandidate(

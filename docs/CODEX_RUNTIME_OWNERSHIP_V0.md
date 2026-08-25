@@ -34,8 +34,9 @@ one CRLF. Additional stdout is rejected. Stderr is never used as authority or
 included in public errors.
 
 `CTC_CODEX_BINARY` is a development/test override only. It must be an absolute,
-canonical, regular executable and must report the exact operationally expected
-tested version. The override is rejected unless `NODE_ENV` is exactly
+canonical, regular executable and must report the exact version owned by the
+Console's `TESTED_CODEX_VERSION` contract. Callers cannot supply another
+expected version. The override is rejected unless `NODE_ENV` is exactly
 `development` or `test`; setting it in an unset or production environment fails
 closed and does not replace the owned selector. It never falls back to `PATH`
 or `codex`.
