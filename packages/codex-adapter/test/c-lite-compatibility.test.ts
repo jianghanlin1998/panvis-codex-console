@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -6,7 +7,9 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +18,10 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  SUPPORTED_CLIENT_NOTIFICATION_METHODS,
+  SUPPORTED_CLIENT_REQUEST_METHODS,
+  SUPPORTED_SERVER_NOTIFICATION_METHODS,
+  SUPPORTED_SERVER_REQUEST_METHODS,
   TESTED_CODEX_VERSION,
   checkOwnedCodexCompatibility,
   deriveOwnedCodexExecutablePath,
@@ -22,24 +29,145 @@ import {
   type CLiteCompatibilityCheckOptions,
   type CodexRuntimeSelection,
 } from "../src/index.js";
-import { checkOwnedCodexCompatibilityWithCleanupForTest } from "../src/c-lite-compatibility.js";
+import {
+  checkOwnedCodexCompatibilityWithCleanupForTest,
+  runSchemaGeneratorForTest,
+  validateGeneratedCompatibilityOutputForTest,
+} from "../src/c-lite-compatibility.js";
 
 const PROBE_PREFIX = "ctc-codex-c-lite-";
+const AUTHORITATIVE_BUNDLE = "codex_app_server_protocol.schemas.json";
 
-type BundleScenario =
-  | "incompatible-approval"
-  | "incompatible-text-input"
-  | "incompatible-usage"
-  | "missing-method"
-  | "missing-required-field"
+type MutableSchema = Record<string, unknown>;
+type GeneratorBehavior =
+  | "first-nonzero"
+  | "malformed"
+  | "missing"
+  | "nonzero"
+  | "partial"
+  | "signal"
+  | "unexpected-output"
   | "valid";
 
-type GeneratorBehavior = "malformed" | "missing" | "nonzero" | "signal" | "valid";
+interface MethodCase {
+  readonly method: string;
+  readonly root: "ClientNotification" | "ClientRequest" | "ServerNotification" | "ServerRequest";
+}
+
+const METHOD_CASES: readonly MethodCase[] = [
+  ...SUPPORTED_CLIENT_REQUEST_METHODS.map((method) => ({
+    method,
+    root: "ClientRequest" as const,
+  })),
+  ...SUPPORTED_CLIENT_NOTIFICATION_METHODS.map((method) => ({
+    method,
+    root: "ClientNotification" as const,
+  })),
+  ...SUPPORTED_SERVER_NOTIFICATION_METHODS.map((method) => ({
+    method,
+    root: "ServerNotification" as const,
+  })),
+  ...SUPPORTED_SERVER_REQUEST_METHODS.map((method) => ({
+    method,
+    root: "ServerRequest" as const,
+  })),
+];
+
+const REQUIRED_FIELD_CASES = [
+  { fields: ["clientInfo"], path: ["definitions", "InitializeParams"] },
+  { fields: ["threadId"], path: ["definitions", "v2", "ThreadResumeParams"] },
+  { fields: ["input", "threadId"], path: ["definitions", "v2", "TurnStartParams"] },
+  { fields: ["threadId", "turnId"], path: ["definitions", "v2", "TurnInterruptParams"] },
+  { fields: ["threadId"], path: ["definitions", "v2", "ThreadGoalSetParams"] },
+  { fields: ["threadId"], path: ["definitions", "v2", "ThreadGoalGetParams"] },
+  {
+    fields: ["itemId", "startedAtMs", "threadId", "turnId"],
+    path: ["definitions", "CommandExecutionRequestApprovalParams"],
+  },
+  {
+    fields: ["itemId", "startedAtMs", "threadId", "turnId"],
+    path: ["definitions", "FileChangeRequestApprovalParams"],
+  },
+] as const;
+
+const METHOD_PROPERTY_CASES = [
+  {
+    fields: ["baseInstructions", "developerInstructions", "model", "modelProvider"],
+    path: ["definitions", "v2", "ThreadStartParams"],
+  },
+  {
+    fields: ["input", "model", "threadId"],
+    path: ["definitions", "v2", "TurnStartParams"],
+  },
+] as const;
+
+const NAMED_OBJECT_CASES = [
+  {
+    fields: ["codexHome", "platformFamily", "platformOs", "userAgent"],
+    path: ["definitions", "InitializeResponse"],
+  },
+  {
+    fields: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread",
+    ],
+    path: ["definitions", "v2", "ThreadStartResponse"],
+  },
+  {
+    fields: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread",
+    ],
+    path: ["definitions", "v2", "ThreadResumeResponse"],
+  },
+  { fields: ["turn"], path: ["definitions", "v2", "TurnStartResponse"] },
+  {
+    fields: [
+      "cliVersion",
+      "createdAt",
+      "cwd",
+      "ephemeral",
+      "id",
+      "modelProvider",
+      "preview",
+      "sessionId",
+      "source",
+      "status",
+      "turns",
+      "updatedAt",
+    ],
+    path: ["definitions", "v2", "Thread"],
+  },
+  { fields: ["id", "items", "status"], path: ["definitions", "v2", "Turn"] },
+  { fields: ["last", "total"], path: ["definitions", "v2", "ThreadTokenUsage"] },
+  {
+    fields: [
+      "cachedInputTokens",
+      "inputTokens",
+      "outputTokens",
+      "reasoningOutputTokens",
+      "totalTokens",
+    ],
+    path: ["definitions", "v2", "TokenUsageBreakdown"],
+  },
+] as const;
 
 let fixtureRoot: string;
 let runtimeRoot: string;
 let capturePath: string;
 let options: CLiteCompatibilityCheckOptions;
+let outputSequence: number;
+let originalAmbientSecret: string | undefined;
 let originalCodexHome: string | undefined;
 let originalHome: string | undefined;
 let originalNodeEnvironment: string | undefined;
@@ -49,8 +177,10 @@ beforeEach(() => {
   fixtureRoot = mkdtempSync(join(tmpdir(), "ctc-c-lite-test-"));
   runtimeRoot = join(fixtureRoot, "runtime");
   capturePath = join(fixtureRoot, "capture.txt");
+  outputSequence = 0;
   mkdirSync(runtimeRoot, { mode: 0o700 });
   options = { runtimeOwnership: { trustedRuntimeRoot: runtimeRoot } };
+  originalAmbientSecret = process.env.CTC_C_LITE_AMBIENT_SECRET;
   originalCodexHome = process.env.CODEX_HOME;
   originalHome = process.env.HOME;
   originalNodeEnvironment = process.env.NODE_ENV;
@@ -59,6 +189,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreEnvironmentVariable("CTC_C_LITE_AMBIENT_SECRET", originalAmbientSecret);
   restoreEnvironmentVariable("CODEX_HOME", originalCodexHome);
   restoreEnvironmentVariable("HOME", originalHome);
   restoreEnvironmentVariable("NODE_ENV", originalNodeEnvironment);
@@ -67,7 +198,7 @@ afterEach(() => {
 });
 
 describe("C-lite trusted owned-candidate compatibility", () => {
-  it("uses only the canonical owned binary and confines both generators to cleaned isolation", () => {
+  it("uses only the canonical candidate and confines both generators to cleaned isolation", () => {
     const ambient = createAmbientFixture();
     const ambientSentinel = join(ambient.pathDirectory, "ambient-codex-used");
     writeExecutable(
@@ -77,8 +208,9 @@ describe("C-lite trusted owned-candidate compatibility", () => {
     process.env.HOME = ambient.home;
     process.env.CODEX_HOME = ambient.codexHome;
     process.env.PATH = ambient.pathDirectory;
+    process.env.CTC_C_LITE_AMBIENT_SECRET = "private-sentinel";
 
-    const canonicalCandidate = installCandidate("valid", "valid");
+    const canonicalCandidate = installCandidate("valid");
     const leftoversBefore = compatibilityProbeNames();
     const result = checkOwnedCodexCompatibility(options);
     const leftoversAfter = compatibilityProbeNames();
@@ -96,6 +228,7 @@ describe("C-lite trusted owned-candidate compatibility", () => {
     expect(result.provenanceSha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(leftoversAfter).toEqual(leftoversBefore);
     expect(existsSync(ambientSentinel)).toBe(false);
+    expect(existsSync(`${capturePath}.ambient-leak`)).toBe(false);
     expect(existsSync(join(ambient.home, "arg0-sentinel"))).toBe(false);
     expect(existsSync(join(ambient.codexHome, "arg0-sentinel"))).toBe(false);
 
@@ -122,15 +255,23 @@ describe("C-lite trusted owned-candidate compatibility", () => {
       expect(home).not.toBe(ambient.home);
       expect(codexHome).not.toBe(ambient.codexHome);
       expect(pathDirectory).not.toBe(ambient.pathDirectory);
-      const generatedOutput = group[5]?.split(" ").at(-1);
-      expect(generatedOutput).toBeDefined();
-      expect(generatedOutput?.startsWith(`${probeRoot}/schemas/`)).toBe(true);
+      expect(group[5]?.split(" ").at(-1)?.startsWith(`${probeRoot}/schemas/`)).toBe(
+        true,
+      );
       expect(existsSync(probeRoot)).toBe(false);
     }
   });
 
+  it("discards bounded unexpected generator output", () => {
+    installCandidate("unexpected-output");
+    expect(checkOwnedCodexCompatibility(options)).toMatchObject({
+      compatible: true,
+      failure: null,
+    });
+  });
+
   it("fails closed for an untested owned binary without running a generator", () => {
-    installCandidate("valid", "valid", "codex-cli 0.148.0-alpha.8");
+    installCandidate("valid", "codex-cli 0.148.0-alpha.8");
     expect(checkOwnedCodexCompatibility(options)).toMatchObject({
       compatible: false,
       failure: "UNTESTED_CODEX_VERSION",
@@ -140,7 +281,7 @@ describe("C-lite trusted owned-candidate compatibility", () => {
     expect(existsSync(capturePath)).toBe(false);
   });
 
-  it("does not substitute an ambient PATH binary when the owned candidate is absent", () => {
+  it("does not substitute an ambient PATH binary when the candidate is absent", () => {
     const ambient = createAmbientFixture();
     const ambientSentinel = join(ambient.pathDirectory, "ambient-codex-used");
     writeExecutable(
@@ -162,31 +303,14 @@ describe("C-lite trusted owned-candidate compatibility", () => {
   });
 
   it.each([
-    ["missing-method", "PROTOCOL_METHOD_MISSING"],
-    ["missing-required-field", "PROTOCOL_SHAPE_INCOMPATIBLE"],
-    ["incompatible-approval", "PROTOCOL_SHAPE_INCOMPATIBLE"],
-    ["incompatible-usage", "PROTOCOL_SHAPE_INCOMPATIBLE"],
-    ["incompatible-text-input", "PROTOCOL_SHAPE_INCOMPATIBLE"],
-  ] as const)("fails the consumed contract for %s", (scenario, failure) => {
-    installCandidate(scenario, "valid");
-    const result = checkOwnedCodexCompatibility(options);
-    expect(result).toMatchObject({
-      compatible: false,
-      consumedProtocolContractPassed: false,
-      failure,
-      schemaGenerationSucceeded: true,
-      trustedOwnedCandidateUsed: true,
-    });
-    expect(compatibilityProbeNames()).toEqual([]);
-  });
-
-  it.each([
+    ["first-nonzero", "SCHEMA_GENERATOR_FAILED"],
     ["nonzero", "SCHEMA_GENERATOR_FAILED"],
+    ["partial", "SCHEMA_GENERATOR_FAILED"],
     ["signal", "SCHEMA_GENERATOR_SIGNALED"],
     ["missing", "SCHEMA_OUTPUT_MISSING"],
     ["malformed", "SCHEMA_OUTPUT_MALFORMED"],
   ] as const)("sanitizes %s generator/output failure and cleans isolation", (behavior, failure) => {
-    installCandidate("valid", behavior);
+    installCandidate(behavior);
     const result = checkOwnedCodexCompatibility(options);
     expect(result).toMatchObject({ compatible: false, failure });
     expect(JSON.stringify(result)).not.toContain("private generator diagnostic");
@@ -195,7 +319,7 @@ describe("C-lite trusted owned-candidate compatibility", () => {
   });
 
   it("fails closed when successful validation cannot clean its disposable root", () => {
-    installCandidate("valid", "valid");
+    installCandidate("valid");
     let retainedRoot: string | undefined;
     const result = checkOwnedCodexCompatibilityWithCleanupForTest(options, (root) => {
       retainedRoot = root;
@@ -220,10 +344,448 @@ describe("C-lite trusted owned-candidate compatibility", () => {
   });
 });
 
+describe("association-correct semantic validation", () => {
+  it("accepts the compact authoritative aggregate", () => {
+    expect(validateBundle(buildCompatibilityBundle()).provenanceSha256).toMatch(
+      /^[a-f0-9]{64}$/u,
+    );
+  });
+
+  it.each(METHOD_CASES)("fails when the authoritative $root variant for $method is removed", ({ method, root }) => {
+    const bundle = buildCompatibilityBundle();
+    removeMethodVariant(bundle, root, method);
+    expectBundleFailure(bundle, "PROTOCOL_METHOD_MISSING");
+  });
+
+  it.each(
+    REQUIRED_FIELD_CASES.flatMap(({ fields, path }) =>
+      fields.map((field) => ({ field, path })),
+    ),
+  )("fails when required field $field is removed from $path", ({ field, path }) => {
+    const bundle = buildCompatibilityBundle();
+    removeRequiredField(bundle, path, field);
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it.each(
+    METHOD_PROPERTY_CASES.flatMap(({ fields, path }) =>
+      fields.map((field) => ({ field, path })),
+    ),
+  )("fails when consumed optional field $field is absent from $path", ({ field, path }) => {
+    const bundle = buildCompatibilityBundle();
+    delete schemaRecordAt(bundle, [...path, "properties"])[field];
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it.each(
+    NAMED_OBJECT_CASES.flatMap(({ fields, path }) =>
+      fields.map((field) => ({ field, path })),
+    ),
+  )("fails when named contract $path loses required field $field", ({ field, path }) => {
+    const bundle = buildCompatibilityBundle();
+    removeRequiredField(bundle, path, field);
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("requires cacheWriteInputTokens to remain present in TokenUsageBreakdown", () => {
+    const bundle = buildCompatibilityBundle();
+    delete schemaRecordAt(bundle, [
+      "definitions",
+      "v2",
+      "TokenUsageBreakdown",
+      "properties",
+    ]).cacheWriteInputTokens;
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it.each([
+    ["CommandExecutionApprovalDecision", "accept"],
+    ["CommandExecutionApprovalDecision", "acceptForSession"],
+    ["CommandExecutionApprovalDecision", "cancel"],
+    ["CommandExecutionApprovalDecision", "decline"],
+    ["FileChangeApprovalDecision", "accept"],
+    ["FileChangeApprovalDecision", "acceptForSession"],
+    ["FileChangeApprovalDecision", "cancel"],
+    ["FileChangeApprovalDecision", "decline"],
+  ] as const)("fails when %s loses supported decision %s", (definition, decision) => {
+    const bundle = buildCompatibilityBundle();
+    const variants = schemaArrayAt(bundle, ["definitions", definition, "oneOf"]);
+    const variant = variants.find((candidate) => stringArray(candidate.enum).includes(decision));
+    schemaRecord(variant).enum = ["unrelated"];
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a valid object decoy when the authoritative Thread is broken", () => {
+    const bundle = buildCompatibilityBundle();
+    const original = structuredClone(schemaRecordAt(bundle, ["definitions", "v2", "Thread"]));
+    removeRequiredField(bundle, ["definitions", "v2", "Thread"], "id");
+    schemaRecordAt(bundle, ["definitions"]).UnrelatedThreadDecoy = original;
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects an unrelated approval enum decoy", () => {
+    const bundle = buildCompatibilityBundle();
+    const decision = schemaRecordAt(bundle, [
+      "definitions",
+      "CommandExecutionApprovalDecision",
+    ]);
+    decision.oneOf = schemaArrayAt(bundle, [
+      "definitions",
+      "CommandExecutionApprovalDecision",
+      "oneOf",
+    ]).filter((variant) => !stringArray(variant.enum).includes("cancel"));
+    schemaRecordAt(bundle, ["definitions"]).ApprovalDecoy = {
+      enum: ["accept", "acceptForSession", "cancel", "decline"],
+    };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects an unrelated text_elements decoy", () => {
+    const bundle = buildCompatibilityBundle();
+    const text = textInputVariant(bundle);
+    delete schemaRecord(text.properties).text_elements;
+    schemaRecordAt(bundle, ["definitions"]).TextDecoy = objectSchema(
+      ["text_elements"],
+      [],
+    );
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a duplicate-method decoy outside the authoritative message root", () => {
+    const bundle = buildCompatibilityBundle();
+    const actual = methodVariant(bundle, "ClientRequest", "thread/start");
+    actual.required = ["method", "params"];
+    schemaRecordAt(bundle, ["definitions"]).MethodDecoy = requestSchema(
+      "thread/start",
+      "#/definitions/v2/ThreadStartParams",
+    );
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects duplicate supported variants inside an authoritative message root", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaArrayAt(bundle, ["definitions", "ClientRequest", "oneOf"]).push(
+      structuredClone(methodVariant(bundle, "ClientRequest", "thread/start")),
+    );
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a valid secondary-document copy when the authoritative aggregate is broken", () => {
+    const bundle = buildCompatibilityBundle();
+    const decoy = structuredClone(bundle);
+    removeRequiredField(bundle, ["definitions", "v2", "Thread"], "id");
+    const output = writeValidationOutput(bundle, {
+      "codex_app_server_protocol.v2.schemas.json": decoy,
+    });
+    expectValidationFailure(output, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a method params schema redirected to a shape-compatible decoy", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2"]).ThreadStartParamsDecoy = structuredClone(
+      schemaRecordAt(bundle, ["definitions", "v2", "ThreadStartParams"]),
+    );
+    schemaRecord(methodVariant(bundle, "ClientRequest", "thread/start").properties).params = {
+      $ref: "#/definitions/v2/ThreadStartParamsDecoy",
+    };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("accepts unrelated additive methods, fields, definitions, enum members, and documents", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaArrayAt(bundle, ["definitions", "ClientRequest", "oneOf"]).push(
+      requestSchema("unrelated/additive", "#/definitions/v2/EmptyParams"),
+    );
+    schemaRecordAt(bundle, ["definitions", "v2", "Thread", "properties"]).additive = {};
+    schemaRecordAt(bundle, ["definitions"]).AdditiveDefinition = objectSchema(
+      ["value"],
+      [],
+    );
+    schemaArrayAt(bundle, [
+      "definitions",
+      "FileChangeApprovalDecision",
+      "oneOf",
+    ]).push({ enum: ["futureDecision"] });
+    const output = writeValidationOutput(bundle, {
+      "unrelated-additive.json": { title: "Additive", type: "object" },
+    });
+    expect(validateGeneratedCompatibilityOutputForTest(output)).toBeDefined();
+  });
+});
+
+describe("local reference and path hardening", () => {
+  it("resolves percent-encoded local pointer fragments", () => {
+    const bundle = buildCompatibilityBundle();
+    const v2 = schemaRecordAt(bundle, ["definitions", "v2"]);
+    v2["Thread Contract"] = v2.Thread;
+    v2.Thread = { $ref: "#/definitions/v2/Thread%20Contract" };
+    expect(validateBundle(bundle)).toBeDefined();
+  });
+
+  it("decodes ~0 and ~1 in local JSON Pointer segments", () => {
+    const bundle = buildCompatibilityBundle();
+    const v2 = schemaRecordAt(bundle, ["definitions", "v2"]);
+    v2["Thread~Contract/Primary"] = v2.Thread;
+    v2.Thread = { $ref: "#/definitions/v2/Thread~0Contract~1Primary" };
+    expect(validateBundle(bundle)).toBeDefined();
+  });
+
+  it("accepts bounded nested allOf object composition", () => {
+    const bundle = buildCompatibilityBundle();
+    const thread = schemaRecordAt(bundle, ["definitions", "v2", "Thread"]);
+    const properties = schemaRecord(thread.properties);
+    const required = stringArray(thread.required);
+    const midpoint = Math.floor(required.length / 2);
+    schemaRecordAt(bundle, ["definitions", "v2"]).Thread = {
+      allOf: [
+        objectSchema(required.slice(0, midpoint), required.slice(0, midpoint)),
+        {
+          allOf: [
+            objectSchema(required.slice(midpoint), required.slice(midpoint)),
+            { properties },
+          ],
+        },
+      ],
+    };
+    expect(validateBundle(bundle)).toBeDefined();
+  });
+
+  it("accepts a bounded anyOf wrapper for an exact method literal", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecord(methodVariant(bundle, "ClientRequest", "initialize").properties).method = {
+      anyOf: [{ enum: ["initialize"] }],
+    };
+    expect(validateBundle(bundle)).toBeDefined();
+  });
+
+  it.each([
+    ["missing local", "#/definitions/v2/Missing"],
+    ["malformed percent", "#/definitions/v2/%ZZ"],
+    ["malformed pointer escape", "#/definitions/v2/Thread~2"],
+    ["percent-encoded external file", "decoy%2Ejson#/definitions/Thread"],
+    ["parent traversal", "../decoy.json#/definitions/Thread"],
+    ["absolute file", "file:///tmp/decoy.json#/definitions/Thread"],
+    ["HTTP", "https://example.invalid/schema.json#/definitions/Thread"],
+  ] as const)("fails closed for %s reference", (_label, reference) => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2"]).Thread = { $ref: reference };
+    const output = writeValidationOutput(bundle, {
+      "decoy.json": { definitions: { Thread: validThreadSchema() } },
+    });
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("fails closed for a cyclic consumed reference", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2"]).Thread = {
+      $ref: "#/definitions/v2/Thread",
+    };
+    expectBundleFailure(bundle, "SCHEMA_OUTPUT_MALFORMED");
+  });
+});
+
+describe("generated filesystem and resource bounds", () => {
+  it("requires generated TypeScript output", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    rmSync(join(output, "typescript", "protocol.ts"));
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MISSING");
+  });
+
+  it("requires the authoritative aggregate root", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    rmSync(join(output, "json-schema", AUTHORITATIVE_BUNDLE));
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MISSING");
+  });
+
+  it("rejects malformed authoritative JSON", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    writeFileSync(join(output, "json-schema", AUTHORITATIVE_BUNDLE), "{", "utf8");
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("rejects malformed secondary JSON without treating it as contract authority", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    writeFileSync(join(output, "json-schema", "secondary.json"), "{", "utf8");
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("rejects a symlinked authoritative JSON file", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    const bundlePath = join(output, "json-schema", AUTHORITATIVE_BUNDLE);
+    const target = join(fixtureRoot, "bundle-target.json");
+    renameSync(bundlePath, target);
+    symlinkSync(target, bundlePath);
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("rejects a symlinked JSON schema root", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    const root = join(output, "json-schema");
+    const target = join(fixtureRoot, "json-target");
+    renameSync(root, target);
+    symlinkSync(target, root);
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("rejects a nested generated-directory symlink", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    const target = join(fixtureRoot, "nested-target");
+    mkdirSync(target);
+    symlinkSync(target, join(output, "json-schema", "nested"));
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("rejects a non-regular generated file", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    const fifo = join(output, "json-schema", "generated.fifo");
+    const created = spawnSync("/usr/bin/mkfifo", [fifo]);
+    expect(created.status).toBe(0);
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("bounds generated directory depth", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    mkdirSync(join(output, "typescript", "a", "b"), { recursive: true });
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxGeneratedTreeDepth: 1,
+    });
+  });
+
+  it("bounds directory entry counts", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxDirectoryEntries: 0,
+    });
+  });
+
+  it("bounds total directory and file entries", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    mkdirSync(join(output, "typescript", "a", "b"), { recursive: true });
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxGeneratedEntries: 2,
+    });
+  });
+
+  it("counts non-JSON files against the generated file limit", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    writeFileSync(join(output, "json-schema", "one.txt"), "one", "utf8");
+    writeFileSync(join(output, "json-schema", "two.txt"), "two", "utf8");
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxGeneratedFiles: 2,
+    });
+  });
+
+  it("bounds individual and aggregate generated bytes", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxGeneratedFileBytes: 64,
+    });
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxGeneratedTotalBytes: 64,
+    });
+  });
+
+  it("bounds parsed JSON depth", () => {
+    const bundle = buildCompatibilityBundle();
+    let current: MutableSchema = bundle;
+    for (let index = 0; index < 70; index += 1) {
+      const next: MutableSchema = {};
+      current.deep = next;
+      current = next;
+    }
+    expectBundleFailure(bundle, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("bounds parsed JSON container counts", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxSchemaContainers: 10,
+    });
+  });
+
+  it("bounds schema branch signature expansion", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2"]).Thread = {
+      anyOf: Array.from({ length: 129 }, () => validThreadSchema()),
+    };
+    expectBundleFailure(bundle, "SCHEMA_OUTPUT_MALFORMED");
+  });
+
+  it("bounds total consumed-graph validation work", () => {
+    const output = writeValidationOutput(buildCompatibilityBundle());
+    expectValidationFailure(output, "SCHEMA_OUTPUT_MALFORMED", {
+      maxSchemaOperations: 10,
+    });
+  });
+});
+
+describe("generator process boundaries", () => {
+  it("classifies spawn start failure", () => {
+    expectGeneratorFailure(
+      "/definitely/missing/ctc-generator",
+      [],
+      100,
+      1_024,
+      "SCHEMA_GENERATOR_START_FAILED",
+    );
+  });
+
+  it("classifies nonzero exit", () => {
+    expectGeneratorFailure(
+      "/bin/sh",
+      ["-c", "exit 17"],
+      100,
+      1_024,
+      "SCHEMA_GENERATOR_FAILED",
+    );
+  });
+
+  it("classifies an independent signal", () => {
+    expectGeneratorFailure(
+      "/bin/sh",
+      ["-c", "kill -TERM $$"],
+      100,
+      1_024,
+      "SCHEMA_GENERATOR_SIGNALED",
+    );
+  });
+
+  it("bounds generator timeout", () => {
+    expectGeneratorFailure(
+      "/bin/sh",
+      ["-c", "while :; do :; done"],
+      20,
+      1_024,
+      "SCHEMA_GENERATOR_FAILED",
+    );
+  });
+
+  it("bounds generator stdout and stderr", () => {
+    expectGeneratorFailure(
+      "/bin/sh",
+      ["-c", "while :; do printf x; printf y >&2; done"],
+      1_000,
+      128,
+      "SCHEMA_GENERATOR_FAILED",
+    );
+  });
+
+  it("permits bounded diagnostic output without exposing it", () => {
+    expect(() =>
+      runSchemaGeneratorForTest(
+        "/bin/sh",
+        ["-c", "printf private; printf diagnostic >&2"],
+        isolatedChildEnvironment(),
+        { maxBufferBytes: 1_024, timeoutMilliseconds: 100 },
+      ),
+    ).not.toThrow();
+  });
+});
+
 function installCandidate(
-  scenario: BundleScenario,
   behavior: GeneratorBehavior,
   versionOutput: string = TESTED_CODEX_VERSION,
+  bundle: MutableSchema = buildCompatibilityBundle(),
 ): string {
   const selection = {
     target: getCodexRuntimeTarget(),
@@ -236,7 +798,7 @@ function installCandidate(
   mkdirSync(dirname(executablePath), { recursive: true });
   writeExecutable(
     executablePath,
-    fakeCandidateBody(JSON.stringify(buildCompatibilityBundle(scenario)), behavior, versionOutput),
+    fakeCandidateBody(JSON.stringify(bundle), behavior, versionOutput),
   );
   return realpathSync(executablePath);
 }
@@ -250,14 +812,20 @@ function fakeCandidateBody(
     behavior === "missing"
       ? "exit 0"
       : behavior === "malformed"
-        ? 'printf \'%s\' \'{\' > "$out/codex_app_server_protocol.v2.schemas.json"'
-        : `printf '%s' ${shellSingleQuote(bundle)} > "$out/codex_app_server_protocol.v2.schemas.json"`;
-  const behaviorGuard =
+        ? `printf '%s' '{' > "$out/${AUTHORITATIVE_BUNDLE}"`
+        : behavior === "partial"
+          ? `printf '%s' '{}' > "$out/${AUTHORITATIVE_BUNDLE}"; printf '%s\\n' 'private generator diagnostic' >&2; exit 17`
+          : `printf '%s' ${shellSingleQuote(bundle)} > "$out/${AUTHORITATIVE_BUNDLE}"`;
+  const secondGeneratorGuard =
     behavior === "nonzero"
       ? "printf '%s\\n' 'private generator diagnostic' >&2; exit 17"
       : behavior === "signal"
         ? "kill -TERM $$"
         : "";
+  const boundedDiagnostics =
+    behavior === "unexpected-output"
+      ? "printf '%s\\n' 'private stdout'; printf '%s\\n' 'private stderr' >&2"
+      : "";
   return [
     'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then',
     `  printf '%s\\n' ${shellSingleQuote(versionOutput)}`,
@@ -267,6 +835,9 @@ function fakeCandidateBody(
     '[ "$1" = "app-server" ] || exit 9',
     '[ "$3" = "--out" ] || exit 9',
     `printf '%s\\n' "$0" "$HOME" "$CODEX_HOME" "$TMPDIR" "$PATH" "$*" >> ${shellSingleQuote(capturePath)}`,
+    'if [ "${CTC_C_LITE_AMBIENT_SECRET+x}" = x ]; then',
+    `  printf '%s\\n' leaked > ${shellSingleQuote(`${capturePath}.ambient-leak`)}`,
+    "fi",
     '/bin/mkdir -p "$HOME" "$CODEX_HOME" "$TMPDIR" "$PATH"',
     `printf '%s\\n' isolated > "$HOME/arg0-sentinel"`,
     `printf '%s\\n' isolated > "$CODEX_HOME/arg0-sentinel"`,
@@ -275,207 +846,448 @@ function fakeCandidateBody(
     'out="$4"',
     '/bin/mkdir -p "$out"',
     'if [ "$2" = "generate-ts" ]; then',
+    behavior === "first-nonzero"
+      ? "  printf '%s\\n' 'private generator diagnostic' >&2; exit 17"
+      : "",
     `  printf '%s\\n' 'export type Generated = true;' > "$out/protocol.ts"`,
+    `  ${boundedDiagnostics}`,
     "  exit 0",
     "fi",
     '[ "$2" = "generate-json-schema" ] || exit 9',
-    behaviorGuard,
+    secondGeneratorGuard,
+    boundedDiagnostics,
     jsonBody,
   ].join("\n");
 }
 
-function buildCompatibilityBundle(scenario: BundleScenario): Record<string, unknown> {
-  const methodSchemas = [
-    methodSchema("initialize", "InitializeParams"),
-    methodSchema("thread/start", "ThreadStartParams"),
-    methodSchema("thread/resume", "ThreadResumeParams"),
-    methodSchema("turn/start", "TurnStartParams"),
-    methodSchema("turn/interrupt", "TurnInterruptParams"),
-    methodSchema("thread/goal/set", "ThreadGoalSetParams"),
-    methodSchema("thread/goal/get", "ThreadGoalGetParams"),
-    methodSchema("skills/list", "SkillsListParams"),
-    methodSchema("initialized", "EmptyParams"),
-    methodSchema("thread/started", "EmptyParams"),
-    methodSchema("thread/goal/updated", "EmptyParams"),
-    methodSchema("turn/started", "EmptyParams"),
-    methodSchema("item/started", "EmptyParams"),
-    methodSchema("item/agentMessage/delta", "EmptyParams"),
-    methodSchema("item/completed", "EmptyParams"),
-    methodSchema("thread/tokenUsage/updated", "EmptyParams"),
-    methodSchema("turn/completed", "EmptyParams"),
-    methodSchema("serverRequest/resolved", "EmptyParams"),
-    methodSchema(
-      "item/commandExecution/requestApproval",
-      "CommandExecutionApprovalParams",
+function buildCompatibilityBundle(): MutableSchema {
+  const v2: MutableSchema = {
+    AgentMessageDeltaNotification: objectSchema([], []),
+    EmptyParams: objectSchema([], []),
+    ItemCompletedNotification: objectSchema([], []),
+    ItemStartedNotification: objectSchema([], []),
+    ServerRequestResolvedNotification: objectSchema([], []),
+    SkillsListParams: objectSchema([], []),
+    TextElement: objectSchema([], []),
+    Thread: validThreadSchema(),
+    ThreadGoalGetParams: objectSchema(["threadId"], ["threadId"]),
+    ThreadGoalSetParams: objectSchema(["threadId"], ["threadId"]),
+    ThreadGoalUpdatedNotification: objectSchema([], []),
+    ThreadResumeParams: objectSchema(["threadId"], ["threadId"]),
+    ThreadStartParams: objectSchema(
+      ["baseInstructions", "developerInstructions", "model", "modelProvider"],
+      [],
     ),
-    methodSchema("item/fileChange/requestApproval", "FileChangeApprovalParams"),
-    methodSchema("model/list", "EmptyParams"),
-  ].filter(
-    (schema) =>
-      scenario !== "missing-method" ||
-      ((schema.properties as Record<string, Record<string, string>>).method?.const !==
-        "skills/list"),
-  );
+    ThreadStartResponse: threadResponseSchema(),
+    ThreadResumeResponse: threadResponseSchema(),
+    ThreadStartedNotification: referencedObjectSchema(
+      "thread",
+      "#/definitions/v2/Thread",
+    ),
+    ThreadTokenUsage: {
+      properties: {
+        last: { $ref: "#/definitions/v2/TokenUsageBreakdown" },
+        modelContextWindow: {},
+        total: { $ref: "#/definitions/v2/TokenUsageBreakdown" },
+      },
+      required: ["last", "total"],
+      type: "object",
+    },
+    ThreadTokenUsageUpdatedNotification: referencedObjectSchema(
+      "tokenUsage",
+      "#/definitions/v2/ThreadTokenUsage",
+    ),
+    TokenUsageBreakdown: objectSchema(
+      [
+        "cacheWriteInputTokens",
+        "cachedInputTokens",
+        "inputTokens",
+        "outputTokens",
+        "reasoningOutputTokens",
+        "totalTokens",
+      ],
+      [
+        "cachedInputTokens",
+        "inputTokens",
+        "outputTokens",
+        "reasoningOutputTokens",
+        "totalTokens",
+      ],
+    ),
+    Turn: objectSchema(["id", "items", "status"], ["id", "items", "status"]),
+    TurnCompletedNotification: referencedObjectSchema(
+      "turn",
+      "#/definitions/v2/Turn",
+    ),
+    TurnInterruptParams: objectSchema(
+      ["threadId", "turnId"],
+      ["threadId", "turnId"],
+    ),
+    TurnStartParams: objectSchema(
+      ["input", "model", "threadId"],
+      ["input", "threadId"],
+    ),
+    TurnStartResponse: referencedObjectSchema("turn", "#/definitions/v2/Turn"),
+    TurnStartedNotification: referencedObjectSchema(
+      "turn",
+      "#/definitions/v2/Turn",
+    ),
+    UserInput: {
+      oneOf: [
+        {
+          properties: {
+            text: {},
+            text_elements: {
+              items: { $ref: "#/definitions/v2/TextElement" },
+              type: "array",
+            },
+            type: { enum: ["text"] },
+          },
+          required: ["text", "type"],
+          type: "object",
+        },
+        {
+          properties: { type: { enum: ["image"] }, url: {} },
+          required: ["type", "url"],
+          type: "object",
+        },
+      ],
+    },
+  };
 
-  const approvalRequired =
-    scenario === "incompatible-approval"
-      ? ["itemId", "threadId", "turnId"]
-      : ["itemId", "startedAtMs", "threadId", "turnId"];
-  const tokenRequired =
-    scenario === "incompatible-usage"
-      ? [
-          "cachedInputTokens",
-          "inputTokens",
-          "outputTokens",
-          "reasoningOutputTokens",
-        ]
-      : [
-          "cachedInputTokens",
-          "inputTokens",
-          "outputTokens",
-          "reasoningOutputTokens",
-          "totalTokens",
-        ];
-  const textRequired =
-    scenario === "incompatible-text-input" ? ["type"] : ["text", "type"];
+  const clientRequestParams: Readonly<Record<string, string>> = {
+    initialize: "#/definitions/InitializeParams",
+    "skills/list": "#/definitions/v2/SkillsListParams",
+    "thread/goal/get": "#/definitions/v2/ThreadGoalGetParams",
+    "thread/goal/set": "#/definitions/v2/ThreadGoalSetParams",
+    "thread/resume": "#/definitions/v2/ThreadResumeParams",
+    "thread/start": "#/definitions/v2/ThreadStartParams",
+    "turn/interrupt": "#/definitions/v2/TurnInterruptParams",
+    "turn/start": "#/definitions/v2/TurnStartParams",
+  };
+  const serverNotificationParams: Readonly<Record<string, string>> = {
+    "item/agentMessage/delta": "#/definitions/v2/AgentMessageDeltaNotification",
+    "item/completed": "#/definitions/v2/ItemCompletedNotification",
+    "item/started": "#/definitions/v2/ItemStartedNotification",
+    "serverRequest/resolved": "#/definitions/v2/ServerRequestResolvedNotification",
+    "thread/goal/updated": "#/definitions/v2/ThreadGoalUpdatedNotification",
+    "thread/started": "#/definitions/v2/ThreadStartedNotification",
+    "thread/tokenUsage/updated": "#/definitions/v2/ThreadTokenUsageUpdatedNotification",
+    "turn/completed": "#/definitions/v2/TurnCompletedNotification",
+    "turn/started": "#/definitions/v2/TurnStartedNotification",
+  };
 
   return {
-    $defs: {
-      ApprovalDecision: {
-        enum: ["accept", "acceptForSession", "cancel", "decline"],
+    definitions: {
+      ClientNotification: {
+        oneOf: SUPPORTED_CLIENT_NOTIFICATION_METHODS.map((method) =>
+          notificationSchema(method),
+        ),
       },
-      CommandExecutionApprovalParams: objectSchema(
+      ClientRequest: {
+        oneOf: SUPPORTED_CLIENT_REQUEST_METHODS.map((method) =>
+          requestSchema(method, clientRequestParams[method] as string),
+        ),
+      },
+      CommandExecutionApprovalDecision: approvalDecisionSchema(),
+      CommandExecutionRequestApprovalParams: objectSchema(
         ["itemId", "startedAtMs", "threadId", "turnId"],
-        approvalRequired,
+        ["itemId", "startedAtMs", "threadId", "turnId"],
       ),
-      EmptyParams: objectSchema([], []),
-      FileChangeApprovalParams: objectSchema(
+      CommandExecutionRequestApprovalResponse: approvalResponseSchema(
+        "#/definitions/CommandExecutionApprovalDecision",
+      ),
+      FileChangeApprovalDecision: approvalDecisionSchema(),
+      FileChangeRequestApprovalParams: objectSchema(
         ["itemId", "startedAtMs", "threadId", "turnId"],
         ["itemId", "startedAtMs", "threadId", "turnId"],
+      ),
+      FileChangeRequestApprovalResponse: approvalResponseSchema(
+        "#/definitions/FileChangeApprovalDecision",
       ),
       InitializeParams: objectSchema(["clientInfo"], ["clientInfo"]),
       InitializeResponse: objectSchema(
         ["codexHome", "platformFamily", "platformOs", "userAgent"],
         ["codexHome", "platformFamily", "platformOs", "userAgent"],
       ),
-      RequestsAndNotifications: { oneOf: methodSchemas },
-      SkillsListParams: objectSchema([], []),
-      TextInput: {
-        properties: {
-          text: {},
-          text_elements: {},
-          type: { const: "text" },
-        },
-        required: textRequired,
-        type: "object",
+      ServerNotification: {
+        oneOf: SUPPORTED_SERVER_NOTIFICATION_METHODS.map((method) =>
+          notificationSchema(method, serverNotificationParams[method] as string),
+        ),
       },
-      Thread: objectSchema(
-        [
-          "cliVersion",
-          "createdAt",
-          "cwd",
-          "ephemeral",
-          "id",
-          "modelProvider",
-          "preview",
-          "sessionId",
-          "source",
-          "status",
-          "turns",
-          "updatedAt",
+      ServerRequest: {
+        oneOf: [
+          requestSchema(
+            "item/commandExecution/requestApproval",
+            "#/definitions/CommandExecutionRequestApprovalParams",
+          ),
+          requestSchema(
+            "item/fileChange/requestApproval",
+            "#/definitions/FileChangeRequestApprovalParams",
+          ),
         ],
-        [
-          "cliVersion",
-          "createdAt",
-          "cwd",
-          "ephemeral",
-          "id",
-          "modelProvider",
-          "preview",
-          "sessionId",
-          "source",
-          "status",
-          "turns",
-          "updatedAt",
-        ],
-      ),
-      ThreadGoalGetParams: objectSchema(["threadId"], ["threadId"]),
-      ThreadGoalSetParams: objectSchema(["threadId"], ["threadId"]),
-      ThreadResumeParams: objectSchema(
-        ["threadId"],
-        scenario === "missing-required-field" ? [] : ["threadId"],
-      ),
-      ThreadStartParams: objectSchema(
-        ["baseInstructions", "developerInstructions", "model", "modelProvider"],
-        [],
-      ),
-      ThreadStartResponse: objectSchema(
-        [
-          "approvalPolicy",
-          "approvalsReviewer",
-          "cwd",
-          "model",
-          "modelProvider",
-          "sandbox",
-          "thread",
-        ],
-        [
-          "approvalPolicy",
-          "approvalsReviewer",
-          "cwd",
-          "model",
-          "modelProvider",
-          "sandbox",
-          "thread",
-        ],
-      ),
-      ThreadTokenUsage: objectSchema(
-        ["last", "modelContextWindow", "total"],
-        ["last", "total"],
-      ),
-      TokenUsage: objectSchema(
-        [
-          "cachedInputTokens",
-          "inputTokens",
-          "outputTokens",
-          "reasoningOutputTokens",
-          "totalTokens",
-        ],
-        tokenRequired,
-      ),
-      Turn: objectSchema(["id", "items", "status"], ["id", "items", "status"]),
-      TurnInterruptParams: objectSchema(
-        ["threadId", "turnId"],
-        ["threadId", "turnId"],
-      ),
-      TurnStartParams: objectSchema(
-        ["input", "model", "threadId"],
-        ["input", "threadId"],
-      ),
+      },
+      v2,
     },
+    title: "CodexAppServerProtocol",
+    type: "object",
   };
 }
 
-function methodSchema(method: string, paramsDefinition: string): Record<string, unknown> {
+function validThreadSchema(): MutableSchema {
+  const fields = [
+    "cliVersion",
+    "createdAt",
+    "cwd",
+    "ephemeral",
+    "id",
+    "modelProvider",
+    "preview",
+    "sessionId",
+    "source",
+    "status",
+    "turns",
+    "updatedAt",
+  ];
+  return objectSchema(fields, fields);
+}
+
+function threadResponseSchema(): MutableSchema {
+  const fields = [
+    "approvalPolicy",
+    "approvalsReviewer",
+    "cwd",
+    "model",
+    "modelProvider",
+    "sandbox",
+    "thread",
+  ];
+  const schema = objectSchema(fields, fields);
+  schemaRecord(schema.properties).thread = { $ref: "#/definitions/v2/Thread" };
+  return schema;
+}
+
+function approvalDecisionSchema(): MutableSchema {
   return {
-    properties: {
-      method: { const: method },
-      params: { $ref: `#/$defs/${paramsDefinition}` },
-    },
-    required: ["method", "params"],
+    oneOf: ["accept", "acceptForSession", "decline", "cancel"].map((value) => ({
+      enum: [value],
+      type: "string",
+    })),
+  };
+}
+
+function approvalResponseSchema(decisionReference: string): MutableSchema {
+  return {
+    properties: { decision: { $ref: decisionReference } },
+    required: ["decision"],
     type: "object",
   };
+}
+
+function referencedObjectSchema(property: string, reference: string): MutableSchema {
+  return {
+    properties: { [property]: { $ref: reference } },
+    required: [property],
+    type: "object",
+  };
+}
+
+function requestSchema(method: string, paramsReference: string): MutableSchema {
+  return {
+    properties: {
+      id: {},
+      method: { enum: [method] },
+      params: { $ref: paramsReference },
+    },
+    required: ["id", "method", "params"],
+    type: "object",
+  };
+}
+
+function notificationSchema(method: string, paramsReference?: string): MutableSchema {
+  return paramsReference === undefined
+    ? {
+        properties: { method: { enum: [method] } },
+        required: ["method"],
+        type: "object",
+      }
+    : {
+        properties: {
+          method: { enum: [method] },
+          params: { $ref: paramsReference },
+        },
+        required: ["method", "params"],
+        type: "object",
+      };
 }
 
 function objectSchema(
   propertyNames: readonly string[],
   required: readonly string[],
-): Record<string, unknown> {
+): MutableSchema {
   return {
     properties: Object.fromEntries(propertyNames.map((property) => [property, {}])),
-    required,
+    required: [...required],
     type: "object",
   };
+}
+
+function validateBundle(bundle: MutableSchema): { readonly provenanceSha256: string } {
+  return validateGeneratedCompatibilityOutputForTest(writeValidationOutput(bundle));
+}
+
+function expectBundleFailure(bundle: MutableSchema, code: string): void {
+  expectValidationFailure(writeValidationOutput(bundle), code);
+}
+
+function expectValidationFailure(
+  output: string,
+  code: string,
+  limits: Record<string, number> = {},
+): void {
+  expect(() =>
+    validateGeneratedCompatibilityOutputForTest(output, limits),
+  ).toThrowError(expect.objectContaining({ code }));
+}
+
+function writeValidationOutput(
+  bundle: MutableSchema,
+  extraJson: Readonly<Record<string, MutableSchema>> = {},
+): string {
+  const output = join(fixtureRoot, `output-${outputSequence++}`);
+  const typescript = join(output, "typescript");
+  const jsonSchema = join(output, "json-schema");
+  mkdirSync(typescript, { recursive: true });
+  mkdirSync(jsonSchema, { recursive: true });
+  writeFileSync(join(typescript, "protocol.ts"), "export type Generated = true;\n", "utf8");
+  writeFileSync(
+    join(jsonSchema, AUTHORITATIVE_BUNDLE),
+    JSON.stringify(bundle),
+    "utf8",
+  );
+  for (const [name, value] of Object.entries(extraJson)) {
+    writeFileSync(join(jsonSchema, name), JSON.stringify(value), "utf8");
+  }
+  return output;
+}
+
+function methodVariant(
+  bundle: MutableSchema,
+  root: MethodCase["root"],
+  method: string,
+): MutableSchema {
+  const variant = schemaArrayAt(bundle, ["definitions", root, "oneOf"]).find(
+    (candidate) =>
+      stringArray(schemaRecord(schemaRecord(candidate.properties).method).enum).includes(
+        method,
+      ),
+  );
+  if (variant === undefined) {
+    throw new Error(`Missing method fixture: ${method}`);
+  }
+  return variant;
+}
+
+function removeMethodVariant(
+  bundle: MutableSchema,
+  root: MethodCase["root"],
+  method: string,
+): void {
+  const definition = schemaRecordAt(bundle, ["definitions", root]);
+  definition.oneOf = schemaArrayAt(bundle, ["definitions", root, "oneOf"]).filter(
+    (candidate) =>
+      !stringArray(schemaRecord(schemaRecord(candidate.properties).method).enum).includes(
+        method,
+      ),
+  );
+}
+
+function removeRequiredField(
+  bundle: MutableSchema,
+  path: readonly string[],
+  field: string,
+): void {
+  const schema = schemaRecordAt(bundle, path);
+  schema.required = stringArray(schema.required).filter((candidate) => candidate !== field);
+}
+
+function textInputVariant(bundle: MutableSchema): MutableSchema {
+  const variant = schemaArrayAt(bundle, ["definitions", "v2", "UserInput", "oneOf"]).find(
+    (candidate) =>
+      stringArray(schemaRecord(schemaRecord(candidate.properties).type).enum).includes(
+        "text",
+      ),
+  );
+  if (variant === undefined) {
+    throw new Error("Missing text input fixture.");
+  }
+  return variant;
+}
+
+function schemaRecordAt(value: unknown, path: readonly string[]): MutableSchema {
+  let current = value;
+  for (const segment of path) {
+    current = schemaRecord(current)[segment];
+  }
+  return schemaRecord(current);
+}
+
+function schemaArrayAt(value: unknown, path: readonly string[]): MutableSchema[] {
+  let current = value;
+  for (const segment of path) {
+    current = schemaRecord(current)[segment];
+  }
+  if (!Array.isArray(current) || !current.every(isSchemaRecord)) {
+    throw new Error(`Expected schema array at ${path.join(".")}`);
+  }
+  return current;
+}
+
+function schemaRecord(value: unknown): MutableSchema {
+  if (!isSchemaRecord(value)) {
+    throw new Error("Expected schema object.");
+  }
+  return value;
+}
+
+function isSchemaRecord(value: unknown): value is MutableSchema {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error("Expected string array.");
+  }
+  return value;
+}
+
+function expectGeneratorFailure(
+  command: string,
+  arguments_: readonly string[],
+  timeoutMilliseconds: number,
+  maxBufferBytes: number,
+  code: string,
+): void {
+  expect(() =>
+    runSchemaGeneratorForTest(command, arguments_, isolatedChildEnvironment(), {
+      maxBufferBytes,
+      timeoutMilliseconds,
+    }),
+  ).toThrowError(expect.objectContaining({ code }));
+}
+
+function isolatedChildEnvironment(): NodeJS.ProcessEnv {
+  const root = join(fixtureRoot, `generator-environment-${outputSequence++}`);
+  const environment = {
+    CODEX_HOME: join(root, "codex-home"),
+    HOME: join(root, "home"),
+    PATH: join(root, "bin"),
+    TMPDIR: join(root, "tmp"),
+  };
+  for (const path of Object.values(environment)) {
+    mkdirSync(path, { recursive: true });
+  }
+  return environment;
 }
 
 function createAmbientFixture(): {

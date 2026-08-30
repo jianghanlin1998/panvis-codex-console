@@ -2,16 +2,20 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
+import { extname, join } from "node:path";
 
 import {
   EXCLUDED_EXPERIMENTAL_CAPABILITIES,
@@ -36,12 +40,35 @@ import type {
 const COMPATIBILITY_DIRECTORY_PREFIX = "ctc-codex-c-lite-";
 const GENERATOR_TIMEOUT_MILLISECONDS = 30_000;
 const GENERATOR_OUTPUT_MAX_BYTES = 64 * 1024;
-const MAX_GENERATED_JSON_FILES = 1_024;
-const MAX_GENERATED_JSON_FILE_BYTES = 32 * 1024 * 1024;
-const MAX_GENERATED_JSON_TOTAL_BYTES = 128 * 1024 * 1024;
 const PRIVATE_DIRECTORY_FORBIDDEN_MODE = 0o077;
 const TESTED_RELEASE_VERSION = TESTED_CODEX_VERSION.replace("codex-cli ", "");
-const V2_SCHEMA_BUNDLE_NAME = "codex_app_server_protocol.v2.schemas.json";
+const AUTHORITATIVE_SCHEMA_BUNDLE_NAME = "codex_app_server_protocol.schemas.json";
+
+interface CompatibilityValidationLimits {
+  readonly maxDirectoryEntries: number;
+  readonly maxGeneratedEntries: number;
+  readonly maxGeneratedFileBytes: number;
+  readonly maxGeneratedFiles: number;
+  readonly maxGeneratedTotalBytes: number;
+  readonly maxGeneratedTreeDepth: number;
+  readonly maxSchemaContainers: number;
+  readonly maxSchemaDepth: number;
+  readonly maxSchemaOperations: number;
+  readonly maxSchemaSignatures: number;
+}
+
+const DEFAULT_VALIDATION_LIMITS: CompatibilityValidationLimits = {
+  maxDirectoryEntries: 1_024,
+  maxGeneratedEntries: 4_096,
+  maxGeneratedFileBytes: 8 * 1024 * 1024,
+  maxGeneratedFiles: 2_048,
+  maxGeneratedTotalBytes: 64 * 1024 * 1024,
+  maxGeneratedTreeDepth: 16,
+  maxSchemaContainers: 50_000,
+  maxSchemaDepth: 64,
+  maxSchemaOperations: 50_000,
+  maxSchemaSignatures: 128,
+};
 
 const REQUIRED_REQUEST_PARAMS: Readonly<Record<string, readonly string[]>> = {
   initialize: ["clientInfo"],
@@ -53,87 +80,6 @@ const REQUIRED_REQUEST_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "turn/interrupt": ["threadId", "turnId"],
   "turn/start": ["input", "threadId"],
 };
-
-const REQUIRED_OBJECT_CONTRACTS = [
-  {
-    properties: ["codexHome", "platformFamily", "platformOs", "userAgent"],
-    required: ["codexHome", "platformFamily", "platformOs", "userAgent"],
-  },
-  {
-    properties: [
-      "approvalPolicy",
-      "approvalsReviewer",
-      "cwd",
-      "model",
-      "modelProvider",
-      "sandbox",
-      "thread",
-    ],
-    required: [
-      "approvalPolicy",
-      "approvalsReviewer",
-      "cwd",
-      "model",
-      "modelProvider",
-      "sandbox",
-      "thread",
-    ],
-  },
-  {
-    properties: [
-      "cliVersion",
-      "createdAt",
-      "cwd",
-      "ephemeral",
-      "id",
-      "modelProvider",
-      "preview",
-      "sessionId",
-      "source",
-      "status",
-      "turns",
-      "updatedAt",
-    ],
-    required: [
-      "cliVersion",
-      "createdAt",
-      "cwd",
-      "ephemeral",
-      "id",
-      "modelProvider",
-      "preview",
-      "sessionId",
-      "source",
-      "status",
-      "turns",
-      "updatedAt",
-    ],
-  },
-  {
-    properties: ["id", "items", "status"],
-    required: ["id", "items", "status"],
-  },
-  {
-    properties: ["last", "modelContextWindow", "total"],
-    required: ["last", "total"],
-  },
-  {
-    properties: [
-      "cachedInputTokens",
-      "inputTokens",
-      "outputTokens",
-      "reasoningOutputTokens",
-      "totalTokens",
-    ],
-    required: [
-      "cachedInputTokens",
-      "inputTokens",
-      "outputTokens",
-      "reasoningOutputTokens",
-      "totalTokens",
-    ],
-  },
-] as const;
 
 const REQUIRED_METHOD_PROPERTIES: Readonly<Record<string, readonly string[]>> = {
   "thread/start": [
@@ -151,6 +97,189 @@ const SUPPORTED_APPROVAL_DECISIONS = [
   "acceptForSession",
   "cancel",
   "decline",
+] as const;
+
+const METHOD_ROOTS = [
+  {
+    definitionPath: ["definitions", "ClientRequest"],
+    methods: SUPPORTED_CLIENT_REQUEST_METHODS,
+    requiredEnvelope: ["id", "method", "params"],
+  },
+  {
+    definitionPath: ["definitions", "ClientNotification"],
+    methods: SUPPORTED_CLIENT_NOTIFICATION_METHODS,
+    requiredEnvelope: ["method"],
+  },
+  {
+    definitionPath: ["definitions", "ServerNotification"],
+    methods: SUPPORTED_SERVER_NOTIFICATION_METHODS,
+    requiredEnvelope: ["method", "params"],
+  },
+  {
+    definitionPath: ["definitions", "ServerRequest"],
+    methods: SUPPORTED_SERVER_REQUEST_METHODS,
+    requiredEnvelope: ["id", "method", "params"],
+  },
+] as const;
+
+const METHOD_PARAMS_DEFINITIONS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  initialize: ["definitions", "InitializeParams"],
+  "item/commandExecution/requestApproval": [
+    "definitions",
+    "CommandExecutionRequestApprovalParams",
+  ],
+  "item/fileChange/requestApproval": [
+    "definitions",
+    "FileChangeRequestApprovalParams",
+  ],
+  "item/agentMessage/delta": [
+    "definitions",
+    "v2",
+    "AgentMessageDeltaNotification",
+  ],
+  "item/completed": ["definitions", "v2", "ItemCompletedNotification"],
+  "item/started": ["definitions", "v2", "ItemStartedNotification"],
+  "serverRequest/resolved": [
+    "definitions",
+    "v2",
+    "ServerRequestResolvedNotification",
+  ],
+  "skills/list": ["definitions", "v2", "SkillsListParams"],
+  "thread/goal/get": ["definitions", "v2", "ThreadGoalGetParams"],
+  "thread/goal/set": ["definitions", "v2", "ThreadGoalSetParams"],
+  "thread/goal/updated": [
+    "definitions",
+    "v2",
+    "ThreadGoalUpdatedNotification",
+  ],
+  "thread/resume": ["definitions", "v2", "ThreadResumeParams"],
+  "thread/start": ["definitions", "v2", "ThreadStartParams"],
+  "thread/started": ["definitions", "v2", "ThreadStartedNotification"],
+  "thread/tokenUsage/updated": [
+    "definitions",
+    "v2",
+    "ThreadTokenUsageUpdatedNotification",
+  ],
+  "turn/completed": ["definitions", "v2", "TurnCompletedNotification"],
+  "turn/interrupt": ["definitions", "v2", "TurnInterruptParams"],
+  "turn/start": ["definitions", "v2", "TurnStartParams"],
+  "turn/started": ["definitions", "v2", "TurnStartedNotification"],
+};
+
+const NAMED_OBJECT_CONTRACTS = [
+  {
+    definitionPath: ["definitions", "InitializeResponse"],
+    properties: ["codexHome", "platformFamily", "platformOs", "userAgent"],
+    required: ["codexHome", "platformFamily", "platformOs", "userAgent"],
+  },
+  {
+    definitionPath: ["definitions", "v2", "ThreadStartResponse"],
+    properties: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread",
+    ],
+    required: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread",
+    ],
+  },
+  {
+    definitionPath: ["definitions", "v2", "ThreadResumeResponse"],
+    properties: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread",
+    ],
+    required: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "thread",
+    ],
+  },
+  {
+    definitionPath: ["definitions", "v2", "TurnStartResponse"],
+    properties: ["turn"],
+    required: ["turn"],
+  },
+  {
+    definitionPath: ["definitions", "v2", "Thread"],
+    properties: [
+      "cliVersion",
+      "createdAt",
+      "cwd",
+      "ephemeral",
+      "id",
+      "modelProvider",
+      "preview",
+      "sessionId",
+      "source",
+      "status",
+      "turns",
+      "updatedAt",
+    ],
+    required: [
+      "cliVersion",
+      "createdAt",
+      "cwd",
+      "ephemeral",
+      "id",
+      "modelProvider",
+      "preview",
+      "sessionId",
+      "source",
+      "status",
+      "turns",
+      "updatedAt",
+    ],
+  },
+  {
+    definitionPath: ["definitions", "v2", "Turn"],
+    properties: ["id", "items", "status"],
+    required: ["id", "items", "status"],
+  },
+  {
+    definitionPath: ["definitions", "v2", "ThreadTokenUsage"],
+    properties: ["last", "modelContextWindow", "total"],
+    required: ["last", "total"],
+  },
+  {
+    definitionPath: ["definitions", "v2", "TokenUsageBreakdown"],
+    properties: [
+      "cacheWriteInputTokens",
+      "cachedInputTokens",
+      "inputTokens",
+      "outputTokens",
+      "reasoningOutputTokens",
+      "totalTokens",
+    ],
+    required: [
+      "cachedInputTokens",
+      "inputTokens",
+      "outputTokens",
+      "reasoningOutputTokens",
+      "totalTokens",
+    ],
+  },
 ] as const;
 
 export const C_LITE_COMPATIBILITY_FAILURE_CODES = [
@@ -201,14 +330,47 @@ interface CompatibilityProbeEnvironment {
   readonly root: string;
 }
 
-interface SchemaDocument {
-  readonly absolutePath: string;
-  readonly value: SchemaObject;
+interface SchemaLocation {
+  readonly node: SchemaObject;
+  readonly path: readonly string[];
 }
 
-interface SchemaLocation {
-  readonly document: SchemaDocument;
+interface SchemaValidationContext {
+  operations: number;
+  readonly root: SchemaObject;
+  readonly limits: CompatibilityValidationLimits;
+}
+
+interface GeneratedTreeScan {
+  readonly files: readonly string[];
+  readonly totalBytes: number;
+}
+
+interface SchemaGeneratorLimits {
+  readonly maxBufferBytes: number;
+  readonly timeoutMilliseconds: number;
+}
+
+interface StableTextFile {
+  readonly text: string;
+  readonly size: number;
+}
+
+interface SchemaReferenceState {
+  readonly activePaths: ReadonlySet<string>;
+}
+
+interface MethodVariant {
   readonly node: SchemaObject;
+  readonly path: readonly string[];
+}
+
+interface BigIntFileIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly mode: bigint;
+  readonly mtimeNs: bigint;
+  readonly size: bigint;
 }
 
 interface SchemaObject {
@@ -453,19 +615,20 @@ function runSchemaGenerator(
   command: string,
   arguments_: readonly string[],
   childEnvironment: NodeJS.ProcessEnv,
+  limits: SchemaGeneratorLimits = {
+    maxBufferBytes: GENERATOR_OUTPUT_MAX_BYTES,
+    timeoutMilliseconds: GENERATOR_TIMEOUT_MILLISECONDS,
+  },
 ): void {
   const child = spawnSync(command, arguments_, {
     encoding: "utf8",
     env: childEnvironment,
-    maxBuffer: GENERATOR_OUTPUT_MAX_BYTES,
+    maxBuffer: limits.maxBufferBytes,
     shell: false,
     stdio: "pipe",
-    timeout: GENERATOR_TIMEOUT_MILLISECONDS,
+    timeout: limits.timeoutMilliseconds,
   });
 
-  if (child.signal !== null) {
-    throw new CLiteCompatibilityFailure("SCHEMA_GENERATOR_SIGNALED");
-  }
   if (child.error !== undefined) {
     const code = (child.error as NodeJS.ErrnoException).code;
     throw new CLiteCompatibilityFailure(
@@ -474,9 +637,25 @@ function runSchemaGenerator(
         : "SCHEMA_GENERATOR_FAILED",
     );
   }
+  if (child.signal !== null) {
+    throw new CLiteCompatibilityFailure("SCHEMA_GENERATOR_SIGNALED");
+  }
   if (child.status !== 0) {
     throw new CLiteCompatibilityFailure("SCHEMA_GENERATOR_FAILED");
   }
+}
+
+/** Internal deterministic-test hook; not exported from the package root. */
+export function runSchemaGeneratorForTest(
+  command: string,
+  arguments_: readonly string[],
+  childEnvironment: NodeJS.ProcessEnv,
+  limits: SchemaGeneratorLimits,
+): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new CLiteCompatibilityFailure("SCHEMA_GENERATOR_START_FAILED");
+  }
+  runSchemaGenerator(command, arguments_, childEnvironment, limits);
 }
 
 function buildOwnedSchemaGenerationCommands(
@@ -510,74 +689,74 @@ function buildOwnedSchemaGenerationCommands(
 
 function validateGeneratedCompatibilityOutput(
   outputDirectory: string,
+  limits: CompatibilityValidationLimits = DEFAULT_VALIDATION_LIMITS,
 ): ValidationSuccess {
   const typescriptDirectory = join(outputDirectory, "typescript");
   const jsonSchemaDirectory = join(outputDirectory, "json-schema");
-  if (!containsGeneratedFile(typescriptDirectory, ".ts")) {
+  const typescriptTree = scanGeneratedTree(typescriptDirectory, limits);
+  if (!typescriptTree.files.some((path) => extname(path) === ".ts")) {
     throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MISSING");
   }
 
-  const documents = readSchemaDocuments(jsonSchemaDirectory);
-  const bundle = documents.find(
-    (document) => document.absolutePath === join(jsonSchemaDirectory, V2_SCHEMA_BUNDLE_NAME),
+  const jsonTree = scanGeneratedTree(jsonSchemaDirectory, limits);
+  const bundlePath = join(
+    jsonSchemaDirectory,
+    AUTHORITATIVE_SCHEMA_BUNDLE_NAME,
   );
-  if (bundle === undefined) {
+  if (!jsonTree.files.includes(bundlePath)) {
     throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MISSING");
   }
 
-  validateConsumedProtocolContract(documents);
-  const bundleText = readFileSync(bundle.absolutePath, "utf8");
-  return {
-    provenanceSha256: createHash("sha256").update(bundleText).digest("hex"),
-  };
-}
-
-function containsGeneratedFile(root: string, extension: string): boolean {
-  let found = false;
-  walkRegularFiles(root, (path) => {
-    if (extname(path) === extension) {
-      found = true;
-    }
-  });
-  return found;
-}
-
-function readSchemaDocuments(root: string): readonly SchemaDocument[] {
-  const documents: SchemaDocument[] = [];
-  let totalBytes = 0;
-  walkRegularFiles(root, (path) => {
-    if (extname(path) !== ".json") {
-      return;
-    }
-    if (documents.length >= MAX_GENERATED_JSON_FILES) {
-      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
-    }
-    const stats = lstatSync(path);
-    if (stats.size > MAX_GENERATED_JSON_FILE_BYTES) {
-      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
-    }
-    totalBytes += stats.size;
-    if (totalBytes > MAX_GENERATED_JSON_TOTAL_BYTES) {
-      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
-    }
+  let bundleText: string | undefined;
+  let authoritativeRoot: SchemaObject | undefined;
+  for (const path of jsonTree.files.filter((candidate) => extname(candidate) === ".json")) {
+    const text = readStableTextFile(path, limits).text;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(path, "utf8"));
+      parsed = JSON.parse(text);
     } catch {
       throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
     }
     if (!isSchemaObject(parsed)) {
       throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
     }
-    documents.push({ absolutePath: path, value: parsed });
-  });
-  if (documents.length === 0) {
+    assertBoundedSchemaStructure(parsed, limits);
+    if (path === bundlePath) {
+      bundleText = text;
+      authoritativeRoot = parsed;
+    }
+  }
+  if (bundleText === undefined || authoritativeRoot === undefined) {
     throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MISSING");
   }
-  return documents;
+  validateConsumedProtocolContract(authoritativeRoot, limits);
+  return {
+    provenanceSha256: createHash("sha256").update(bundleText).digest("hex"),
+  };
 }
 
-function walkRegularFiles(root: string, visit: (path: string) => void): void {
+/** Internal deterministic-test hook; not exported from the package root. */
+export function validateGeneratedCompatibilityOutputForTest(
+  outputDirectory: string,
+  limits: Partial<CompatibilityValidationLimits> = {},
+): ValidationSuccess {
+  if (process.env.NODE_ENV !== "test") {
+    throw new CLiteCompatibilityFailure("ISOLATION_SETUP_FAILED");
+  }
+  return validateGeneratedCompatibilityOutput(outputDirectory, {
+    ...DEFAULT_VALIDATION_LIMITS,
+    ...limits,
+  });
+}
+
+function scanGeneratedTree(
+  root: string,
+  limits: CompatibilityValidationLimits,
+): GeneratedTreeScan {
+  const files: string[] = [];
+  let totalBytes = 0;
+  let totalEntries = 0;
+  const directories: { readonly depth: number; readonly path: string }[] = [];
   let rootStat;
   try {
     rootStat = lstatSync(root);
@@ -587,215 +766,608 @@ function walkRegularFiles(root: string, visit: (path: string) => void): void {
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
+  directories.push({ depth: 0, path: root });
 
-  const entries = readdirSync(root, { withFileTypes: true });
-  for (const entry of entries) {
-    const path = join(root, entry.name);
-    const stats = lstatSync(path);
-    if (stats.isSymbolicLink()) {
+  while (directories.length > 0) {
+    const directory = directories.pop();
+    if (directory === undefined) {
+      break;
+    }
+    let entries;
+    try {
+      entries = readdirSync(directory.path, { withFileTypes: true });
+    } catch {
       throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
     }
-    if (stats.isDirectory()) {
-      walkRegularFiles(path, visit);
-    } else if (stats.isFile()) {
-      visit(path);
-    } else {
+    if (entries.length > limits.maxDirectoryEntries) {
       throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+    }
+    for (const entry of entries) {
+      totalEntries += 1;
+      if (totalEntries > limits.maxGeneratedEntries) {
+        throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+      }
+      const path = join(directory.path, entry.name);
+      let stats;
+      try {
+        stats = lstatSync(path);
+      } catch {
+        throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+      }
+      if (stats.isSymbolicLink()) {
+        throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+      }
+      if (stats.isDirectory()) {
+        if (directory.depth >= limits.maxGeneratedTreeDepth) {
+          throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+        }
+        directories.push({ depth: directory.depth + 1, path });
+        continue;
+      }
+      if (!stats.isFile()) {
+        throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+      }
+      if (
+        files.length >= limits.maxGeneratedFiles ||
+        stats.size > limits.maxGeneratedFileBytes
+      ) {
+        throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+      }
+      totalBytes += stats.size;
+      if (totalBytes > limits.maxGeneratedTotalBytes) {
+        throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+      }
+      files.push(path);
+    }
+  }
+  return { files, totalBytes };
+}
+
+function readStableTextFile(
+  path: string,
+  limits: CompatibilityValidationLimits,
+): StableTextFile {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    const before = fstatSync(descriptor, { bigint: true });
+    if (
+      !before.isFile() ||
+      before.size > BigInt(limits.maxGeneratedFileBytes)
+    ) {
+      throw new Error("invalid generated file");
+    }
+    const bytes = readFileSync(descriptor);
+    const after = fstatSync(descriptor, { bigint: true });
+    const pathAfter = lstatSync(path, { bigint: true });
+    if (
+      !sameFileIdentity(before, after) ||
+      !sameFileIdentity(before, pathAfter) ||
+      BigInt(bytes.byteLength) !== before.size
+    ) {
+      throw new Error("generated file changed");
+    }
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new Error("invalid UTF-8");
+    }
+    return { size: bytes.byteLength, text };
+  } catch {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // Preserve the sanitized validation outcome.
+      }
     }
   }
 }
 
-function validateConsumedProtocolContract(documents: readonly SchemaDocument[]): void {
-  const expectedMethods = [
-    ...SUPPORTED_CLIENT_REQUEST_METHODS,
-    ...SUPPORTED_CLIENT_NOTIFICATION_METHODS,
-    ...SUPPORTED_SERVER_NOTIFICATION_METHODS,
-    ...SUPPORTED_SERVER_REQUEST_METHODS,
+function sameFileIdentity(
+  left: BigIntFileIdentity,
+  right: BigIntFileIdentity,
+): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs
+  );
+}
+
+function assertBoundedSchemaStructure(
+  root: SchemaObject,
+  limits: CompatibilityValidationLimits,
+): void {
+  const pending: { readonly depth: number; readonly value: unknown }[] = [
+    { depth: 0, value: root },
   ];
-  for (const method of expectedMethods) {
-    if (findMethodLocations(documents, method).length === 0) {
+  let containers = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) {
+      break;
+    }
+    if (!Array.isArray(current.value) && !isSchemaObject(current.value)) {
+      continue;
+    }
+    if (
+      current.depth > limits.maxSchemaDepth ||
+      ++containers > limits.maxSchemaContainers
+    ) {
+      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+    }
+    const children = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value);
+    for (const child of children) {
+      if (Array.isArray(child) || isSchemaObject(child)) {
+        pending.push({ depth: current.depth + 1, value: child });
+      }
+    }
+  }
+}
+
+function validateConsumedProtocolContract(
+  root: SchemaObject,
+  limits: CompatibilityValidationLimits,
+): void {
+  if (root.title !== "CodexAppServerProtocol" || root.type !== "object") {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  const context: SchemaValidationContext = { limits, operations: 0, root };
+
+  const methodVariants = new Map<string, MethodVariant>();
+  for (const methodRoot of METHOD_ROOTS) {
+    const rootLocation = requireLocation(context, methodRoot.definitionPath);
+    const alternatives = schemaAlternatives(rootLocation, context);
+    for (const method of methodRoot.methods) {
+      const matching = alternatives.filter((alternative) =>
+        variantHasExactMethod(alternative, method, context),
+      );
+      if (matching.length === 0) {
+        throw new CLiteCompatibilityFailure("PROTOCOL_METHOD_MISSING");
+      }
+      if (matching.length !== 1) {
+        throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+      }
+      const variant = matching[0];
+      if (
+        variant === undefined ||
+        !schemaHasObjectContract(
+          variant,
+          methodRoot.requiredEnvelope,
+          methodRoot.requiredEnvelope,
+          context,
+        )
+      ) {
+        throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+      }
+      methodVariants.set(method, variant);
+    }
+  }
+
+  for (const [method, definitionPath] of Object.entries(
+    METHOD_PARAMS_DEFINITIONS,
+  )) {
+    const variant = methodVariants.get(method);
+    if (variant === undefined) {
       throw new CLiteCompatibilityFailure("PROTOCOL_METHOD_MISSING");
     }
-  }
-
-  for (const [method, required] of Object.entries(REQUIRED_REQUEST_PARAMS)) {
-    if (!methodParamsMatch(documents, method, required, required)) {
-      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
-    }
-  }
-  for (const [method, properties] of Object.entries(REQUIRED_METHOD_PROPERTIES)) {
-    const required = REQUIRED_REQUEST_PARAMS[method] ?? [];
-    if (!methodParamsMatch(documents, method, required, properties)) {
-      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
-    }
-  }
-  for (const method of SUPPORTED_SERVER_REQUEST_METHODS) {
-    if (!methodParamsMatch(documents, method, REQUIRED_APPROVAL_PARAMS, REQUIRED_APPROVAL_PARAMS)) {
-      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
-    }
-  }
-
-  for (const contract of REQUIRED_OBJECT_CONTRACTS) {
-    if (!findObjectContract(documents, contract.required, contract.properties)) {
-      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
-    }
-  }
-  if (!findTextInputContract(documents) || !findProperty(documents, "text_elements")) {
-    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
-  }
-  if (!findAllowedLiterals(documents, SUPPORTED_APPROVAL_DECISIONS)) {
-    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
-  }
-}
-
-function findMethodLocations(
-  documents: readonly SchemaDocument[],
-  method: string,
-): readonly SchemaLocation[] {
-  const locations: SchemaLocation[] = [];
-  for (const document of documents) {
-    walkSchemaObjects(document.value, (node) => {
-      const properties = schemaRecord(node.properties);
-      const methodSchema = properties?.method;
-      if (
-        isSchemaObject(methodSchema) &&
-        schemaAllowsLiteral({ document, node: methodSchema }, method, documents, new Set())
-      ) {
-        locations.push({ document, node });
-      }
-    });
-  }
-  return locations;
-}
-
-function methodParamsMatch(
-  documents: readonly SchemaDocument[],
-  method: string,
-  required: readonly string[],
-  properties: readonly string[],
-): boolean {
-  return findMethodLocations(documents, method).some((location) => {
-    const params = schemaRecord(location.node.properties)?.params;
-    return (
-      isSchemaObject(params) &&
-      schemaHasObjectContract(
-        { document: location.document, node: params },
-        required,
-        properties,
-        documents,
-        new Set(),
-      )
+    const paramsLocations = objectPropertyLocations(
+      variant,
+      "params",
+      context,
+      { activePaths: new Set() },
     );
-  });
-}
+    const target = requireLocation(context, definitionPath);
+    if (
+      paramsLocations.length === 0 ||
+      !paramsLocations.some((location) =>
+        schemaTargetsLocation(
+          location,
+          target,
+          context,
+          { activePaths: new Set() },
+        ),
+      )
+    ) {
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+    }
 
-function findObjectContract(
-  documents: readonly SchemaDocument[],
-  required: readonly string[],
-  properties: readonly string[],
-): boolean {
-  for (const document of documents) {
-    let found = false;
-    walkSchemaObjects(document.value, (node) => {
-      if (
-        !found &&
+    const required = SUPPORTED_SERVER_REQUEST_METHODS.includes(
+      method as (typeof SUPPORTED_SERVER_REQUEST_METHODS)[number],
+    )
+      ? REQUIRED_APPROVAL_PARAMS
+      : (REQUIRED_REQUEST_PARAMS[method] ?? []);
+    const properties = REQUIRED_METHOD_PROPERTIES[method] ?? required;
+    if (
+      !paramsLocations.some((location) =>
         schemaHasObjectContract(
-          { document, node },
+          location,
           required,
           properties,
-          documents,
-          new Set(),
-        )
-      ) {
-        found = true;
-      }
-    });
-    if (found) {
-      return true;
+          context,
+        ),
+      )
+    ) {
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
     }
   }
-  return false;
-}
 
-function findTextInputContract(documents: readonly SchemaDocument[]): boolean {
-  for (const document of documents) {
-    let found = false;
-    walkSchemaObjects(document.value, (node) => {
-      const properties = schemaRecord(node.properties);
-      const typeSchema = properties?.type;
-      if (
-        !found &&
-        isSchemaObject(typeSchema) &&
-        schemaAllowsLiteral(
-          { document, node: typeSchema },
-          "text",
-          documents,
-          new Set(),
-        ) &&
-        schemaHasObjectContract(
-          { document, node },
-          ["text", "type"],
-          ["text", "type"],
-          documents,
-          new Set(),
-        )
-      ) {
-        found = true;
-      }
-    });
-    if (found) {
-      return true;
+  for (const contract of NAMED_OBJECT_CONTRACTS) {
+    if (
+      !schemaHasObjectContract(
+        requireLocation(context, contract.definitionPath),
+        contract.required,
+        contract.properties,
+        context,
+      )
+    ) {
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
     }
   }
-  return false;
+
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "ThreadStartResponse"],
+    "thread",
+    ["definitions", "v2", "Thread"],
+  );
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "ThreadResumeResponse"],
+    "thread",
+    ["definitions", "v2", "Thread"],
+  );
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "TurnStartResponse"],
+    "turn",
+    ["definitions", "v2", "Turn"],
+  );
+  for (const notificationPath of [
+    ["definitions", "v2", "ThreadStartedNotification"],
+  ] as const) {
+    assertPropertyTargets(
+      context,
+      notificationPath,
+      "thread",
+      ["definitions", "v2", "Thread"],
+    );
+  }
+  for (const notificationPath of [
+    ["definitions", "v2", "TurnStartedNotification"],
+    ["definitions", "v2", "TurnCompletedNotification"],
+  ] as const) {
+    assertPropertyTargets(
+      context,
+      notificationPath,
+      "turn",
+      ["definitions", "v2", "Turn"],
+    );
+  }
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "ThreadTokenUsageUpdatedNotification"],
+    "tokenUsage",
+    ["definitions", "v2", "ThreadTokenUsage"],
+  );
+  for (const property of ["last", "total"] as const) {
+    assertPropertyTargets(
+      context,
+      ["definitions", "v2", "ThreadTokenUsage"],
+      property,
+      ["definitions", "v2", "TokenUsageBreakdown"],
+    );
+  }
+
+  validateTextInput(context);
+  validateApprovalContract(
+    context,
+    ["definitions", "CommandExecutionRequestApprovalResponse"],
+    ["definitions", "CommandExecutionApprovalDecision"],
+  );
+  validateApprovalContract(
+    context,
+    ["definitions", "FileChangeRequestApprovalResponse"],
+    ["definitions", "FileChangeApprovalDecision"],
+  );
 }
 
-function findProperty(documents: readonly SchemaDocument[], property: string): boolean {
-  return documents.some((document) => {
-    let found = false;
-    walkSchemaObjects(document.value, (node) => {
-      if (!found && Object.hasOwn(schemaRecord(node.properties) ?? {}, property)) {
-        found = true;
-      }
-    });
-    return found;
+function validateTextInput(context: SchemaValidationContext): void {
+  const input = requireLocation(context, ["definitions", "v2", "UserInput"]);
+  const textVariants = schemaAlternatives(input, context).filter((variant) => {
+    const typeLocations = objectPropertyLocations(
+      variant,
+      "type",
+      context,
+      { activePaths: new Set() },
+    );
+    return typeLocations.some((location) =>
+      schemaAllowsExactlyLiteral(
+        location,
+        "text",
+        context,
+        { activePaths: new Set() },
+      ),
+    );
   });
+  if (textVariants.length !== 1) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+  const textVariant = textVariants[0];
+  if (
+    textVariant === undefined ||
+    !schemaHasObjectContract(
+      textVariant,
+      ["text", "type"],
+      ["text", "text_elements", "type"],
+      context,
+    )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+  const textElements = objectPropertyLocations(
+    textVariant,
+    "text_elements",
+    context,
+    { activePaths: new Set() },
+  );
+  const target = requireLocation(context, ["definitions", "v2", "TextElement"]);
+  if (
+    !textElements.some((location) => {
+      const items = schemaRecord(location.node.items);
+      return (
+        location.node.type === "array" &&
+        items !== undefined &&
+        schemaTargetsLocation(
+          { node: items, path: [...location.path, "items"] },
+          target,
+          context,
+          { activePaths: new Set() },
+        )
+      );
+    })
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
 }
 
-function findAllowedLiterals(
-  documents: readonly SchemaDocument[],
-  expected: readonly string[],
+function validateApprovalContract(
+  context: SchemaValidationContext,
+  responsePath: readonly string[],
+  decisionPath: readonly string[],
+): void {
+  const response = requireLocation(context, responsePath);
+  if (!schemaHasObjectContract(response, ["decision"], ["decision"], context)) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+  assertPropertyTargets(context, responsePath, "decision", decisionPath);
+  const values = collectKnownStringLiterals(
+    requireLocation(context, decisionPath),
+    context,
+    { activePaths: new Set() },
+  );
+  if (!SUPPORTED_APPROVAL_DECISIONS.every((value) => values.has(value))) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+}
+
+function assertPropertyTargets(
+  context: SchemaValidationContext,
+  sourcePath: readonly string[],
+  property: string,
+  targetPath: readonly string[],
+): void {
+  const source = requireLocation(context, sourcePath);
+  const target = requireLocation(context, targetPath);
+  const locations = objectPropertyLocations(
+    source,
+    property,
+    context,
+    { activePaths: new Set() },
+  );
+  if (
+    locations.length === 0 ||
+    !locations.some((location) =>
+      schemaTargetsLocation(
+        location,
+        target,
+        context,
+        { activePaths: new Set() },
+      ),
+    )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+}
+
+function schemaAlternatives(
+  location: SchemaLocation,
+  context: SchemaValidationContext,
+): readonly SchemaLocation[] {
+  consumeSchemaOperation(context);
+  if (location.node.oneOf === undefined) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  const oneOf = strictSchemaObjectArray(location.node.oneOf);
+  if (oneOf.length > context.limits.maxSchemaSignatures) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return oneOf.map((node, index) => ({
+    node,
+    path: [...location.path, "oneOf", String(index)],
+  }));
+}
+
+function variantHasExactMethod(
+  variant: SchemaLocation,
+  method: string,
+  context: SchemaValidationContext,
 ): boolean {
-  for (const document of documents) {
-    let found = false;
-    walkSchemaObjects(document.value, (node) => {
-      if (found) {
-        return;
-      }
-      const values = collectAllowedLiterals(
-        { document, node },
-        documents,
-        new Set(),
-      );
-      if (expected.every((value) => values.has(value))) {
-        found = true;
-      }
-    });
-    if (found) {
-      return true;
+  return objectPropertyLocations(
+    variant,
+    "method",
+    context,
+    { activePaths: new Set() },
+  ).some((location) =>
+    schemaAllowsExactlyLiteral(
+      location,
+      method,
+      context,
+      { activePaths: new Set() },
+    ),
+  );
+}
+
+function schemaAllowsExactlyLiteral(
+  location: SchemaLocation,
+  expected: string,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
+): boolean {
+  const values = collectAllowedStringLiterals(location, context, state);
+  return values !== null && values.size === 1 && values.has(expected);
+}
+
+function collectAllowedStringLiterals(
+  location: SchemaLocation,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
+): ReadonlySet<string> | null {
+  consumeSchemaOperation(context);
+  const constraints: ReadonlySet<string>[] = [];
+  if (typeof location.node.const === "string") {
+    constraints.push(new Set([location.node.const]));
+  } else if (location.node.const !== undefined) {
+    return null;
+  }
+  if (location.node.enum !== undefined) {
+    const enumValues = strictStringArray(location.node.enum);
+    constraints.push(new Set(enumValues));
+  }
+
+  const referenced = referencedLocation(location, context, state);
+  if (referenced !== null) {
+    const values = collectAllowedStringLiterals(
+      referenced.location,
+      context,
+      referenced.state,
+    );
+    if (values !== null) {
+      constraints.push(values);
     }
   }
-  return false;
+
+  for (const schema of strictSchemaObjectArray(location.node.allOf)) {
+    const values = collectAllowedStringLiterals(
+      { node: schema, path: [...location.path, "allOf"] },
+      context,
+      state,
+    );
+    if (values !== null) {
+      constraints.push(values);
+    }
+  }
+  for (const keyword of ["oneOf", "anyOf"] as const) {
+    const alternatives = strictSchemaObjectArray(location.node[keyword]);
+    if (alternatives.length === 0) {
+      continue;
+    }
+    const union = new Set<string>();
+    for (const [index, schema] of alternatives.entries()) {
+      const values = collectAllowedStringLiterals(
+        { node: schema, path: [...location.path, keyword, String(index)] },
+        context,
+        state,
+      );
+      if (values === null) {
+        return null;
+      }
+      for (const value of values) {
+        union.add(value);
+      }
+    }
+    constraints.push(union);
+  }
+  if (constraints.length === 0) {
+    return null;
+  }
+  const [first, ...rest] = constraints;
+  if (first === undefined) {
+    return null;
+  }
+  const intersection = new Set(first);
+  for (const constraint of rest) {
+    for (const value of intersection) {
+      if (!constraint.has(value)) {
+        intersection.delete(value);
+      }
+    }
+  }
+  return intersection;
+}
+
+function collectKnownStringLiterals(
+  location: SchemaLocation,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
+): ReadonlySet<string> {
+  consumeSchemaOperation(context);
+  const values = new Set<string>();
+  if (typeof location.node.const === "string") {
+    values.add(location.node.const);
+  }
+  for (const value of stringArray(location.node.enum)) {
+    values.add(value);
+  }
+  const referenced = referencedLocation(location, context, state);
+  if (referenced !== null) {
+    for (const value of collectKnownStringLiterals(
+      referenced.location,
+      context,
+      referenced.state,
+    )) {
+      values.add(value);
+    }
+  }
+  for (const keyword of ["allOf", "oneOf", "anyOf"] as const) {
+    for (const [index, schema] of strictSchemaObjectArray(
+      location.node[keyword],
+    ).entries()) {
+      for (const value of collectKnownStringLiterals(
+        { node: schema, path: [...location.path, keyword, String(index)] },
+        context,
+        state,
+      )) {
+        values.add(value);
+      }
+    }
+  }
+  return values;
 }
 
 function schemaHasObjectContract(
   location: SchemaLocation,
   required: readonly string[],
   properties: readonly string[],
-  documents: readonly SchemaDocument[],
-  visited: ReadonlySet<string>,
+  context: SchemaValidationContext,
 ): boolean {
-  return objectSignatures(location, documents, visited).some(
+  const signatures = objectSignatures(
+    location,
+    context,
+    { activePaths: new Set() },
+  );
+  return signatures.length > 0 && signatures.every(
     (signature) =>
       required.every((field) => signature.required.has(field)) &&
       properties.every((field) => signature.properties.has(field)),
@@ -804,58 +1376,56 @@ function schemaHasObjectContract(
 
 function objectSignatures(
   location: SchemaLocation,
-  documents: readonly SchemaDocument[],
-  visited: ReadonlySet<string>,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
 ): readonly ObjectSignature[] {
+  consumeSchemaOperation(context);
   const direct: ObjectSignature = {
-    properties: new Set(Object.keys(schemaRecord(location.node.properties) ?? {})),
-    required: new Set(stringArray(location.node.required)),
+    properties: new Set(Object.keys(strictSchemaRecord(location.node.properties))),
+    required: new Set(strictStringArray(location.node.required)),
   };
   let signatures: readonly ObjectSignature[] = [direct];
 
-  const reference = location.node.$ref;
-  if (typeof reference === "string") {
-    const resolved = resolveReference(location.document, reference, documents);
-    if (resolved === null) {
-      return [];
-    }
-    const key = `${resolved.document.absolutePath}#${reference}`;
-    if (visited.has(key)) {
-      return [direct];
-    }
-    const nextVisited = new Set(visited);
-    nextVisited.add(key);
+  const referenced = referencedLocation(location, context, state);
+  if (referenced !== null) {
     signatures = mergeSignatureLists(
       signatures,
-      objectSignatures(resolved, documents, nextVisited),
+      objectSignatures(referenced.location, context, referenced.state),
+      context,
     );
   }
 
-  const allOf = schemaObjectArray(location.node.allOf);
-  for (const schema of allOf) {
+  for (const [index, schema] of strictSchemaObjectArray(
+    location.node.allOf,
+  ).entries()) {
     signatures = mergeSignatureLists(
       signatures,
       objectSignatures(
-        { document: location.document, node: schema },
-        documents,
-        visited,
+        { node: schema, path: [...location.path, "allOf", String(index)] },
+        context,
+        state,
       ),
+      context,
     );
   }
 
-  const alternatives = [
-    ...schemaObjectArray(location.node.oneOf),
-    ...schemaObjectArray(location.node.anyOf),
-  ];
-  if (alternatives.length > 0) {
-    const alternativeSignatures = alternatives.flatMap((schema) =>
+  for (const keyword of ["oneOf", "anyOf"] as const) {
+    const alternatives = strictSchemaObjectArray(location.node[keyword]);
+    if (alternatives.length === 0) {
+      continue;
+    }
+    const alternativeSignatures = alternatives.flatMap((schema, index) =>
       objectSignatures(
-        { document: location.document, node: schema },
-        documents,
-        visited,
+        { node: schema, path: [...location.path, keyword, String(index)] },
+        context,
+        state,
       ),
     );
-    signatures = mergeSignatureLists(signatures, alternativeSignatures);
+    signatures = mergeSignatureLists(
+      signatures,
+      alternativeSignatures,
+      context,
+    );
   }
   return signatures;
 }
@@ -863,9 +1433,13 @@ function objectSignatures(
 function mergeSignatureLists(
   left: readonly ObjectSignature[],
   right: readonly ObjectSignature[],
+  context: SchemaValidationContext,
 ): readonly ObjectSignature[] {
-  if (right.length === 0) {
-    return [];
+  if (
+    right.length === 0 ||
+    left.length * right.length > context.limits.maxSchemaSignatures
+  ) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
   return left.flatMap((leftSignature) =>
     right.map((rightSignature) => ({
@@ -878,109 +1452,193 @@ function mergeSignatureLists(
   );
 }
 
-function schemaAllowsLiteral(
+function objectPropertyLocations(
   location: SchemaLocation,
-  expected: string,
-  documents: readonly SchemaDocument[],
-  visited: ReadonlySet<string>,
-): boolean {
-  return collectAllowedLiterals(location, documents, visited).has(expected);
+  property: string,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
+): readonly SchemaLocation[] {
+  consumeSchemaOperation(context);
+  const locations: SchemaLocation[] = [];
+  const properties = strictSchemaRecord(location.node.properties);
+  const direct = properties[property];
+  if (isSchemaObject(direct)) {
+    locations.push({
+      node: direct,
+      path: [...location.path, "properties", property],
+    });
+  } else if (direct !== undefined) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+
+  const referenced = referencedLocation(location, context, state);
+  if (referenced !== null) {
+    locations.push(
+      ...objectPropertyLocations(
+        referenced.location,
+        property,
+        context,
+        referenced.state,
+      ),
+    );
+  }
+  for (const keyword of ["allOf", "oneOf", "anyOf"] as const) {
+    for (const [index, schema] of strictSchemaObjectArray(
+      location.node[keyword],
+    ).entries()) {
+      locations.push(
+        ...objectPropertyLocations(
+          { node: schema, path: [...location.path, keyword, String(index)] },
+          property,
+          context,
+          state,
+        ),
+      );
+    }
+  }
+  if (locations.length > context.limits.maxSchemaSignatures) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return locations;
 }
 
-function collectAllowedLiterals(
+function schemaTargetsLocation(
   location: SchemaLocation,
-  documents: readonly SchemaDocument[],
-  visited: ReadonlySet<string>,
-): ReadonlySet<string> {
-  const values = new Set<string>();
-  if (typeof location.node.const === "string") {
-    values.add(location.node.const);
+  target: SchemaLocation,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
+): boolean {
+  consumeSchemaOperation(context);
+  if (location.node === target.node) {
+    return true;
   }
-  for (const value of stringArray(location.node.enum)) {
-    values.add(value);
+  const referenced = referencedLocation(location, context, state);
+  if (
+    referenced !== null &&
+    schemaTargetsLocation(
+      referenced.location,
+      target,
+      context,
+      referenced.state,
+    )
+  ) {
+    return true;
   }
-
-  const reference = location.node.$ref;
-  if (typeof reference === "string") {
-    const resolved = resolveReference(location.document, reference, documents);
-    if (resolved !== null) {
-      const key = `${resolved.document.absolutePath}#${reference}`;
-      if (!visited.has(key)) {
-        const nextVisited = new Set(visited);
-        nextVisited.add(key);
-        for (const value of collectAllowedLiterals(resolved, documents, nextVisited)) {
-          values.add(value);
-        }
+  for (const keyword of ["allOf", "oneOf", "anyOf"] as const) {
+    for (const [index, schema] of strictSchemaObjectArray(
+      location.node[keyword],
+    ).entries()) {
+      if (
+        schemaTargetsLocation(
+          { node: schema, path: [...location.path, keyword, String(index)] },
+          target,
+          context,
+          state,
+        )
+      ) {
+        return true;
       }
     }
   }
-  for (const schema of [
-    ...schemaObjectArray(location.node.oneOf),
-    ...schemaObjectArray(location.node.anyOf),
-  ]) {
-    for (const value of collectAllowedLiterals(
-      { document: location.document, node: schema },
-      documents,
-      visited,
-    )) {
-      values.add(value);
-    }
-  }
-  return values;
+  return false;
 }
 
-function resolveReference(
-  currentDocument: SchemaDocument,
-  reference: string,
-  documents: readonly SchemaDocument[],
-): SchemaLocation | null {
-  const hashIndex = reference.indexOf("#");
-  const filePart = hashIndex === -1 ? reference : reference.slice(0, hashIndex);
-  const pointer = hashIndex === -1 ? "" : reference.slice(hashIndex + 1);
-  let document = currentDocument;
-  if (filePart !== "") {
-    let decodedFilePart: string;
-    try {
-      decodedFilePart = decodeURIComponent(filePart);
-    } catch {
-      return null;
-    }
-    const referencedPath = resolve(dirname(currentDocument.absolutePath), decodedFilePart);
-    document = documents.find((candidate) => candidate.absolutePath === referencedPath) ?? document;
-    if (document.absolutePath !== referencedPath) {
-      return null;
-    }
-  }
-  if (pointer === "") {
-    return { document, node: document.value };
-  }
-  if (!pointer.startsWith("/")) {
+function referencedLocation(
+  location: SchemaLocation,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
+): { readonly location: SchemaLocation; readonly state: SchemaReferenceState } | null {
+  if (location.node.$ref === undefined) {
     return null;
   }
-  let current: unknown = document.value;
-  for (const rawSegment of pointer.slice(1).split("/")) {
-    const segment = rawSegment.replaceAll("~1", "/").replaceAll("~0", "~");
+  if (typeof location.node.$ref !== "string") {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  const resolved = resolveLocalReference(context, location.node.$ref);
+  const key = JSON.stringify(resolved.path);
+  if (state.activePaths.has(key)) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return {
+    location: resolved,
+    state: {
+      activePaths: new Set([...state.activePaths, key]),
+    },
+  };
+}
+
+function resolveLocalReference(
+  context: SchemaValidationContext,
+  reference: string,
+): SchemaLocation {
+  consumeSchemaOperation(context);
+  if (!reference.startsWith("#")) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  let pointer: string;
+  try {
+    pointer = decodeURIComponent(reference.slice(1));
+  } catch {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  if (pointer === "") {
+    return { node: context.root, path: [] };
+  }
+  if (!pointer.startsWith("/")) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  const path = pointer
+    .slice(1)
+    .split("/")
+    .map(decodePointerSegment);
+  let current: unknown = context.root;
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      if (!/^(?:0|[1-9][0-9]*)$/u.test(segment)) {
+        throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+      }
+      current = current[Number(segment)];
+    } else if (isSchemaObject(current) && Object.hasOwn(current, segment)) {
+      current = current[segment];
+    } else {
+      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+    }
+  }
+  if (!isSchemaObject(current)) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return { node: current, path };
+}
+
+function decodePointerSegment(segment: string): string {
+  if (/~(?:[^01]|$)/u.test(segment)) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+function requireLocation(
+  context: SchemaValidationContext,
+  path: readonly string[],
+): SchemaLocation {
+  consumeSchemaOperation(context);
+  let current: unknown = context.root;
+  for (const segment of path) {
     if (!isSchemaObject(current) || !Object.hasOwn(current, segment)) {
-      return null;
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
     }
     current = current[segment];
   }
-  return isSchemaObject(current) ? { document, node: current } : null;
+  if (!isSchemaObject(current)) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+  return { node: current, path };
 }
 
-function walkSchemaObjects(value: unknown, visit: (node: SchemaObject) => void): void {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      walkSchemaObjects(item, visit);
-    }
-    return;
-  }
-  if (!isSchemaObject(value)) {
-    return;
-  }
-  visit(value);
-  for (const child of Object.values(value)) {
-    walkSchemaObjects(child, visit);
+function consumeSchemaOperation(context: SchemaValidationContext): void {
+  context.operations += 1;
+  if (context.operations > context.limits.maxSchemaOperations) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
 }
 
@@ -988,14 +1646,40 @@ function schemaRecord(value: unknown): SchemaObject | undefined {
   return isSchemaObject(value) ? value : undefined;
 }
 
-function schemaObjectArray(value: unknown): readonly SchemaObject[] {
-  return Array.isArray(value) ? value.filter(isSchemaObject) : [];
+function strictSchemaRecord(value: unknown): SchemaObject {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isSchemaObject(value)) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return value;
+}
+
+function strictSchemaObjectArray(value: unknown): readonly SchemaObject[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || !value.every(isSchemaObject)) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return value;
 }
 
 function stringArray(value: unknown): readonly string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+function strictStringArray(value: unknown): readonly string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return value;
 }
 
 function isSchemaObject(value: unknown): value is SchemaObject {
