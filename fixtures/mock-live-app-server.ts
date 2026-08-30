@@ -5,6 +5,14 @@ type JsonRecord = Record<string, unknown>;
 type RequestId = number | string;
 type Scenario =
   | "account-null"
+  | "account-update-apikey-before-turn"
+  | "account-update-apikey-during-turn"
+  | "account-update-bedrock-before-turn"
+  | "account-update-chatgpt-before-turn"
+  | "account-update-malformed-before-turn"
+  | "account-update-missing-before-turn"
+  | "account-update-null-before-turn"
+  | "account-update-unknown-before-turn"
   | "api-key"
   | "bedrock"
   | "command-approval"
@@ -19,6 +27,12 @@ type Scenario =
   | "oversized-jsonl"
   | "stderr-secret"
   | "success"
+  | "terminal-before-turn-identity"
+  | "terminal-before-turn-start"
+  | "terminal-conflicting"
+  | "terminal-duplicate"
+  | "terminal-other-thread"
+  | "terminal-other-turn"
   | "timeout"
   | "tool-action"
   | "turn-failed"
@@ -149,12 +163,20 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
         requiresOpenaiAuth: true,
       },
     });
+    const accountUpdate = accountUpdateForScenario(scenario);
+    if (accountUpdate !== null) {
+      send({ method: "account/updated", params: accountUpdate });
+    }
     return;
   }
 
   if (method === "thread/start") {
     if (!accountReadReceived || !validThreadStart(params)) {
       sendError(id, -32_600);
+      return;
+    }
+    if (scenario === "terminal-before-turn-start") {
+      sendTurnCompleted(THREAD_ID, TURN_ID, "completed");
       return;
     }
     threadStarted = true;
@@ -188,11 +210,42 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
     const text = ((params.input as unknown[])[0] as JsonRecord).text as string;
     const digest = createHash("sha256").update(text, "utf8").digest("hex");
     const agentText = `CTC_MOCK_LIVE_OK:${digest}`;
+    if (scenario === "terminal-before-turn-identity") {
+      sendTurnCompleted(THREAD_ID, TURN_ID, "completed");
+      return;
+    }
     send({ id, result: { turn: fixtureTurn("inProgress") } });
     send({
       method: "turn/started",
       params: { threadId: THREAD_ID, turn: fixtureTurn("inProgress") },
     });
+
+    if (scenario === "account-update-apikey-during-turn") {
+      send({
+        method: "account/updated",
+        params: { authMode: "apikey", planType: null },
+      });
+      return;
+    }
+    if (scenario === "terminal-other-thread") {
+      sendTurnCompleted("thread-live-other-1", TURN_ID, "completed");
+      return;
+    }
+    if (scenario === "terminal-other-turn") {
+      sendTurnCompleted(THREAD_ID, "turn-live-other-1", "completed");
+      return;
+    }
+    if (scenario === "terminal-duplicate" || scenario === "terminal-conflicting") {
+      sendTurnCompletedBatch([
+        turnCompletedMessage(THREAD_ID, TURN_ID, "completed"),
+        turnCompletedMessage(
+          THREAD_ID,
+          TURN_ID,
+          scenario === "terminal-conflicting" ? "failed" : "completed",
+        ),
+      ]);
+      return;
+    }
 
     if (scenario === "disconnect") {
       process.exit(4);
@@ -202,7 +255,7 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       return;
     }
     if (scenario === "oversized-jsonl") {
-      process.stdout.write(`${"x".repeat(8_192)}\n`);
+      process.stdout.write(`${"x".repeat(32_768)}\n`);
       return;
     }
     if (scenario === "notification-overflow") {
@@ -374,6 +427,49 @@ function emitCompletedTurn(
   });
 }
 
+function sendTurnCompleted(
+  threadId: string,
+  turnId: string,
+  status: "completed" | "failed" | "interrupted",
+): void {
+  send(turnCompletedMessage(threadId, turnId, status));
+}
+
+function turnCompletedMessage(
+  threadId: string,
+  turnId: string,
+  status: "completed" | "failed" | "interrupted",
+): JsonRecord {
+  const turn = fixtureTurn(status);
+  turn.id = turnId;
+  return { method: "turn/completed", params: { threadId, turn } };
+}
+
+function sendTurnCompletedBatch(messages: readonly JsonRecord[]): void {
+  process.stdout.write(`${messages.map((message) => JSON.stringify(message)).join("\n")}\n`);
+}
+
+function accountUpdateForScenario(value: Scenario): JsonRecord | null {
+  switch (value) {
+    case "account-update-chatgpt-before-turn":
+      return { authMode: "chatgpt", planType: "pro" };
+    case "account-update-apikey-before-turn":
+      return { authMode: "apikey", planType: null };
+    case "account-update-bedrock-before-turn":
+      return { authMode: "bedrockApiKey", planType: null };
+    case "account-update-null-before-turn":
+      return { authMode: null, planType: null };
+    case "account-update-missing-before-turn":
+      return { planType: "pro" };
+    case "account-update-malformed-before-turn":
+      return { authMode: 17, planType: "must-not-leak" };
+    case "account-update-unknown-before-turn":
+      return { authMode: "unknown-auth-mode", planType: "pro" };
+    default:
+      return null;
+  }
+}
+
 function validInitialize(params: JsonRecord): boolean {
   const clientInfo = isRecord(params.clientInfo) ? params.clientInfo : {};
   return (
@@ -483,6 +579,14 @@ function readScenario(): Scenario {
   const value = argument?.slice("--scenario=".length);
   const scenarios: readonly Scenario[] = [
     "account-null",
+    "account-update-apikey-before-turn",
+    "account-update-apikey-during-turn",
+    "account-update-bedrock-before-turn",
+    "account-update-chatgpt-before-turn",
+    "account-update-malformed-before-turn",
+    "account-update-missing-before-turn",
+    "account-update-null-before-turn",
+    "account-update-unknown-before-turn",
     "api-key",
     "bedrock",
     "command-approval",
@@ -497,6 +601,12 @@ function readScenario(): Scenario {
     "oversized-jsonl",
     "stderr-secret",
     "success",
+    "terminal-before-turn-identity",
+    "terminal-before-turn-start",
+    "terminal-conflicting",
+    "terminal-duplicate",
+    "terminal-other-thread",
+    "terminal-other-turn",
     "timeout",
     "tool-action",
     "turn-failed",

@@ -52,6 +52,32 @@ const CLIENT_INFO = Object.freeze({
 });
 const WORKSPACE_PREFIX = "ctc-live-codex-";
 const SAFE_CHILD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+const ACCOUNT_UPDATED_AUTH_MODES = [
+  "apikey",
+  "chatgpt",
+  "chatgptAuthTokens",
+  "headers",
+  "agentIdentity",
+  "personalAccessToken",
+  "bedrockApiKey",
+] as const;
+const ACCOUNT_UPDATED_PLAN_TYPES = [
+  "free",
+  "go",
+  "plus",
+  "pro",
+  "prolite",
+  "team",
+  "self_serve_business_prolite",
+  "self_serve_business_usage_based",
+  "business",
+  "ent26",
+  "enterprise_cbp_automation",
+  "enterprise_cbp_usage_based",
+  "enterprise",
+  "edu",
+  "unknown",
+] as const;
 
 const DEFAULT_LIMITS = Object.freeze({
   startupTimeoutMs: 10_000,
@@ -232,9 +258,15 @@ class LiveExecutionError extends Error {
 }
 
 interface PendingRequest {
+  readonly onResult: ((result: JsonValue) => void) | undefined;
   readonly reject: (error: LiveExecutionError) => void;
   readonly resolve: (result: JsonValue) => void;
   readonly timeout: NodeJS.Timeout;
+}
+
+interface RequestHooks {
+  readonly onResult?: (result: JsonValue) => void;
+  readonly onSent?: () => void;
 }
 
 interface TerminalEvent {
@@ -247,8 +279,12 @@ class TurnEventTracker {
   terminal: TerminalEvent | null = null;
   normalizedUsage: NormalizedUsage | null = null;
   responseText = "";
+  #chatGptAuthenticated = false;
   readonly #deltaItemIds = new Set<string>();
   #failure: LiveExecutionError | null = null;
+  #observedThreadId: string | null = null;
+  #observedTurnId: string | null = null;
+  #turnStartSent = false;
   #waiter:
     | {
         readonly reject: (error: LiveExecutionError) => void;
@@ -270,6 +306,19 @@ class TurnEventTracker {
     this.#waiter = undefined;
   }
 
+  establishChatGptAuth(): void {
+    this.#chatGptAuthenticated = true;
+  }
+
+  assertChatGptAuthenticated(): void {
+    if (this.#failure !== null) {
+      throw this.#failure;
+    }
+    if (!this.#chatGptAuthenticated) {
+      throw new LiveExecutionError("CHATGPT_AUTH_REQUIRED");
+    }
+  }
+
   handleNotification(method: string, params: unknown): boolean {
     if (
       method !== "thread/started" &&
@@ -279,9 +328,24 @@ class TurnEventTracker {
       method !== "item/agentMessage/delta" &&
       method !== "thread/tokenUsage/updated" &&
       method !== "turn/completed" &&
-      method !== "serverRequest/resolved"
+      method !== "serverRequest/resolved" &&
+      method !== "account/updated"
     ) {
       return false;
+    }
+    if (method === "account/updated") {
+      try {
+        const record = requireRecordForCode(params, "AUTH_RESPONSE_MALFORMED");
+        const authMode = parseAccountUpdatedNotification(record);
+        if (authMode !== "chatgpt") {
+          this.#chatGptAuthenticated = false;
+          this.fail(new LiveExecutionError("CHATGPT_AUTH_REQUIRED"));
+        }
+      } catch (error: unknown) {
+        this.#chatGptAuthenticated = false;
+        this.fail(asLiveExecutionError(error));
+      }
+      return true;
     }
     const record = requireRecord(params);
     switch (method) {
@@ -291,13 +355,16 @@ class TurnEventTracker {
         if (thread.ephemeral !== true) {
           throw new LiveExecutionError("EPHEMERAL_THREAD_REQUIRED");
         }
-        this.#observeThreadId(threadId);
+        this.#observeNotificationThreadId(threadId);
         return true;
       }
       case "turn/started": {
-        this.#observeThreadId(requireBoundedString(record.threadId, 512));
+        this.#requireTurnStartSent();
+        this.#observeNotificationThreadId(
+          requireBoundedString(record.threadId, 512),
+        );
         const turn = requireRecord(record.turn);
-        this.#observeTurnId(requireBoundedString(turn.id, 512));
+        this.#observeNotificationTurnId(requireBoundedString(turn.id, 512));
         if (turn.status !== "inProgress") {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
@@ -305,8 +372,13 @@ class TurnEventTracker {
       }
       case "item/started":
       case "item/completed": {
-        this.#observeThreadId(requireBoundedString(record.threadId, 512));
-        this.#observeTurnId(requireBoundedString(record.turnId, 512));
+        this.#requireTurnStartSent();
+        this.#observeNotificationThreadId(
+          requireBoundedString(record.threadId, 512),
+        );
+        this.#observeNotificationTurnId(
+          requireBoundedString(record.turnId, 512),
+        );
         const item = requireRecord(record.item);
         const itemType = requireBoundedString(item.type, 64);
         if (
@@ -327,16 +399,26 @@ class TurnEventTracker {
         return true;
       }
       case "item/agentMessage/delta": {
-        this.#observeThreadId(requireBoundedString(record.threadId, 512));
-        this.#observeTurnId(requireBoundedString(record.turnId, 512));
+        this.#requireTurnStartSent();
+        this.#observeNotificationThreadId(
+          requireBoundedString(record.threadId, 512),
+        );
+        this.#observeNotificationTurnId(
+          requireBoundedString(record.turnId, 512),
+        );
         const itemId = requireBoundedString(record.itemId, 512);
         this.#deltaItemIds.add(itemId);
         this.#appendAgentText(requireString(record.delta));
         return true;
       }
       case "thread/tokenUsage/updated": {
-        this.#observeThreadId(requireBoundedString(record.threadId, 512));
-        this.#observeTurnId(requireBoundedString(record.turnId, 512));
+        this.#requireTurnStartSent();
+        this.#observeNotificationThreadId(
+          requireBoundedString(record.threadId, 512),
+        );
+        this.#observeNotificationTurnId(
+          requireBoundedString(record.turnId, 512),
+        );
         const tokenUsage = requireRecord(record.tokenUsage);
         this.normalizedUsage = mapCodexTokenUsage(
           parseTokenUsageBreakdown(requireRecord(tokenUsage.total)),
@@ -344,9 +426,19 @@ class TurnEventTracker {
         return true;
       }
       case "turn/completed": {
-        this.#observeThreadId(requireBoundedString(record.threadId, 512));
+        if (
+          !this.#turnStartSent ||
+          this.threadId === null ||
+          this.turnId === null ||
+          this.terminal !== null
+        ) {
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+        }
+        this.#assertAuthorizedThreadId(
+          requireBoundedString(record.threadId, 512),
+        );
         const turn = requireRecord(record.turn);
-        this.#observeTurnId(requireBoundedString(turn.id, 512));
+        this.#assertAuthorizedTurnId(requireBoundedString(turn.id, 512));
         const status = turn.status;
         if (
           status !== "completed" &&
@@ -361,7 +453,9 @@ class TurnEventTracker {
         return true;
       }
       case "serverRequest/resolved":
-        this.#observeThreadId(requireBoundedString(record.threadId, 512));
+        this.#observeNotificationThreadId(
+          requireBoundedString(record.threadId, 512),
+        );
         if (
           typeof record.requestId !== "number" &&
           typeof record.requestId !== "string"
@@ -375,11 +469,34 @@ class TurnEventTracker {
   }
 
   observeThreadResponse(threadId: string): void {
-    this.#observeThreadId(threadId);
+    if (
+      this.threadId !== null ||
+      (this.#observedThreadId !== null && this.#observedThreadId !== threadId)
+    ) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    this.threadId = threadId;
+  }
+
+  observeTurnStartSent(threadId: string): void {
+    this.assertChatGptAuthenticated();
+    this.#assertAuthorizedThreadId(threadId);
+    if (this.#turnStartSent) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    this.#turnStartSent = true;
   }
 
   observeTurnResponse(turnId: string): void {
-    this.#observeTurnId(turnId);
+    this.#requireTurnStartSent();
+    if (
+      this.turnId !== null ||
+      (this.#observedTurnId !== null && this.#observedTurnId !== turnId) ||
+      this.terminal !== null
+    ) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    this.turnId = turnId;
   }
 
   waitForTerminal(timeoutMs: number): Promise<TerminalEvent> {
@@ -409,18 +526,42 @@ class TurnEventTracker {
     });
   }
 
-  #observeThreadId(threadId: string): void {
-    if (this.threadId !== null && this.threadId !== threadId) {
+  #observeNotificationThreadId(threadId: string): void {
+    if (
+      (this.threadId !== null && this.threadId !== threadId) ||
+      (this.#observedThreadId !== null && this.#observedThreadId !== threadId)
+    ) {
       throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     }
-    this.threadId = threadId;
+    this.#observedThreadId = threadId;
   }
 
-  #observeTurnId(turnId: string): void {
-    if (this.turnId !== null && this.turnId !== turnId) {
+  #observeNotificationTurnId(turnId: string): void {
+    if (
+      (this.turnId !== null && this.turnId !== turnId) ||
+      (this.#observedTurnId !== null && this.#observedTurnId !== turnId)
+    ) {
       throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     }
-    this.turnId = turnId;
+    this.#observedTurnId = turnId;
+  }
+
+  #assertAuthorizedThreadId(threadId: string): void {
+    if (this.threadId === null || this.threadId !== threadId) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+  }
+
+  #assertAuthorizedTurnId(turnId: string): void {
+    if (this.turnId === null || this.turnId !== turnId) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+  }
+
+  #requireTurnStartSent(): void {
+    if (!this.#turnStartSent) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
   }
 
   #appendAgentText(text: string): void {
@@ -509,6 +650,7 @@ class JsonlAppServerClient {
     method: string,
     params: JsonObject,
     timeoutMs: number,
+    hooks: RequestHooks = {},
   ): Promise<JsonValue> {
     if (this.#failure !== null) {
       return Promise.reject(this.#failure);
@@ -525,10 +667,16 @@ class JsonlAppServerClient {
         this.#pending.delete(id);
         reject(new LiveExecutionError("APP_SERVER_TIMEOUT"));
       }, timeoutMs);
-      this.#pending.set(id, { reject, resolve, timeout });
+      this.#pending.set(id, {
+        onResult: hooks.onResult,
+        reject,
+        resolve,
+        timeout,
+      });
     });
     try {
       this.#send({ id, method, params });
+      hooks.onSent?.();
     } catch (error: unknown) {
       const pending = this.#pending.get(id);
       if (pending !== undefined) {
@@ -646,13 +794,18 @@ class JsonlAppServerClient {
       if (hasResult === hasError) {
         throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
       }
-      clearTimeout(pending.timeout);
-      this.#pending.delete(id);
-      this.#seenResponseIds.add(id);
       if (hasError) {
+        clearTimeout(pending.timeout);
+        this.#pending.delete(id);
+        this.#seenResponseIds.add(id);
         pending.reject(new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR"));
       } else {
-        pending.resolve(toJsonValue(record.result));
+        const result = toJsonValue(record.result);
+        pending.onResult?.(result);
+        clearTimeout(pending.timeout);
+        this.#pending.delete(id);
+        this.#seenResponseIds.add(id);
+        pending.resolve(result);
       }
       return;
     }
@@ -805,12 +958,14 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       target: runtime.target,
     };
 
-    workspace = dependencies.createWorkspace();
-    assertDisposableWorkspace(workspace);
-    events = new TurnEventTracker(
+    const executionWorkspace = dependencies.createWorkspace();
+    workspace = executionWorkspace;
+    assertDisposableWorkspace(executionWorkspace);
+    const eventTracker = new TurnEventTracker(
       diagnostics,
       dependencies.limits.maxAgentResponseBytes,
     );
+    events = eventTracker;
 
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -818,11 +973,11 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         runtime.canonicalExecutablePath,
         ["app-server", "--listen", "stdio://"],
         {
-          cwd: workspace,
+          cwd: executionWorkspace,
           env: buildLiveCodexChildEnvironment(
             dependencies.sourceEnvironment,
             dependencies.normalHomeDirectory,
-            workspace,
+            executionWorkspace,
           ),
           shell: false,
           stdio: ["pipe", "pipe", "pipe"],
@@ -836,7 +991,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       child,
       dependencies.limits,
       diagnostics,
-      events,
+      eventTracker,
     );
     await client.waitForSpawn(dependencies.limits.startupTimeoutMs);
 
@@ -857,9 +1012,16 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       "account/read",
       { refreshToken: false },
       dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          parseChatGptAccount(result);
+          eventTracker.establishChatGptAuth();
+        },
+      },
     );
     evidence.planType = parseChatGptAccount(accountResult);
     evidence.authType = "chatgpt";
+    eventTracker.assertChatGptAuthenticated();
 
     const threadResult = await client.request(
       3,
@@ -867,15 +1029,23 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       {
         approvalPolicy: "never",
         approvalsReviewer: "user",
-        cwd: workspace,
+        cwd: executionWorkspace,
         ephemeral: true,
         sandbox: "read-only",
         serviceName: CLIENT_INFO.name,
       },
       dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          const authorizedThread = parseThreadStartResult(
+            result,
+            executionWorkspace,
+          );
+          eventTracker.observeThreadResponse(authorizedThread.threadId);
+        },
+      },
     );
-    const thread = parseThreadStartResult(threadResult, workspace);
-    events.observeThreadResponse(thread.threadId);
+    const thread = parseThreadStartResult(threadResult, executionWorkspace);
     evidence.providerThread = mapCodexThreadReference(thread.threadId);
     evidence.model = mapCodexModelReference(thread.model);
     evidence.threadPolicy = {
@@ -886,8 +1056,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       networkAccess: false,
     };
 
-    diagnostics.turnStartRequests += 1;
-    turnStartSent = true;
+    eventTracker.assertChatGptAuthenticated();
     const turnResult = await client.request(
       4,
       "turn/start",
@@ -900,32 +1069,45 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
             text_elements: [],
           },
         ],
-        cwd: workspace,
+        cwd: executionWorkspace,
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandboxPolicy: { type: "readOnly", networkAccess: false },
       },
       dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          eventTracker.observeTurnResponse(parseTurnStartResult(result));
+        },
+        onSent: () => {
+          diagnostics.turnStartRequests += 1;
+          turnStartSent = true;
+          eventTracker.observeTurnStartSent(thread.threadId);
+        },
+      },
     );
     const turnId = parseTurnStartResult(turnResult);
-    events.observeTurnResponse(turnId);
+    if (eventTracker.turnId !== turnId) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
     evidence.providerRun = mapCodexTurnReference(thread.threadId, turnId);
 
-    const terminal = await events.waitForTerminal(
+    const terminal = await eventTracker.waitForTerminal(
       dependencies.limits.turnTimeoutMs,
     );
     if (client.failure !== null) {
       throw client.failure;
     }
+    eventTracker.assertChatGptAuthenticated();
     evidence.terminalTurnStatus = terminal.status;
-    evidence.normalizedUsage = events.normalizedUsage;
+    evidence.normalizedUsage = eventTracker.normalizedUsage;
     if (terminal.status === "failed") {
       throw new LiveExecutionError("TURN_FAILED");
     }
     if (terminal.status === "interrupted") {
       throw new LiveExecutionError("TURN_INTERRUPTED");
     }
-    evidence.agentResponseText = events.responseText;
+    evidence.agentResponseText = eventTracker.responseText;
   } catch (error: unknown) {
     failureCode = asLiveExecutionError(error).code;
     if (
@@ -1115,6 +1297,31 @@ function validateInitializeResult(result: JsonValue): void {
   requireBoundedString(record.codexHome, 4_096);
   requireBoundedString(record.platformFamily, 64);
   requireBoundedString(record.platformOs, 64);
+}
+
+function parseAccountUpdatedNotification(
+  record: JsonObject,
+): (typeof ACCOUNT_UPDATED_AUTH_MODES)[number] | null {
+  if (!("authMode" in record) || !("planType" in record)) {
+    throw new LiveExecutionError("AUTH_RESPONSE_MALFORMED");
+  }
+  if (
+    record.planType !== null &&
+    (typeof record.planType !== "string" ||
+      !(ACCOUNT_UPDATED_PLAN_TYPES as readonly string[]).includes(record.planType))
+  ) {
+    throw new LiveExecutionError("AUTH_RESPONSE_MALFORMED");
+  }
+  if (record.authMode === null) {
+    return null;
+  }
+  if (
+    typeof record.authMode !== "string" ||
+    !(ACCOUNT_UPDATED_AUTH_MODES as readonly string[]).includes(record.authMode)
+  ) {
+    throw new LiveExecutionError("AUTH_RESPONSE_MALFORMED");
+  }
+  return record.authMode as (typeof ACCOUNT_UPDATED_AUTH_MODES)[number];
 }
 
 function parseChatGptAccount(result: JsonValue): string | null {

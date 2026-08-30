@@ -36,6 +36,14 @@ type TestDependencies = Parameters<
 >[3];
 type TestScenario =
   | "account-null"
+  | "account-update-apikey-before-turn"
+  | "account-update-apikey-during-turn"
+  | "account-update-bedrock-before-turn"
+  | "account-update-chatgpt-before-turn"
+  | "account-update-malformed-before-turn"
+  | "account-update-missing-before-turn"
+  | "account-update-null-before-turn"
+  | "account-update-unknown-before-turn"
   | "api-key"
   | "bedrock"
   | "command-approval"
@@ -50,6 +58,12 @@ type TestScenario =
   | "oversized-jsonl"
   | "stderr-secret"
   | "success"
+  | "terminal-before-turn-identity"
+  | "terminal-before-turn-start"
+  | "terminal-conflicting"
+  | "terminal-duplicate"
+  | "terminal-other-thread"
+  | "terminal-other-turn"
   | "timeout"
   | "tool-action"
   | "turn-failed"
@@ -288,6 +302,69 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
     });
   });
 
+  it("allows an exact chatgpt account/updated notification before the turn", async () => {
+    await withFixtureStorage(async (storage) => {
+      const result = await runScenario(storage, "account-update-chatgpt-before-turn");
+      expect(result).toMatchObject({
+        success: true,
+        failureCode: null,
+        authType: "chatgpt",
+        diagnostics: { turnStartRequests: 1 },
+      });
+    });
+  });
+
+  it.each([
+    ["account-update-apikey-before-turn", "CHATGPT_AUTH_REQUIRED"],
+    ["account-update-bedrock-before-turn", "CHATGPT_AUTH_REQUIRED"],
+    ["account-update-null-before-turn", "CHATGPT_AUTH_REQUIRED"],
+    ["account-update-missing-before-turn", "AUTH_RESPONSE_MALFORMED"],
+    ["account-update-malformed-before-turn", "AUTH_RESPONSE_MALFORMED"],
+    ["account-update-unknown-before-turn", "AUTH_RESPONSE_MALFORMED"],
+  ] as const)("blocks %s before turn/start", async (scenario, code) => {
+    await withFixtureStorage(async (storage) => {
+      const result = await runScenario(storage, scenario);
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: code,
+        providerRun: null,
+        diagnostics: { turnStartRequests: 0 },
+      });
+      expect(JSON.stringify(result)).not.toMatch(/must-not-leak|unknown-auth-mode/i);
+    });
+  });
+
+  it("fails and interrupts at most once for an auth downgrade during the active turn", async () => {
+    await withFixtureStorage(async (storage) => {
+      const result = await runScenario(storage, "account-update-apikey-during-turn");
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "CHATGPT_AUTH_REQUIRED",
+        diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
+      });
+      expect(result.providerRun?.providerRunId).toBe("turn-live-mock-88");
+      expect(result.diagnostics.interruptRequests).toBeLessThanOrEqual(1);
+    });
+  });
+
+  it.each([
+    ["terminal-before-turn-start", 0],
+    ["terminal-before-turn-identity", 1],
+    ["terminal-other-thread", 1],
+    ["terminal-other-turn", 1],
+    ["terminal-duplicate", 1],
+    ["terminal-conflicting", 1],
+  ] as const)("rejects %s lifecycle authority", async (scenario, turnStartRequests) => {
+    await withFixtureStorage(async (storage) => {
+      const result = await runScenario(storage, scenario);
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_PROTOCOL_ERROR",
+        diagnostics: { turnStartRequests },
+      });
+    });
+  });
+
   it("passes only the minimal auth-capable environment and removes key/token/secret/auth vars", () => {
     const environment = buildLiveCodexChildEnvironmentForTest(
       {
@@ -459,7 +536,7 @@ async function runScenario(storage: TaskStorage, scenario: TestScenario) {
   const harness = makeDependencies(
     scenario,
     scenario === "oversized-jsonl"
-      ? { limits: { maxJsonlLineBytes: 4_096 } }
+      ? { limits: { maxJsonlLineBytes: 16_384 } }
       : {},
   );
   return executeSingleSubtaskLiveCodexWithDependenciesForTest(

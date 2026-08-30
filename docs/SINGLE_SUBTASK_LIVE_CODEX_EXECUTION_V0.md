@@ -47,6 +47,13 @@ continue. The result retains only the auth type and a bounded plan type; email,
 account identifiers, tokens, auth URLs, and credential data are discarded. No
 API-key fallback, login, logout, or credential persistence exists.
 
+The exact `.9` stable `account/updated` notification is monitored after the
+required `account/read` gate. Only `authMode: "chatgpt"` preserves authority;
+the other exact stable modes, `null`, missing or malformed fields, and unknown
+modes fail closed. A downgrade before the turn prevents `turn/start`. A
+downgrade during the authorized turn fails execution and may issue at most one
+correlated interrupt; it never starts another turn.
+
 ## Ephemeral read-only one-turn policy
 
 The adapter creates a fresh private workspace beneath the canonical OS
@@ -80,6 +87,12 @@ or environment content. A terminal `turn/completed` status is required. A turn
 timeout may send at most one `turn/interrupt` when valid thread and turn IDs are
 known; no real turn is automatically retried.
 
+A terminal turn event is authoritative only after the authorized ephemeral
+thread response, the one sent `turn/start`, and its correlated provider turn
+response establish matching identities. Early terminals, cross-thread or
+cross-turn terminals, duplicate terminals, and conflicting terminal statuses
+fail as protocol errors and cannot produce success.
+
 Normal shutdown closes stdin, waits a bounded grace period, then uses TERM and
 KILL fallbacks if necessary. The disposable workspace is removed. Failure to
 clean the child or workspace is reported without exposing raw process details.
@@ -91,6 +104,8 @@ thread or turn IDs, events, response text, usage, process IDs, transcripts, or
 temporary storage. It adds no migrations, lifecycle mutation, orchestration,
 worktrees, UI, daemon, deployment, or provider routing.
 
-The next dependency is Single-Subtask Live Execution V0 Comprehensive
-Hardening. Live Execution V0 is not accepted by implementation and one smoke
-alone.
+This repair does not establish host-filesystem read confinement or separate
+ChatGPT authentication from unrelated ambient App Server context. Comprehensive
+Hardening remains blocked and Live Execution V0 is not accepted. The next safe
+dependency is a stable Codex isolation contract and re-screening an exact tagged
+release.

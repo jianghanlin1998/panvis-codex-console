@@ -129,8 +129,9 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Single-Subtask Live Codex App Server Execution V0: IMPLEMENTED
 - Deterministic baseline: PASS
 - Real ChatGPT-authenticated ephemeral read-only smoke: PASS
-- Real model turn count: 1
-- Codex usage consumed: YES — bounded smoke only
+- Historical real model turn count: 1 — prior bounded smoke only
+- Additional real model turns in HARD-003/HARD-004 repair: 0
+- Codex usage consumed by HARD-003/HARD-004 repair: NO
 - App Server stdio lifecycle: PASS
 - ChatGPT auth gate: PASS
 - API-key fallback: NONE
@@ -138,12 +139,16 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Live persistence: NOT IMPLEMENTED
 - Worktree execution: NOT IMPLEMENTED
 - Lifecycle orchestration: NOT IMPLEMENTED
-- Comprehensive Hardening: PENDING
+- Comprehensive Hardening: BLOCKED / NOT PASSED
+- CTC-LIVE-HARD-001: OPEN — stable filesystem read confinement blocker
+- CTC-LIVE-HARD-002: OPEN — auth/ambient-context isolation blocker
+- CTC-LIVE-HARD-003: REPAIRED — pending future final hardening/QA
+- CTC-LIVE-HARD-004: REPAIRED — pending future final hardening/QA
 - Live Execution V0 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next safe task:** Single-Subtask Live Execution V0 Comprehensive Hardening
+**Next safe task:** wait for a stable Codex isolation contract and re-screen an exact tagged release.
 
 Hanlin manual QA: NOT REQUIRED
 
