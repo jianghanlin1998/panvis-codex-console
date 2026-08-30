@@ -91,7 +91,9 @@ A terminal turn event is authoritative only after the authorized ephemeral
 thread response, the one sent `turn/start`, and its correlated provider turn
 response establish matching identities. Early terminals, cross-thread or
 cross-turn terminals, duplicate terminals, and conflicting terminal statuses
-fail as protocol errors and cannot produce success.
+fail as protocol errors and cannot produce success. A protocol failure observed
+while bounded shutdown drains the direct child's output also prevents an
+otherwise completed turn from being reported as successful.
 
 Normal shutdown closes stdin, waits a bounded grace period, then uses TERM and
 KILL fallbacks if necessary. The disposable workspace is removed. Failure to
@@ -104,8 +106,25 @@ thread or turn IDs, events, response text, usage, process IDs, transcripts, or
 temporary storage. It adds no migrations, lifecycle mutation, orchestration,
 worktrees, UI, daemon, deployment, or provider routing.
 
-This repair does not establish host-filesystem read confinement or separate
-ChatGPT authentication from unrelated ambient App Server context. Comprehensive
-Hardening remains blocked and Live Execution V0 is not accepted. The next safe
-dependency is a stable Codex isolation contract and re-screening an exact tagged
-release.
+## Approved local single-user V1 boundary
+
+The hard V1 guarantees remain deterministic Console context ACL and preflight
+authority, ChatGPT-only execution, at most one `turn/start` with no automatic
+real-turn retry, no V0 write/network/approval/tool authority, and bounded
+protocol lifecycle, direct-child shutdown, and disposable-workspace cleanup.
+The live adapter does not deliberately inject sibling, unrelated-task, or raw
+project context, and the accepted host boundary does not weaken any Console
+context ACL or budget decision.
+
+This local-first, single-user V1 is not a multi-tenant or adversarial-host
+security sandbox. It accepts two documented best-effort limitations: there is
+no OS-level guarantee that the same-user Codex process cannot read every other
+same-user filesystem path, and reuse of normal local ChatGPT authentication
+does not provide a complete clean-room guarantee against all ambient Codex
+configuration or context. The adapter still uses a disposable cwd, a minimal
+child environment, no arbitrary secret propagation, no Console-added dynamic
+tools or MCP configuration, and no unmeasured prompt appended after Execution
+Input Preflight.
+
+Comprehensive Hardening passes under this approved V1 boundary. Fresh
+Independent QA remains pending, so Live Execution V0 is not accepted.

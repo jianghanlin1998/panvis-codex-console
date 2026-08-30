@@ -21,21 +21,28 @@ type Scenario =
   | "early-exit"
   | "file-approval"
   | "initialize-malformed"
+  | "interrupt-failure"
   | "malformed-account"
   | "malformed-json"
   | "notification-overflow"
   | "oversized-jsonl"
+  | "shutdown-hang"
+  | "shutdown-needs-kill"
+  | "shutdown-needs-term"
   | "stderr-secret"
   | "success"
   | "terminal-before-turn-identity"
   | "terminal-before-turn-start"
   | "terminal-conflicting"
   | "terminal-duplicate"
+  | "terminal-duplicate-delayed"
   | "terminal-other-thread"
   | "terminal-other-turn"
   | "timeout"
   | "tool-action"
+  | "turn-response-timeout"
   | "turn-failed"
+  | "unknown-account"
   | "unknown-request"
   | "wrong-response-id";
 
@@ -52,7 +59,11 @@ let threadStarted = false;
 let activeTurn = false;
 let turnStartCount = 0;
 
-process.on("SIGTERM", () => process.exit(0));
+process.on("SIGTERM", () => {
+  if (scenario !== "shutdown-needs-kill") {
+    process.exit(0);
+  }
+});
 
 lines.on("line", (line) => {
   let message: unknown;
@@ -151,6 +162,16 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       });
       return;
     }
+    if (scenario === "unknown-account") {
+      send({
+        id,
+        result: {
+          account: { type: "unknown-live-auth", accountId: "must-not-leak-account-id" },
+          requiresOpenaiAuth: true,
+        },
+      });
+      return;
+    }
     send({
       id,
       result: {
@@ -210,6 +231,9 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
     const text = ((params.input as unknown[])[0] as JsonRecord).text as string;
     const digest = createHash("sha256").update(text, "utf8").digest("hex");
     const agentText = `CTC_MOCK_LIVE_OK:${digest}`;
+    if (scenario === "turn-response-timeout") {
+      return;
+    }
     if (scenario === "terminal-before-turn-identity") {
       sendTurnCompleted(THREAD_ID, TURN_ID, "completed");
       return;
@@ -244,6 +268,11 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
           scenario === "terminal-conflicting" ? "failed" : "completed",
         ),
       ]);
+      return;
+    }
+    if (scenario === "terminal-duplicate-delayed") {
+      sendTurnCompleted(THREAD_ID, TURN_ID, "completed");
+      setTimeout(() => sendTurnCompleted(THREAD_ID, TURN_ID, "completed"), 5);
       return;
     }
 
@@ -311,19 +340,30 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       });
       return;
     }
-    if (scenario === "timeout") {
+    if (scenario === "timeout" || scenario === "interrupt-failure") {
       return;
     }
     if (scenario === "stderr-secret") {
       process.stderr.write("RAW_PROVIDER_SECRET_SENTINEL\n");
     }
     emitCompletedTurn(agentText, scenario === "turn-failed" ? "failed" : "completed");
+    if (
+      scenario === "shutdown-hang" ||
+      scenario === "shutdown-needs-kill" ||
+      scenario === "shutdown-needs-term"
+    ) {
+      setInterval(() => undefined, 1_000);
+    }
     return;
   }
 
   if (method === "turn/interrupt") {
     if (!activeTurn || params.threadId !== THREAD_ID || params.turnId !== TURN_ID) {
       sendError(id, -32_600);
+      return;
+    }
+    if (scenario === "interrupt-failure") {
+      sendError(id, -32_603);
       return;
     }
     activeTurn = false;
@@ -595,21 +635,28 @@ function readScenario(): Scenario {
     "early-exit",
     "file-approval",
     "initialize-malformed",
+    "interrupt-failure",
     "malformed-account",
     "malformed-json",
     "notification-overflow",
     "oversized-jsonl",
+    "shutdown-hang",
+    "shutdown-needs-kill",
+    "shutdown-needs-term",
     "stderr-secret",
     "success",
     "terminal-before-turn-identity",
     "terminal-before-turn-start",
     "terminal-conflicting",
     "terminal-duplicate",
+    "terminal-duplicate-delayed",
     "terminal-other-thread",
     "terminal-other-turn",
     "timeout",
     "tool-action",
+    "turn-response-timeout",
     "turn-failed",
+    "unknown-account",
     "unknown-request",
     "wrong-response-id",
   ];

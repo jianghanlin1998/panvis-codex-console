@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   realpathSync,
   rmSync,
@@ -52,21 +53,28 @@ type TestScenario =
   | "early-exit"
   | "file-approval"
   | "initialize-malformed"
+  | "interrupt-failure"
   | "malformed-account"
   | "malformed-json"
   | "notification-overflow"
   | "oversized-jsonl"
+  | "shutdown-hang"
+  | "shutdown-needs-kill"
+  | "shutdown-needs-term"
   | "stderr-secret"
   | "success"
   | "terminal-before-turn-identity"
   | "terminal-before-turn-start"
   | "terminal-conflicting"
   | "terminal-duplicate"
+  | "terminal-duplicate-delayed"
   | "terminal-other-thread"
   | "terminal-other-turn"
   | "timeout"
   | "tool-action"
+  | "turn-response-timeout"
   | "turn-failed"
+  | "unknown-account"
   | "unknown-request"
   | "wrong-response-id";
 
@@ -102,7 +110,9 @@ interface LaunchObservation {
 }
 
 interface DependencyHarness {
+  readonly children: ReturnType<typeof spawn>[];
   readonly dependencies: TestDependencies;
+  readonly killSignals: Array<NodeJS.Signals | number | undefined>;
   readonly launches: LaunchObservation[];
   readonly workspaces: string[];
 }
@@ -193,6 +203,16 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
       expect(harness.workspaces.every((path) => !path.includes("panvis-codex-console"))).toBe(
         true,
       );
+      expect(harness.workspaces.every((path) => !existsSync(path))).toBe(true);
+      expect(harness.children).toHaveLength(1);
+      expect(
+        harness.children[0]?.exitCode !== null ||
+          harness.children[0]?.signalCode !== null,
+      ).toBe(true);
+      expect(harness.killSignals).toEqual([]);
+      expect(JSON.stringify(result)).not.toMatch(
+        /must-not-leak|fixture\/normal-home|fixture\/normal-codex-home/i,
+      );
     });
   });
 
@@ -281,6 +301,7 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
     ["api-key", "CHATGPT_AUTH_REQUIRED"],
     ["bedrock", "CHATGPT_AUTH_REQUIRED"],
     ["account-null", "CHATGPT_AUTH_REQUIRED"],
+    ["unknown-account", "CHATGPT_AUTH_REQUIRED"],
     ["malformed-account", "AUTH_RESPONSE_MALFORMED"],
   ] as const)("blocks %s auth before thread and turn start", async (scenario, code) => {
     await withFixtureStorage(async (storage) => {
@@ -353,6 +374,7 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
     ["terminal-other-thread", 1],
     ["terminal-other-turn", 1],
     ["terminal-duplicate", 1],
+    ["terminal-duplicate-delayed", 1],
     ["terminal-conflicting", 1],
   ] as const)("rejects %s lifecycle authority", async (scenario, turnStartRequests) => {
     await withFixtureStorage(async (storage) => {
@@ -471,7 +493,136 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
         failureCode: "APP_SERVER_TIMEOUT",
         diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
         appServerChildCleaned: true,
+        disposableWorkspaceCleaned: true,
       });
+      expect(harness.children).toHaveLength(1);
+      expect(
+        harness.children[0]?.exitCode !== null ||
+          harness.children[0]?.signalCode !== null,
+      ).toBe(true);
+      expect(harness.workspaces.every((path) => !existsSync(path))).toBe(true);
+    });
+  });
+
+  it("does not retry when turn/start times out after the request is sent", async () => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies("turn-response-timeout", {
+        limits: { requestTimeoutMs: 500 },
+      });
+      const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+        storage,
+        SUBTASK_ID,
+        "STANDARD_SUBTASK_EXECUTION",
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_TIMEOUT",
+        providerRun: null,
+        diagnostics: { interruptRequests: 0, turnStartRequests: 1 },
+        appServerChildCleaned: true,
+        disposableWorkspaceCleaned: true,
+      });
+    });
+  });
+
+  it("preserves the original turn timeout when the one interrupt fails", async () => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies("interrupt-failure", {
+        limits: { turnTimeoutMs: 30 },
+      });
+      const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+        storage,
+        SUBTASK_ID,
+        "STANDARD_SUBTASK_EXECUTION",
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_TIMEOUT",
+        diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
+        appServerChildCleaned: true,
+        disposableWorkspaceCleaned: true,
+      });
+    });
+  });
+
+  it.each([
+    ["shutdown-needs-term", ["SIGTERM"]],
+    ["shutdown-needs-kill", ["SIGTERM", "SIGKILL"]],
+  ] as const)("uses bounded shutdown fallback for %s", async (scenario, signals) => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies(scenario, {
+        limits: { shutdownGraceMs: 30, terminateGraceMs: 30 },
+      });
+      const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+        storage,
+        SUBTASK_ID,
+        "STANDARD_SUBTASK_EXECUTION",
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: true,
+        diagnostics: { turnStartRequests: 1 },
+        appServerChildCleaned: true,
+        disposableWorkspaceCleaned: true,
+      });
+      expect(harness.killSignals).toEqual(signals);
+      expect(
+        harness.children[0]?.exitCode !== null ||
+          harness.children[0]?.signalCode !== null,
+      ).toBe(true);
+      expect(harness.workspaces.every((path) => !existsSync(path))).toBe(true);
+    });
+  });
+
+  it("fails closed when bounded direct-child shutdown cannot clean the child", async () => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies("shutdown-hang", {
+        ignoredKillAttempts: 2,
+        limits: { shutdownGraceMs: 20, terminateGraceMs: 20 },
+      });
+      const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+        storage,
+        SUBTASK_ID,
+        "STANDARD_SUBTASK_EXECUTION",
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "PROCESS_CLEANUP_FAILED",
+        diagnostics: { turnStartRequests: 1 },
+        appServerChildCleaned: false,
+        disposableWorkspaceCleaned: true,
+      });
+      expect(harness.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(harness.workspaces.every((path) => !existsSync(path))).toBe(true);
+    });
+  });
+
+  it("fails closed and reports a disposable-workspace cleanup failure", async () => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies("success", {
+        removeWorkspaceThrows: true,
+      });
+      try {
+        const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+          storage,
+          SUBTASK_ID,
+          "STANDARD_SUBTASK_EXECUTION",
+          harness.dependencies,
+        );
+        expect(result).toMatchObject({
+          success: false,
+          failureCode: "WORKSPACE_CLEANUP_FAILED",
+          appServerChildCleaned: true,
+          disposableWorkspaceCleaned: false,
+        });
+      } finally {
+        for (const workspace of harness.workspaces) {
+          rmSync(workspace, { force: true, recursive: true });
+        }
+      }
     });
   });
 
@@ -550,13 +701,17 @@ async function runScenario(storage: TaskStorage, scenario: TestScenario) {
 function makeDependencies(
   scenario: TestScenario,
   options: {
+    readonly ignoredKillAttempts?: number;
     readonly launcherThrows?: boolean;
     readonly limits?: Partial<TestDependencies["limits"]>;
+    readonly removeWorkspaceThrows?: boolean;
     readonly resolverThrows?: boolean;
     readonly runtimeOverride?: Partial<ReturnType<TestDependencies["resolveRuntime"]>>;
     readonly sourceEnvironment?: NodeJS.ProcessEnv;
   } = {},
 ): DependencyHarness {
+  const children: ReturnType<typeof spawn>[] = [];
+  const killSignals: Array<NodeJS.Signals | number | undefined> = [];
   const launches: LaunchObservation[] = [];
   const workspaces: string[] = [];
   const runtime = {
@@ -593,6 +748,15 @@ function makeDependencies(
         [MOCK_LIVE_FIXTURE_PATH, `--scenario=${scenario}`],
         spawnOptions,
       );
+      children.push(child);
+      const killChild = child.kill.bind(child);
+      child.kill = ((signal?: NodeJS.Signals | number) => {
+        killSignals.push(signal);
+        if (killSignals.length <= (options.ignoredKillAttempts ?? 0)) {
+          return false;
+        }
+        return killChild(signal);
+      }) as typeof child.kill;
       liveChildren.add(child);
       child.once("close", () => liveChildren.delete(child));
       return child;
@@ -614,11 +778,14 @@ function makeDependencies(
       return workspace;
     },
     removeWorkspace: (workspace) => {
+      if (options.removeWorkspaceThrows === true) {
+        throw new Error("synthetic workspace cleanup failure");
+      }
       rmSync(workspace, { force: true, recursive: true });
     },
     limits: { ...BASE_LIMITS, ...options.limits },
   };
-  return { dependencies, launches, workspaces };
+  return { children, dependencies, killSignals, launches, workspaces };
 }
 
 async function withFixtureStorage<T>(

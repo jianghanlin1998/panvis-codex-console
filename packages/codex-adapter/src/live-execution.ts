@@ -1140,8 +1140,11 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     }
     if (client !== undefined) {
       evidence.appServerChildCleaned = await client.shutdown();
-      if (!evidence.appServerChildCleaned && failureCode === null) {
-        failureCode = "PROCESS_CLEANUP_FAILED";
+      if (failureCode === null) {
+        failureCode = client.failure?.code ?? null;
+        if (!evidence.appServerChildCleaned && failureCode === null) {
+          failureCode = "PROCESS_CLEANUP_FAILED";
+        }
       }
     }
     if (workspace !== undefined) {

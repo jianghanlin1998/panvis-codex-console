@@ -126,12 +126,12 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-CLITE-FQA-002: CLOSED
 - C-lite ACCEPTED: YES
 - Tested Codex: `codex-cli 0.148.0-alpha.9`
-- Single-Subtask Live Codex App Server Execution V0: IMPLEMENTED
+- Single-Subtask Live Execution V0: HARDENED
 - Deterministic baseline: PASS
-- Real ChatGPT-authenticated ephemeral read-only smoke: PASS
+- Historical real ChatGPT smoke: PASS
 - Historical real model turn count: 1 — prior bounded smoke only
-- Additional real model turns in HARD-003/HARD-004 repair: 0
-- Codex usage consumed by HARD-003/HARD-004 repair: NO
+- hardening real model turns: 0
+- additional Codex usage during hardening: NO
 - App Server stdio lifecycle: PASS
 - ChatGPT auth gate: PASS
 - API-key fallback: NONE
@@ -139,16 +139,18 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Live persistence: NOT IMPLEMENTED
 - Worktree execution: NOT IMPLEMENTED
 - Lifecycle orchestration: NOT IMPLEMENTED
-- Comprehensive Hardening: BLOCKED / NOT PASSED
-- CTC-LIVE-HARD-001: OPEN — stable filesystem read confinement blocker
-- CTC-LIVE-HARD-002: OPEN — auth/ambient-context isolation blocker
-- CTC-LIVE-HARD-003: REPAIRED — pending future final hardening/QA
-- CTC-LIVE-HARD-004: REPAIRED — pending future final hardening/QA
+- Comprehensive Hardening: PASS under approved local single-user V1 boundary
+- CTC-LIVE-HARD-001: ACCEPTED_V1_LIMITATION — no OS-enforced same-user read confinement
+- CTC-LIVE-HARD-002: ACCEPTED_V1_LIMITATION — ambient Codex config/context not fully clean-room isolated
+- CTC-LIVE-HARD-003: CLOSED / regression PASS
+- CTC-LIVE-HARD-004: CLOSED / regression PASS
+- CTC-LIVE-HARD-005: CLOSED / regression PASS — cleanup-time protocol failures cannot produce success
+- Fresh Independent QA: PENDING
 - Live Execution V0 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next safe task:** wait for a stable Codex isolation contract and re-screen an exact tagged release.
+**Next safe task:** Single-Subtask Live Execution V0 Fresh Independent QA.
 
 Hanlin manual QA: NOT REQUIRED
 
