@@ -93,7 +93,12 @@ response establish matching identities. Early terminals, cross-thread or
 cross-turn terminals, duplicate terminals, and conflicting terminal statuses
 fail as protocol errors and cannot produce success. A protocol failure observed
 while bounded shutdown drains the direct child's output also prevents an
-otherwise completed turn from being reported as successful.
+otherwise completed turn from being reported as successful. Stdout JSONL
+framing is validated through EOF before success, so any unterminated trailing
+frame fails closed. Any turn-scoped protocol event observed after the
+authoritative terminal and before public return also fails closed. These later
+protocol and bounded-shutdown failures remain authoritative over an earlier
+apparently successful terminal.
 
 Normal shutdown closes stdin, waits a bounded grace period, then uses TERM and
 KILL fallbacks if necessary. The disposable workspace is removed. Failure to

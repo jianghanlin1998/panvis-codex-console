@@ -31,6 +31,8 @@ type Scenario =
   | "shutdown-needs-term"
   | "stderr-secret"
   | "success"
+  | "terminal-eof-complete-json"
+  | "terminal-eof-partial-json"
   | "terminal-before-turn-identity"
   | "terminal-before-turn-start"
   | "terminal-conflicting"
@@ -38,6 +40,9 @@ type Scenario =
   | "terminal-duplicate-delayed"
   | "terminal-other-thread"
   | "terminal-other-turn"
+  | "terminal-post-agent-delta"
+  | "terminal-post-item-completed"
+  | "terminal-post-usage"
   | "timeout"
   | "tool-action"
   | "turn-response-timeout"
@@ -94,6 +99,15 @@ lines.on("line", (line) => {
     return;
   }
   sendError(null, -32_600);
+});
+
+lines.on("close", () => {
+  if (scenario === "terminal-eof-partial-json") {
+    process.stdout.write('{"method":');
+  }
+  if (scenario === "terminal-eof-complete-json") {
+    process.stdout.write(JSON.stringify({ method: "fixture/unknown", params: null }));
+  }
 });
 
 function handleRequest(id: RequestId, method: string, params: JsonRecord): void {
@@ -347,6 +361,7 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       process.stderr.write("RAW_PROVIDER_SECRET_SENTINEL\n");
     }
     emitCompletedTurn(agentText, scenario === "turn-failed" ? "failed" : "completed");
+    emitPostTerminalTurnEvent(scenario, agentText);
     if (
       scenario === "shutdown-hang" ||
       scenario === "shutdown-needs-kill" ||
@@ -376,6 +391,51 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
   }
 
   sendError(id, -32_601);
+}
+
+function emitPostTerminalTurnEvent(value: Scenario, agentText: string): void {
+  if (value === "terminal-post-agent-delta") {
+    send({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        itemId: AGENT_ITEM_ID,
+        delta: agentText,
+      },
+    });
+  }
+  if (value === "terminal-post-item-completed") {
+    send({
+      method: "item/completed",
+      params: {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        completedAtMs: FIXED_SECONDS * 1_000 + 2,
+        item: {
+          type: "agentMessage",
+          id: AGENT_ITEM_ID,
+          text: agentText,
+          phase: null,
+          memoryCitation: null,
+        },
+      },
+    });
+  }
+  if (value === "terminal-post-usage") {
+    send({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        tokenUsage: {
+          total: tokenUsage(),
+          last: tokenUsage(),
+          modelContextWindow: 200_000,
+        },
+      },
+    });
+  }
 }
 
 function handleClientResponse(id: RequestId, message: JsonRecord): void {
@@ -645,6 +705,8 @@ function readScenario(): Scenario {
     "shutdown-needs-term",
     "stderr-secret",
     "success",
+    "terminal-eof-complete-json",
+    "terminal-eof-partial-json",
     "terminal-before-turn-identity",
     "terminal-before-turn-start",
     "terminal-conflicting",
@@ -652,6 +714,9 @@ function readScenario(): Scenario {
     "terminal-duplicate-delayed",
     "terminal-other-thread",
     "terminal-other-turn",
+    "terminal-post-agent-delta",
+    "terminal-post-item-completed",
+    "terminal-post-usage",
     "timeout",
     "tool-action",
     "turn-response-timeout",

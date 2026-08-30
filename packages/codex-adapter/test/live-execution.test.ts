@@ -63,6 +63,8 @@ type TestScenario =
   | "shutdown-needs-term"
   | "stderr-secret"
   | "success"
+  | "terminal-eof-complete-json"
+  | "terminal-eof-partial-json"
   | "terminal-before-turn-identity"
   | "terminal-before-turn-start"
   | "terminal-conflicting"
@@ -70,6 +72,9 @@ type TestScenario =
   | "terminal-duplicate-delayed"
   | "terminal-other-thread"
   | "terminal-other-turn"
+  | "terminal-post-agent-delta"
+  | "terminal-post-item-completed"
+  | "terminal-post-usage"
   | "timeout"
   | "tool-action"
   | "turn-response-timeout"
@@ -383,6 +388,41 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
         success: false,
         failureCode: "APP_SERVER_PROTOCOL_ERROR",
         diagnostics: { turnStartRequests },
+      });
+    });
+  });
+
+  it.each([
+    "terminal-post-agent-delta",
+    "terminal-post-item-completed",
+    "terminal-post-usage",
+  ] as const)("rejects %s after the authoritative terminal", async (scenario) => {
+    await withFixtureStorage(async (storage) => {
+      const result = await runScenario(storage, scenario);
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_PROTOCOL_ERROR",
+        terminalTurnStatus: "completed",
+        diagnostics: { turnStartRequests: 1 },
+        appServerChildCleaned: true,
+        disposableWorkspaceCleaned: true,
+      });
+    });
+  });
+
+  it.each([
+    "terminal-eof-partial-json",
+    "terminal-eof-complete-json",
+  ] as const)("rejects %s when stdout ends during shutdown", async (scenario) => {
+    await withFixtureStorage(async (storage) => {
+      const result = await runScenario(storage, scenario);
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_PROTOCOL_ERROR",
+        terminalTurnStatus: "completed",
+        diagnostics: { turnStartRequests: 1 },
+        appServerChildCleaned: true,
+        disposableWorkspaceCleaned: true,
       });
     });
   });

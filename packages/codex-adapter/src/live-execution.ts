@@ -78,6 +78,14 @@ const ACCOUNT_UPDATED_PLAN_TYPES = [
   "edu",
   "unknown",
 ] as const;
+const TURN_SCOPED_NOTIFICATION_METHODS = new Set([
+  "turn/started",
+  "item/started",
+  "item/completed",
+  "item/agentMessage/delta",
+  "thread/tokenUsage/updated",
+  "turn/completed",
+]);
 
 const DEFAULT_LIMITS = Object.freeze({
   startupTimeoutMs: 10_000,
@@ -347,6 +355,12 @@ class TurnEventTracker {
       }
       return true;
     }
+    if (
+      this.terminal !== null &&
+      TURN_SCOPED_NOTIFICATION_METHODS.has(method)
+    ) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
     const record = requireRecord(params);
     switch (method) {
       case "thread/started": {
@@ -580,7 +594,9 @@ class JsonlAppServerClient {
   #stdoutBuffer = Buffer.alloc(0);
   #stderrBytes = 0;
   #failure: LiveExecutionError | null = null;
+  #processClosed = false;
   #shuttingDown = false;
+  #stdoutFinalized = false;
 
   constructor(
     readonly child: ChildProcessWithoutNullStreams,
@@ -590,6 +606,12 @@ class JsonlAppServerClient {
   ) {
     child.stdout.on("data", (chunk: Buffer | string) => {
       this.#receiveStdout(chunk);
+    });
+    child.stdout.once("end", () => {
+      this.#finalizeStdout(true);
+    });
+    child.stdout.once("close", () => {
+      this.#finalizeStdout(false);
     });
     child.stderr.on("data", (chunk: Buffer | string) => {
       const bytes = Buffer.isBuffer(chunk)
@@ -604,6 +626,7 @@ class JsonlAppServerClient {
       this.#fail(new LiveExecutionError("APP_SERVER_START_FAILED"));
     });
     child.once("close", () => {
+      this.#processClosed = true;
       if (!this.#shuttingDown) {
         this.#fail(new LiveExecutionError("APP_SERVER_EXITED"));
       }
@@ -702,18 +725,45 @@ class JsonlAppServerClient {
       if (!this.child.stdin.destroyed) {
         this.child.stdin.end();
       }
-      if (await waitForProcessExit(this.child, this.limits.shutdownGraceMs)) {
+      if (await this.#waitForProcessClose(this.limits.shutdownGraceMs)) {
         return true;
       }
       this.child.kill("SIGTERM");
-      if (await waitForProcessExit(this.child, this.limits.terminateGraceMs)) {
+      if (await this.#waitForProcessClose(this.limits.terminateGraceMs)) {
         return true;
       }
       this.child.kill("SIGKILL");
-      return await waitForProcessExit(this.child, this.limits.terminateGraceMs);
+      return await this.#waitForProcessClose(this.limits.terminateGraceMs);
     } catch {
       return false;
     }
+  }
+
+  #finalizeStdout(cleanEof: boolean): void {
+    if (this.#stdoutFinalized) {
+      return;
+    }
+    this.#stdoutFinalized = true;
+    if (!cleanEof || this.#stdoutBuffer.byteLength !== 0) {
+      this.#fail(new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR"));
+    }
+  }
+
+  #waitForProcessClose(timeoutMs: number): Promise<boolean> {
+    if (this.#processClosed) {
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.child.off("close", onClose);
+        resolve(false);
+      }, timeoutMs);
+      const onClose = (): void => {
+        clearTimeout(timeout);
+        resolve(true);
+      };
+      this.child.once("close", onClose);
+    });
   }
 
   #receiveStdout(chunk: Buffer | string): void {
@@ -1475,26 +1525,6 @@ function asLiveExecutionError(error: unknown): LiveExecutionError {
   return error instanceof LiveExecutionError
     ? error
     : new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
-}
-
-function waitForProcessExit(
-  child: ChildProcessWithoutNullStreams,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve(true);
-  }
-  return new Promise<boolean>((resolve) => {
-    const timeout = setTimeout(() => {
-      child.off("close", onClose);
-      resolve(false);
-    }, timeoutMs);
-    const onClose = (): void => {
-      clearTimeout(timeout);
-      resolve(true);
-    };
-    child.once("close", onClose);
-  });
 }
 
 function emptyDiagnostics(): MutableDiagnostics {

@@ -132,6 +132,8 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Historical real model turn count: 1 — prior bounded smoke only
 - hardening real model turns: 0
 - additional Codex usage during hardening: NO
+- repair real model turns: 0
+- additional live provider usage during repair: NO
 - App Server stdio lifecycle: PASS
 - ChatGPT auth gate: PASS
 - API-key fallback: NONE
@@ -145,12 +147,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-LIVE-HARD-003: CLOSED / regression PASS
 - CTC-LIVE-HARD-004: CLOSED / regression PASS
 - CTC-LIVE-HARD-005: CLOSED / regression PASS — cleanup-time protocol failures cannot produce success
-- Fresh Independent QA: PENDING
+- Fresh Independent QA on `8ae2da0e3ed3ecd570ff8cfa8505cb183b3c2a04`: FAIL
+- CTC-LIVE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
+- CTC-LIVE-FQA-002: REPAIRED — pending Focused Fresh Re-QA
 - Live Execution V0 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next safe task:** Single-Subtask Live Execution V0 Fresh Independent QA.
+**Next safe task:** Focused Fresh Re-QA for CTC-LIVE-FQA-001 and CTC-LIVE-FQA-002.
 
 Hanlin manual QA: NOT REQUIRED
 
