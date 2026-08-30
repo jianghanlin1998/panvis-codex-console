@@ -103,18 +103,19 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Execution Input Preflight V0 Fresh Independent QA: PASS
 - Execution Input Preflight V0 ACCEPTED: YES
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
-- Console-Owned Codex Runtime Ownership V0: HARDENED
+- Console-Owned Codex Runtime Ownership V0: ACCEPTED
 - Runtime ownership baseline: official standalone exact-release installer
 - Owned candidate: `0.148.0-alpha.9` INSTALLED, INACTIVE
 - Owned active runtime: NONE
 - Ambient PATH/ChatGPT Codex: `codex-cli 0.148.0-alpha.15`; informational only, not Console execution authority
 - Runtime Ownership Comprehensive Hardening: PASS
-- Runtime Ownership Fresh Independent QA: FAIL
+- Runtime Ownership Fresh Independent QA: FAIL — historical initial result; superseded by Focused Fresh Re-QA PASS
 - CTC-RUNTIME-FQA-001: CLOSED
 - CTC-RUNTIME-FQA-002: CLOSED
-- External `--version` side-effect finding: REPAIRED — pending Focused Fresh Re-QA
-- Runtime Ownership ACCEPTED: NO
-- C-lite Compatibility Check V0: PENDING — blocked on Runtime Ownership ACCEPTED
+- External `--version` side-effect finding: CLOSED
+- Runtime Ownership Focused Fresh Re-QA: PASS
+- Runtime Ownership ACCEPTED: YES
+- C-lite Compatibility Check V0: NOT STARTED — dependency-eligible from the Runtime Ownership side
 - Codex App Server 0.148 Compatibility Revalidation: HARDENED
 - Codex App Server 0.148 Compatibility Revalidation / Bounded Hardening: PASS
 - Codex App Server 0.148 Fresh Independent Compatibility QA: FAIL — prior run, timeout blockers repaired
@@ -128,12 +129,12 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Console-Owned Codex Runtime Ownership V0 Focused Fresh Re-QA**
+**Next product-direction step:** Edict-inspired Governed Autonomy / Master Scope & Direction V2 revision
 
-- Independently re-verify bounded version-probe environment isolation after the
-  side-effect repair.
-- Do not start C-lite until Runtime Ownership Fresh QA passes and acceptance is reconciled.
-- Keep the real owned candidate inactive and live execution blocked.
+**Next engineering dependency after product-direction reconciliation:** C-lite Compatibility Check V0
+
+- C-lite has not started.
+- Keep the owned candidate inactive and live execution blocked.
 
 Hanlin manual QA: NOT REQUIRED
 
