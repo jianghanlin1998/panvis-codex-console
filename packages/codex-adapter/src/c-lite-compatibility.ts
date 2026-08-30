@@ -382,6 +382,10 @@ interface ObjectSignature {
   readonly required: ReadonlySet<string>;
 }
 
+type BoundedStringSet =
+  | { readonly kind: "all" }
+  | { readonly kind: "finite"; readonly values: ReadonlySet<string> };
+
 interface ValidationSuccess {
   readonly provenanceSha256: string;
 }
@@ -1085,22 +1089,15 @@ function validateConsumedProtocolContract(
 
 function validateTextInput(context: SchemaValidationContext): void {
   const input = requireLocation(context, ["definitions", "v2", "UserInput"]);
-  const textVariants = schemaAlternatives(input, context).filter((variant) => {
-    const typeLocations = objectPropertyLocations(
+  const textVariants = schemaAlternatives(input, context).filter((variant) =>
+    schemaAllowsExactlyObjectPropertyLiteral(
       variant,
       "type",
+      "text",
       context,
       { activePaths: new Set() },
-    );
-    return typeLocations.some((location) =>
-      schemaAllowsExactlyLiteral(
-        location,
-        "text",
-        context,
-        { activePaths: new Set() },
-      ),
-    );
-  });
+    ),
+  );
   if (textVariants.length !== 1) {
     throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
   }
@@ -1152,12 +1149,17 @@ function validateApprovalContract(
     throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
   }
   assertPropertyTargets(context, responsePath, "decision", decisionPath);
-  const values = collectKnownStringLiterals(
+  const values = evaluateBoundedStringSet(
     requireLocation(context, decisionPath),
     context,
     { activePaths: new Set() },
   );
-  if (!SUPPORTED_APPROVAL_DECISIONS.every((value) => values.has(value))) {
+  if (
+    values === null ||
+    !SUPPORTED_APPROVAL_DECISIONS.every((value) =>
+      boundedStringSetHas(values, value),
+    )
+  ) {
     throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
   }
 }
@@ -1214,78 +1216,205 @@ function variantHasExactMethod(
   method: string,
   context: SchemaValidationContext,
 ): boolean {
-  return objectPropertyLocations(
+  return schemaAllowsExactlyObjectPropertyLiteral(
     variant,
     "method",
+    method,
     context,
     { activePaths: new Set() },
-  ).some((location) =>
-    schemaAllowsExactlyLiteral(
-      location,
-      method,
-      context,
-      { activePaths: new Set() },
-    ),
   );
 }
 
-function schemaAllowsExactlyLiteral(
+function schemaAllowsExactlyObjectPropertyLiteral(
   location: SchemaLocation,
+  property: string,
   expected: string,
   context: SchemaValidationContext,
   state: SchemaReferenceState,
 ): boolean {
-  const values = collectAllowedStringLiterals(location, context, state);
-  return values !== null && values.size === 1 && values.has(expected);
+  const values = evaluateObjectPropertyBoundedStringSet(
+    location,
+    property,
+    context,
+    state,
+  );
+  return (
+    values !== null &&
+    values.kind === "finite" &&
+    values.values.size === 1 &&
+    values.values.has(expected)
+  );
 }
 
-function collectAllowedStringLiterals(
+function evaluateObjectPropertyBoundedStringSet(
   location: SchemaLocation,
+  property: string,
   context: SchemaValidationContext,
   state: SchemaReferenceState,
-): ReadonlySet<string> | null {
+): BoundedStringSet | null {
   consumeSchemaOperation(context);
-  const constraints: ReadonlySet<string>[] = [];
-  if (typeof location.node.const === "string") {
-    constraints.push(new Set([location.node.const]));
-  } else if (location.node.const !== undefined) {
-    return null;
-  }
-  if (location.node.enum !== undefined) {
-    const enumValues = strictStringArray(location.node.enum);
-    constraints.push(new Set(enumValues));
+  let allowed = allBoundedStrings();
+  const properties = strictSchemaRecord(location.node.properties);
+  const direct = properties[property];
+  if (isSchemaObject(direct)) {
+    const values = evaluateBoundedStringSet(
+      {
+        node: direct,
+        path: [...location.path, "properties", property],
+      },
+      context,
+      state,
+    );
+    if (values === null) {
+      return null;
+    }
+    allowed = intersectBoundedStringSets(allowed, values, context);
+  } else if (direct !== undefined) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
 
   const referenced = referencedLocation(location, context, state);
   if (referenced !== null) {
-    const values = collectAllowedStringLiterals(
+    const values = evaluateObjectPropertyBoundedStringSet(
+      referenced.location,
+      property,
+      context,
+      referenced.state,
+    );
+    if (values === null) {
+      return null;
+    }
+    allowed = intersectBoundedStringSets(allowed, values, context);
+  }
+
+  for (const [index, schema] of strictSchemaObjectArray(
+    location.node.allOf,
+  ).entries()) {
+    const values = evaluateObjectPropertyBoundedStringSet(
+      { node: schema, path: [...location.path, "allOf", String(index)] },
+      property,
+      context,
+      state,
+    );
+    if (values === null) {
+      return null;
+    }
+    allowed = intersectBoundedStringSets(allowed, values, context);
+  }
+
+  for (const keyword of ["oneOf", "anyOf"] as const) {
+    if (location.node[keyword] === undefined) {
+      continue;
+    }
+    const alternatives = strictSchemaObjectArray(location.node[keyword]);
+    if (alternatives.length > context.limits.maxSchemaSignatures) {
+      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+    }
+    const alternativeSets: BoundedStringSet[] = [];
+    for (const [index, schema] of alternatives.entries()) {
+      const values = evaluateObjectPropertyBoundedStringSet(
+        { node: schema, path: [...location.path, keyword, String(index)] },
+        property,
+        context,
+        state,
+      );
+      if (values === null) {
+        return null;
+      }
+      alternativeSets.push(values);
+    }
+    const combined =
+      keyword === "anyOf"
+        ? unionBoundedStringSets(alternativeSets, context)
+        : exactlyOneBoundedStringSet(alternativeSets, context);
+    if (combined === null) {
+      return null;
+    }
+    allowed = intersectBoundedStringSets(allowed, combined, context);
+  }
+
+  return allowed;
+}
+
+function evaluateBoundedStringSet(
+  location: SchemaLocation,
+  context: SchemaValidationContext,
+  state: SchemaReferenceState,
+): BoundedStringSet | null {
+  consumeSchemaOperation(context);
+  if (hasUnsupportedStringConstraint(location.node)) {
+    return null;
+  }
+
+  let allowed = schemaTypeAllows(location.node, "string")
+    ? allBoundedStrings()
+    : finiteBoundedStrings([], context);
+
+  if (Object.hasOwn(location.node, "const")) {
+    allowed = intersectBoundedStringSets(
+      allowed,
+      finiteBoundedStrings(
+        typeof location.node.const === "string" ? [location.node.const] : [],
+        context,
+      ),
+      context,
+    );
+  }
+
+  if (location.node.enum !== undefined) {
+    if (!Array.isArray(location.node.enum)) {
+      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+    }
+    allowed = intersectBoundedStringSets(
+      allowed,
+      finiteBoundedStrings(
+        location.node.enum.filter(
+          (value): value is string => typeof value === "string",
+        ),
+        context,
+      ),
+      context,
+    );
+  }
+
+  const referenced = referencedLocation(location, context, state);
+  if (referenced !== null) {
+    const values = evaluateBoundedStringSet(
       referenced.location,
       context,
       referenced.state,
     );
-    if (values !== null) {
-      constraints.push(values);
+    if (values === null) {
+      return null;
     }
+    allowed = intersectBoundedStringSets(allowed, values, context);
   }
 
-  for (const schema of strictSchemaObjectArray(location.node.allOf)) {
-    const values = collectAllowedStringLiterals(
-      { node: schema, path: [...location.path, "allOf"] },
+  for (const [index, schema] of strictSchemaObjectArray(
+    location.node.allOf,
+  ).entries()) {
+    const values = evaluateBoundedStringSet(
+      { node: schema, path: [...location.path, "allOf", String(index)] },
       context,
       state,
     );
-    if (values !== null) {
-      constraints.push(values);
+    if (values === null) {
+      return null;
     }
+    allowed = intersectBoundedStringSets(allowed, values, context);
   }
+
   for (const keyword of ["oneOf", "anyOf"] as const) {
-    const alternatives = strictSchemaObjectArray(location.node[keyword]);
-    if (alternatives.length === 0) {
+    if (location.node[keyword] === undefined) {
       continue;
     }
-    const union = new Set<string>();
+    const alternatives = strictSchemaObjectArray(location.node[keyword]);
+    if (alternatives.length > context.limits.maxSchemaSignatures) {
+      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+    }
+    const alternativeSets: BoundedStringSet[] = [];
     for (const [index, schema] of alternatives.entries()) {
-      const values = collectAllowedStringLiterals(
+      const values = evaluateBoundedStringSet(
         { node: schema, path: [...location.path, keyword, String(index)] },
         context,
         state,
@@ -1293,67 +1422,124 @@ function collectAllowedStringLiterals(
       if (values === null) {
         return null;
       }
-      for (const value of values) {
-        union.add(value);
-      }
+      alternativeSets.push(values);
     }
-    constraints.push(union);
-  }
-  if (constraints.length === 0) {
-    return null;
-  }
-  const [first, ...rest] = constraints;
-  if (first === undefined) {
-    return null;
-  }
-  const intersection = new Set(first);
-  for (const constraint of rest) {
-    for (const value of intersection) {
-      if (!constraint.has(value)) {
-        intersection.delete(value);
-      }
+    const combined =
+      keyword === "anyOf"
+        ? unionBoundedStringSets(alternativeSets, context)
+        : exactlyOneBoundedStringSet(alternativeSets, context);
+    if (combined === null) {
+      return null;
     }
+    allowed = intersectBoundedStringSets(allowed, combined, context);
   }
-  return intersection;
+
+  return allowed;
 }
 
-function collectKnownStringLiterals(
-  location: SchemaLocation,
+function hasUnsupportedStringConstraint(node: SchemaObject): boolean {
+  return [
+    "$dynamicRef",
+    "$recursiveRef",
+    "contentEncoding",
+    "contentMediaType",
+    "contentSchema",
+    "else",
+    "format",
+    "if",
+    "maxLength",
+    "minLength",
+    "not",
+    "pattern",
+    "then",
+  ].some((keyword) => Object.hasOwn(node, keyword));
+}
+
+function allBoundedStrings(): BoundedStringSet {
+  return { kind: "all" };
+}
+
+function finiteBoundedStrings(
+  values: Iterable<string>,
   context: SchemaValidationContext,
-  state: SchemaReferenceState,
-): ReadonlySet<string> {
-  consumeSchemaOperation(context);
-  const values = new Set<string>();
-  if (typeof location.node.const === "string") {
-    values.add(location.node.const);
+): BoundedStringSet {
+  const set = new Set(values);
+  assertBoundedStringSetSize(set, context);
+  return { kind: "finite", values: set };
+}
+
+function boundedStringSetHas(values: BoundedStringSet, value: string): boolean {
+  return values.kind === "all" || values.values.has(value);
+}
+
+function intersectBoundedStringSets(
+  left: BoundedStringSet,
+  right: BoundedStringSet,
+  context: SchemaValidationContext,
+): BoundedStringSet {
+  if (left.kind === "all") {
+    return right;
   }
-  for (const value of stringArray(location.node.enum)) {
-    values.add(value);
+  if (right.kind === "all") {
+    return left;
   }
-  const referenced = referencedLocation(location, context, state);
-  if (referenced !== null) {
-    for (const value of collectKnownStringLiterals(
-      referenced.location,
-      context,
-      referenced.state,
-    )) {
-      values.add(value);
+  return finiteBoundedStrings(
+    [...left.values].filter((value) => right.values.has(value)),
+    context,
+  );
+}
+
+function unionBoundedStringSets(
+  sets: readonly BoundedStringSet[],
+  context: SchemaValidationContext,
+): BoundedStringSet {
+  let union = finiteBoundedStrings([], context);
+  for (const values of sets) {
+    if (union.kind === "all" || values.kind === "all") {
+      return allBoundedStrings();
+    }
+    union = finiteBoundedStrings([...union.values, ...values.values], context);
+  }
+  return union;
+}
+
+function exactlyOneBoundedStringSet(
+  sets: readonly BoundedStringSet[],
+  context: SchemaValidationContext,
+): BoundedStringSet | null {
+  const unboundedCount = sets.filter((values) => values.kind === "all").length;
+  const finite = sets.filter(
+    (values): values is Extract<BoundedStringSet, { readonly kind: "finite" }> =>
+      values.kind === "finite",
+  );
+  if (unboundedCount > 1) {
+    return finiteBoundedStrings([], context);
+  }
+  if (unboundedCount === 1) {
+    return finite.every((values) => values.values.size === 0)
+      ? allBoundedStrings()
+      : null;
+  }
+  const boundary = new Set(finite.flatMap((values) => [...values.values]));
+  assertBoundedStringSetSize(boundary, context);
+  const allowed = new Set<string>();
+  for (const value of boundary) {
+    if (
+      finite.filter((candidate) => candidate.values.has(value)).length === 1
+    ) {
+      allowed.add(value);
     }
   }
-  for (const keyword of ["allOf", "oneOf", "anyOf"] as const) {
-    for (const [index, schema] of strictSchemaObjectArray(
-      location.node[keyword],
-    ).entries()) {
-      for (const value of collectKnownStringLiterals(
-        { node: schema, path: [...location.path, keyword, String(index)] },
-        context,
-        state,
-      )) {
-        values.add(value);
-      }
-    }
+  return finiteBoundedStrings(allowed, context);
+}
+
+function assertBoundedStringSetSize(
+  values: ReadonlySet<string>,
+  context: SchemaValidationContext,
+): void {
+  if (values.size > context.limits.maxSchemaSignatures) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
-  return values;
 }
 
 function schemaHasObjectContract(
@@ -1384,7 +1570,12 @@ function objectSignatures(
     properties: new Set(Object.keys(strictSchemaRecord(location.node.properties))),
     required: new Set(strictStringArray(location.node.required)),
   };
-  let signatures: readonly ObjectSignature[] = [direct];
+  let signatures: readonly ObjectSignature[] = schemaTypeAllows(
+    location.node,
+    "object",
+  )
+    ? [direct]
+    : [];
 
   const referenced = referencedLocation(location, context, state);
   if (referenced !== null) {
@@ -1410,9 +1601,16 @@ function objectSignatures(
   }
 
   for (const keyword of ["oneOf", "anyOf"] as const) {
+    if (location.node[keyword] === undefined) {
+      continue;
+    }
     const alternatives = strictSchemaObjectArray(location.node[keyword]);
     if (alternatives.length === 0) {
+      signatures = [];
       continue;
+    }
+    if (alternatives.length > context.limits.maxSchemaSignatures) {
+      throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
     }
     const alternativeSignatures = alternatives.flatMap((schema, index) =>
       objectSignatures(
@@ -1435,10 +1633,10 @@ function mergeSignatureLists(
   right: readonly ObjectSignature[],
   context: SchemaValidationContext,
 ): readonly ObjectSignature[] {
-  if (
-    right.length === 0 ||
-    left.length * right.length > context.limits.maxSchemaSignatures
-  ) {
+  if (left.length === 0 || right.length === 0) {
+    return [];
+  }
+  if (left.length * right.length > context.limits.maxSchemaSignatures) {
     throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
   return left.flatMap((leftSignature) =>
@@ -1450,6 +1648,31 @@ function mergeSignatureLists(
       required: new Set([...leftSignature.required, ...rightSignature.required]),
     })),
   );
+}
+
+function schemaTypeAllows(node: SchemaObject, expected: string): boolean {
+  if (node.type === undefined) {
+    return true;
+  }
+  const types = typeof node.type === "string" ? [node.type] : node.type;
+  const knownTypes = new Set([
+    "array",
+    "boolean",
+    "integer",
+    "null",
+    "number",
+    "object",
+    "string",
+  ]);
+  if (
+    !Array.isArray(types) ||
+    types.length === 0 ||
+    !types.every((value) => typeof value === "string" && knownTypes.has(value)) ||
+    new Set(types).size !== types.length
+  ) {
+    throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
+  }
+  return types.includes(expected);
 }
 
 function objectPropertyLocations(
@@ -1664,12 +1887,6 @@ function strictSchemaObjectArray(value: unknown): readonly SchemaObject[] {
     throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
   return value;
-}
-
-function stringArray(value: unknown): readonly string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function strictStringArray(value: unknown): readonly string[] {

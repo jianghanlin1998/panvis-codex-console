@@ -357,6 +357,54 @@ describe("association-correct semantic validation", () => {
     expectBundleFailure(bundle, "PROTOCOL_METHOD_MISSING");
   });
 
+  it("rejects a string method enum contradicted by a numeric type", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecord(methodVariant(bundle, "ClientRequest", "initialize").properties).method = {
+      enum: ["initialize"],
+      type: "number",
+    };
+    expectBundleFailure(bundle, "PROTOCOL_METHOD_MISSING");
+  });
+
+  it("rejects a composed method literal contradicted through allOf", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions"]).ThreadStartMethod = {
+      const: "thread/start",
+      type: "string",
+    };
+    schemaRecord(methodVariant(bundle, "ClientRequest", "thread/start").properties).method = {
+      allOf: [
+        { $ref: "#/definitions/ThreadStartMethod" },
+        { type: "object" },
+      ],
+    };
+    expectBundleFailure(bundle, "PROTOCOL_METHOD_MISSING");
+  });
+
+  it("rejects method type contradictions split across object allOf branches", () => {
+    const bundle = buildCompatibilityBundle();
+    const variant = methodVariant(bundle, "ClientRequest", "thread/resume");
+    const original = structuredClone(variant);
+    for (const key of Object.keys(variant)) {
+      delete variant[key];
+    }
+    variant.allOf = [
+      original,
+      { properties: { method: { type: "number" } }, type: "object" },
+    ];
+    expectBundleFailure(bundle, "PROTOCOL_METHOD_MISSING");
+  });
+
+  it("fails closed for unsupported method string constraints", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecord(methodVariant(bundle, "ClientRequest", "skills/list").properties).method = {
+      enum: ["skills/list"],
+      pattern: "^unrelated$",
+      type: "string",
+    };
+    expectBundleFailure(bundle, "PROTOCOL_METHOD_MISSING");
+  });
+
   it.each(
     REQUIRED_FIELD_CASES.flatMap(({ fields, path }) =>
       fields.map((field) => ({ field, path })),
@@ -387,6 +435,25 @@ describe("association-correct semantic validation", () => {
     expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
   });
 
+  it("rejects an authoritative Thread shape whose type excludes objects", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2", "Thread"]).type = "string";
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a params object contradicted through a reference and allOf", () => {
+    const bundle = buildCompatibilityBundle();
+    const v2 = schemaRecordAt(bundle, ["definitions", "v2"]);
+    v2.ThreadStartParamsShape = structuredClone(v2.ThreadStartParams);
+    v2.ThreadStartParams = {
+      allOf: [
+        { $ref: "#/definitions/v2/ThreadStartParamsShape" },
+        { type: "array" },
+      ],
+    };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
   it("requires cacheWriteInputTokens to remain present in TokenUsageBreakdown", () => {
     const bundle = buildCompatibilityBundle();
     delete schemaRecordAt(bundle, [
@@ -412,6 +479,96 @@ describe("association-correct semantic validation", () => {
     const variants = schemaArrayAt(bundle, ["definitions", definition, "oneOf"]);
     const variant = variants.find((candidate) => stringArray(candidate.enum).includes(decision));
     schemaRecord(variant).enum = ["unrelated"];
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects disjoint allOf approval decision enums", () => {
+    const bundle = buildCompatibilityBundle();
+    const decision = schemaRecordAt(bundle, [
+      "definitions",
+      "CommandExecutionApprovalDecision",
+    ]);
+    delete decision.oneOf;
+    decision.allOf = [
+      {
+        enum: ["accept", "acceptForSession", "cancel", "decline"],
+        type: "string",
+      },
+      { enum: ["unrelated"], type: "string" },
+    ];
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a nested ref/allOf approval intersection with no strings", () => {
+    const bundle = buildCompatibilityBundle();
+    const definitions = schemaRecordAt(bundle, ["definitions"]);
+    definitions.ApprovalBase = {
+      enum: ["accept", "acceptForSession", "cancel", "decline"],
+      type: "string",
+    };
+    definitions.ApprovalIntersection = {
+      allOf: [
+        { $ref: "#/definitions/ApprovalBase" },
+        { enum: ["unrelated"], type: "string" },
+      ],
+    };
+    definitions.FileChangeApprovalDecision = {
+      allOf: [{ $ref: "#/definitions/ApprovalIntersection" }],
+    };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("accepts overlapping allOf approval constraints", () => {
+    const bundle = buildCompatibilityBundle();
+    const definitions = schemaRecordAt(bundle, ["definitions"]);
+    definitions.RequiredApprovalDecisions = {
+      enum: ["accept", "acceptForSession", "cancel", "decline"],
+      type: "string",
+    };
+    definitions.CommandExecutionApprovalDecision = {
+      allOf: [
+        {
+          enum: [
+            "accept",
+            "acceptForSession",
+            "cancel",
+            "decline",
+            "futureDecision",
+          ],
+          type: "string",
+        },
+        { $ref: "#/definitions/RequiredApprovalDecisions" },
+      ],
+    };
+    expect(validateBundle(bundle)).toBeDefined();
+  });
+
+  it("accepts anyOf approval alternatives for the supported literals", () => {
+    const bundle = buildCompatibilityBundle();
+    const decision = schemaRecordAt(bundle, [
+      "definitions",
+      "FileChangeApprovalDecision",
+    ]);
+    delete decision.oneOf;
+    decision.anyOf = ["accept", "acceptForSession", "cancel", "decline"].map(
+      (value) => ({ const: value, type: "string" }),
+    );
+    expect(validateBundle(bundle)).toBeDefined();
+  });
+
+  it("rejects overlapping oneOf approval alternatives that exclude a required literal", () => {
+    const bundle = buildCompatibilityBundle();
+    const decision = schemaRecordAt(bundle, [
+      "definitions",
+      "CommandExecutionApprovalDecision",
+    ]);
+    decision.oneOf = [
+      {
+        enum: ["accept", "acceptForSession", "cancel", "decline"],
+        type: "string",
+      },
+      { const: "accept", type: "string" },
+    ];
     expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
   });
 

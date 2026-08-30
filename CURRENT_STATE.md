@@ -122,7 +122,9 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-CLITE-HARD-001 association/cross-document false-positive validation: CLOSED
 - CTC-CLITE-HARD-002 authoritative-root provenance mismatch: CLOSED
 - CTC-CLITE-HARD-003 unbounded generated-tree/schema traversal: CLOSED
-- C-lite Fresh Independent QA: PENDING
+- C-lite Fresh Independent QA: FAIL
+- CTC-CLITE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
+- CTC-CLITE-FQA-002: REPAIRED — pending Focused Fresh Re-QA
 - C-lite ACCEPTED: NO
 - Codex App Server 0.148 Compatibility Revalidation: HARDENED
 - Codex App Server 0.148 Compatibility Revalidation / Bounded Hardening: PASS
@@ -133,9 +135,9 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next safe task:** C-lite Fresh Independent QA
+**Next safe task:** C-lite Focused Fresh Re-QA
 
-- Do not perform Fresh Independent QA in the hardening chat.
+- Do not perform Focused Fresh Re-QA in the repair chat.
 - Keep the owned candidate inactive and live execution blocked.
 
 Hanlin manual QA: NOT REQUIRED
