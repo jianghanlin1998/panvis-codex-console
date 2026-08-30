@@ -131,5 +131,8 @@ child environment, no arbitrary secret propagation, no Console-added dynamic
 tools or MCP configuration, and no unmeasured prompt appended after Execution
 Input Preflight.
 
-Comprehensive Hardening passes under this approved V1 boundary. Fresh
-Independent QA remains pending, so Live Execution V0 is not accepted.
+Comprehensive Hardening passed under this approved V1 boundary. Initial Fresh
+Independent QA found two lifecycle/EOF blockers; both were repaired at
+`1cadebda166881cd9c02c3ef89df28f2ffcc7468`. Focused Fresh Re-QA passed with
+no blocking findings. Live Execution V0 is ACCEPTED under the approved local
+single-user V1 boundary.

@@ -126,7 +126,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-CLITE-FQA-002: CLOSED
 - C-lite ACCEPTED: YES
 - Tested Codex: `codex-cli 0.148.0-alpha.9`
-- Single-Subtask Live Execution V0: HARDENED
+- Single-Subtask Live Execution V0: ACCEPTED
 - Deterministic baseline: PASS
 - Historical real ChatGPT smoke: PASS
 - Historical real model turn count: 1 — prior bounded smoke only
@@ -147,14 +147,17 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-LIVE-HARD-003: CLOSED / regression PASS
 - CTC-LIVE-HARD-004: CLOSED / regression PASS
 - CTC-LIVE-HARD-005: CLOSED / regression PASS — cleanup-time protocol failures cannot produce success
-- Fresh Independent QA on `8ae2da0e3ed3ecd570ff8cfa8505cb183b3c2a04`: FAIL
-- CTC-LIVE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
-- CTC-LIVE-FQA-002: REPAIRED — pending Focused Fresh Re-QA
-- Live Execution V0 ACCEPTED: NO
+- Fresh Independent QA on `8ae2da0e3ed3ecd570ff8cfa8505cb183b3c2a04`: FAIL — historical result; superseded by repaired Focused Fresh Re-QA PASS
+- CTC-LIVE-FQA-001: CLOSED — repaired and Focused Fresh Re-QA PASS
+- CTC-LIVE-FQA-002: CLOSED — repaired and Focused Fresh Re-QA PASS
+- Focused Fresh Re-QA on `1cadebda166881cd9c02c3ef89df28f2ffcc7468`: PASS
+- Live Execution V0 ACCEPTED: YES
+- Accepted implementation/evidence SHA: `1cadebda166881cd9c02c3ef89df28f2ffcc7468`
+- Hardening, repair, QA, and Re-QA used no additional real model turns beyond the documented historical bounded smoke.
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next safe task:** Focused Fresh Re-QA for CTC-LIVE-FQA-001 and CTC-LIVE-FQA-002.
+**Next safe task:** Durable execution/thread/run persistence and lifecycle transitions V0.
 
 Hanlin manual QA: NOT REQUIRED
 
