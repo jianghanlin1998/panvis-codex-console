@@ -561,6 +561,20 @@ const parseDependencyInput = (input: SubtaskDependency): SubtaskDependency => {
 const malformedStoredData = (): TaskStorageError =>
   new TaskStorageError("MALFORMED_STORED_DATA", "Stored task data is malformed.");
 
+const EXECUTION_RUN_UNSAFE_USAGE_INTEGER_PREDICATE = `
+  (typeof(input_tokens) = 'integer'
+    and (input_tokens < -9007199254740991 or input_tokens > 9007199254740991))
+  or (typeof(cached_input_tokens) = 'integer'
+    and (cached_input_tokens < -9007199254740991 or cached_input_tokens > 9007199254740991))
+  or (typeof(output_tokens) = 'integer'
+    and (output_tokens < -9007199254740991 or output_tokens > 9007199254740991))
+  or (typeof(reasoning_tokens) = 'integer'
+    and (reasoning_tokens < -9007199254740991 or reasoning_tokens > 9007199254740991))
+  or (typeof(total_tokens) = 'integer'
+    and (total_tokens < -9007199254740991 or total_tokens > 9007199254740991))
+  or (typeof(tool_call_count) = 'integer'
+    and (tool_call_count < -9007199254740991 or tool_call_count > 9007199254740991))`;
+
 const projectFromRow = (row: ProjectRow): Project => {
   const repository =
     row.repositoryKind === "PATH"
@@ -1683,15 +1697,19 @@ export class TaskStorage {
 
   listExecutionRunsForChatThread(input: ChatThreadId): readonly ExecutionRun[] {
     const chatThreadId = parseChatThreadId(input);
-    return this.#operation(() =>
-      this.#database
+    return this.#operation(() => {
+      this.#assertExecutionRunUsageIntegersAreDecodable(
+        "chat_thread_id",
+        chatThreadId,
+      );
+      return this.#database
         .select()
         .from(executionRunsTable)
         .where(eq(executionRunsTable.chatThreadId, chatThreadId))
         .orderBy(asc(executionRunsTable.createdAt), asc(executionRunsTable.id))
         .all()
-        .map((row) => this.#executionRunFromRow(row)),
-    );
+        .map((row) => this.#executionRunFromRow(row));
+    });
   }
 
   startExecutionRun(input: StartExecutionRunInput): ExecutionRun {
@@ -2828,12 +2846,31 @@ export class TaskStorage {
   }
 
   #getExecutionRun(executionRunId: ExecutionRunId): ExecutionRun | null {
+    this.#assertExecutionRunUsageIntegersAreDecodable("id", executionRunId);
     const row = this.#database
       .select()
       .from(executionRunsTable)
       .where(eq(executionRunsTable.id, executionRunId))
       .get();
     return row === undefined ? null : this.#executionRunFromRow(row);
+  }
+
+  #assertExecutionRunUsageIntegersAreDecodable(
+    scopeColumn: "id" | "chat_thread_id",
+    scopeValue: string,
+  ): void {
+    const unsafeRow = this.#sqlite
+      .prepare(
+        `select 1 as unsafe_usage_integer
+         from execution_runs
+         where "${scopeColumn}" = ?
+           and (${EXECUTION_RUN_UNSAFE_USAGE_INTEGER_PREDICATE})
+         limit 1`,
+      )
+      .get(scopeValue);
+    if (unsafeRow !== undefined) {
+      throw malformedStoredData();
+    }
   }
 
   #getSubtaskImplementationCheckpoint(

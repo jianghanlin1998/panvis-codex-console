@@ -113,6 +113,112 @@ const rawRun = (sqlite: DatabaseSync, id: string): unknown =>
 const rawThread = (sqlite: DatabaseSync, id: string): unknown =>
   sqlite.prepare("SELECT * FROM chat_threads WHERE id = ?").get(id);
 
+const expectSanitizedMalformedUsageRead = (
+  read: () => unknown,
+  databasePath: string,
+): void => {
+  const error = captureTaskStorageError(read);
+  expect(error.code).toBe("MALFORMED_STORED_DATA");
+  expect(error.message).toBe("Stored task data is malformed.");
+  expect(error.message).not.toContain(databasePath);
+  expect(error.message).not.toContain("9007199254740992");
+  expect(error.message).not.toMatch(/sqlite|out.of.range|select|execution_runs/i);
+};
+
+describe("CTC-DURABLE-FQA-001 unsafe stored usage integer repair", () => {
+  it("fails a get closed for an exact 2^53 tool_call_count after reopen", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const first = openTaskDatabase({ databasePath, clock: at(INITIAL_TIME) });
+      createHierarchy(first);
+      createBoundThread(first, "thr_fqa_get");
+      createRun(first, "run_fqa_get", "thr_fqa_get");
+      startRun(first, "run_fqa_get", "remote-run-fqa-get");
+      first.finishExecutionRun({
+        executionRunId: runId("run_fqa_get"),
+        status: "SUCCEEDED",
+        normalizedUsage: { toolCallCount: 1 },
+      });
+      first.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA ignore_check_constraints = ON");
+      sqlite.exec(
+        "UPDATE execution_runs SET tool_call_count = 9007199254740992 WHERE id = 'run_fqa_get'",
+      );
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: at(LATER_TIME) });
+      try {
+        expectSanitizedMalformedUsageRead(
+          () => reopened.getExecutionRunById(runId("run_fqa_get")),
+          databasePath,
+        );
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("fails a list closed before returning siblings for an exact 2^53 input_tokens value", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const first = openTaskDatabase({ databasePath, clock: at(INITIAL_TIME) });
+      createHierarchy(first);
+      createBoundThread(first, "thr_fqa_list");
+      for (const id of ["run_fqa_list_corrupt", "run_fqa_list_valid"]) {
+        createRun(first, id, "thr_fqa_list");
+        startRun(first, id, `remote-${id}`);
+        first.finishExecutionRun({
+          executionRunId: runId(id),
+          status: "SUCCEEDED",
+          normalizedUsage: {},
+        });
+      }
+      first.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA ignore_check_constraints = ON");
+      sqlite.exec(
+        "UPDATE execution_runs SET input_tokens = 9007199254740992 WHERE id = 'run_fqa_list_corrupt'",
+      );
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: at(LATER_TIME) });
+      try {
+        expectSanitizedMalformedUsageRead(
+          () => reopened.listExecutionRunsForChatThread(threadId("thr_fqa_list")),
+          databasePath,
+        );
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+
+  it("preserves unrelated read-driver failures as storage operation failures", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const first = openTaskDatabase({ databasePath, clock: at(INITIAL_TIME) });
+      first.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("DROP TABLE execution_runs");
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: at(LATER_TIME) });
+      try {
+        const error = captureTaskStorageError(() =>
+          reopened.getExecutionRunById(runId("run_missing_table")),
+        );
+        expect(error.code).toBe("STORAGE_OPERATION_FAILED");
+        expect(error.message).toBe("The task storage operation failed.");
+        expect(error.message).not.toContain(databasePath);
+        expect(error.message).not.toMatch(/sqlite|no such table|execution_runs/i);
+      } finally {
+        reopened.close();
+      }
+    });
+  });
+});
+
 describe("Durable Execution V0 comprehensive hardening", () => {
   it("accepts equal durable timestamps and rejects clock regression atomically", () => {
     withTemporaryDatabasePath((databasePath) => {

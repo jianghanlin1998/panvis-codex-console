@@ -165,12 +165,14 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-DURABLE-HARD-001: CLOSED — regressing clocks fail atomically without synthetic timestamps
 - CTC-DURABLE-HARD-002: CLOSED — provider-run ownership is application- and DB-unique
 - All CTC-DURABLE-HARD-* blocking findings: CLOSED
-- Durable persistence Fresh Independent QA: PENDING
+- Durable persistence Fresh Independent QA on `7bdd91a1cb528e4c4b3280d4982030cc5fea7bca`: FAIL
+- CTC-DURABLE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
+- Durable persistence Fresh Independent QA final acceptance: pending Focused Fresh Re-QA
 - Durable persistence ACCEPTED: NO
 - Live Execution V0 remains ACCEPTED
 
 ## Next safe task
-**Next safe task:** Durable Execution / Thread / Run Persistence V0 Fresh Independent QA in a new chat.
+**Next safe task:** Focused Fresh Re-QA for CTC-DURABLE-FQA-001 in a new chat.
 
 Hanlin manual QA: NOT REQUIRED
 
