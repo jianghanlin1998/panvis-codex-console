@@ -31,7 +31,12 @@ The resolver runs the canonical path directly with no shell. The check is
 bounded to five seconds and 4,096 output bytes, requires exit status zero, and
 accepts stdout only as exact `codex-cli <version>` with no ending, one LF, or
 one CRLF. Additional stdout is rejected. Stderr is never used as authority or
-included in public errors.
+included in public errors. Each version check uses a new private disposable
+directory under the canonical system temporary root. The child receives only
+isolated `HOME`, `CODEX_HOME`, `TMPDIR`, and `PATH` directories beneath that
+root; it does not receive normal user Codex/auth/home state or the ambient
+process environment. The disposable state is removed after both success and
+failure, and inability to establish isolation fails the check closed.
 
 `CTC_CODEX_BINARY` is a development/test override only. It must be an absolute,
 canonical, regular executable and must report the exact version owned by the

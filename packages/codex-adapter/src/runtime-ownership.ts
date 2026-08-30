@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   accessSync,
+  chmodSync,
   closeSync,
   constants,
   existsSync,
@@ -8,10 +9,13 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
+  mkdirSync,
+  mkdtempSync,
   openSync,
   readSync,
   realpathSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -25,6 +29,7 @@ const RELEASE_VERSION_PATTERN =
   /^[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha(?:\.[0-9]+){0,2}|beta(?:\.[0-9]+)?))?$/;
 const VERSION_CHECK_TIMEOUT_MILLISECONDS = 5_000;
 const VERSION_OUTPUT_MAX_BYTES = 4_096;
+const VERSION_PROBE_DIRECTORY_PREFIX = "ctc-codex-version-probe-";
 const SELECTOR_MAX_BYTES = 4_096;
 const PRIVATE_DIRECTORY_FORBIDDEN_MODE = 0o077;
 const SELECTOR_MUTATION_LOCK_NAME = ".active.lock";
@@ -511,9 +516,14 @@ function verifyExecutable(
     throw new CodexRuntimeOwnershipError("RUNTIME_NOT_EXECUTABLE");
   }
 
+  let probeEnvironment: VersionProbeEnvironment | undefined;
+  let resolved: ResolvedCodexRuntime | undefined;
+  let primaryFailure: unknown;
   try {
+    probeEnvironment = createVersionProbeEnvironment();
     const result = spawnSync(canonicalExecutablePath, ["--version"], {
       encoding: "utf8",
+      env: probeEnvironment.childEnvironment,
       maxBuffer: VERSION_OUTPUT_MAX_BYTES,
       shell: false,
       stdio: "pipe",
@@ -538,9 +548,7 @@ function verifyExecutable(
       throw new CodexRuntimeOwnershipError("RUNTIME_VERSION_MISMATCH");
     }
 
-    closeSync(descriptor);
-    descriptor = undefined;
-    return {
+    resolved = {
       canonicalExecutablePath,
       exactVersionOutput,
       executable: true,
@@ -550,15 +558,100 @@ function verifyExecutable(
       target,
     };
   } catch (error: unknown) {
-    if (descriptor !== undefined) {
-      try {
-        closeSync(descriptor);
-      } catch {
-        // Preserve the sanitized version or identity failure.
+    primaryFailure = error;
+  }
+
+  try {
+    closeSync(descriptor);
+  } catch {
+    if (primaryFailure === undefined) {
+      primaryFailure = new CodexRuntimeOwnershipError(
+        "RUNTIME_VERSION_CHECK_FAILED",
+      );
+    }
+  }
+  descriptor = undefined;
+
+  if (probeEnvironment !== undefined) {
+    try {
+      rmSync(probeEnvironment.root, {
+        force: true,
+        maxRetries: 2,
+        recursive: true,
+        retryDelay: 10,
+      });
+    } catch {
+      if (primaryFailure === undefined) {
+        primaryFailure = new CodexRuntimeOwnershipError(
+          "RUNTIME_VERSION_CHECK_FAILED",
+        );
       }
     }
-    if (error instanceof CodexRuntimeOwnershipError) {
-      throw error;
+  }
+
+  if (primaryFailure instanceof CodexRuntimeOwnershipError) {
+    throw primaryFailure;
+  }
+  if (primaryFailure !== undefined || resolved === undefined) {
+    throw new CodexRuntimeOwnershipError("RUNTIME_VERSION_CHECK_FAILED");
+  }
+  return resolved;
+}
+
+interface VersionProbeEnvironment {
+  readonly childEnvironment: NodeJS.ProcessEnv;
+  readonly root: string;
+}
+
+function createVersionProbeEnvironment(): VersionProbeEnvironment {
+  let disposableRoot: string | undefined;
+  try {
+    const canonicalTemporaryRoot = realpathSync(tmpdir());
+    disposableRoot = mkdtempSync(
+      join(canonicalTemporaryRoot, VERSION_PROBE_DIRECTORY_PREFIX),
+    );
+    chmodSync(disposableRoot, 0o700);
+    const canonicalDisposableRoot = realpathSync(disposableRoot);
+    const rootStat = lstatSync(disposableRoot);
+    if (
+      canonicalDisposableRoot !== disposableRoot ||
+      !rootStat.isDirectory() ||
+      rootStat.isSymbolicLink() ||
+      (rootStat.mode & PRIVATE_DIRECTORY_FORBIDDEN_MODE) !== 0
+    ) {
+      throw new Error("invalid disposable probe root");
+    }
+
+    const homeDirectory = join(disposableRoot, "home");
+    const codexHomeDirectory = join(disposableRoot, "codex-home");
+    const temporaryDirectory = join(disposableRoot, "tmp");
+    const pathDirectory = join(disposableRoot, "bin");
+    for (const directory of [
+      homeDirectory,
+      codexHomeDirectory,
+      temporaryDirectory,
+      pathDirectory,
+    ]) {
+      mkdirSync(directory, { mode: 0o700 });
+      chmodSync(directory, 0o700);
+    }
+
+    return {
+      childEnvironment: {
+        CODEX_HOME: codexHomeDirectory,
+        HOME: homeDirectory,
+        PATH: pathDirectory,
+        TMPDIR: temporaryDirectory,
+      },
+      root: disposableRoot,
+    };
+  } catch {
+    if (disposableRoot !== undefined) {
+      try {
+        rmSync(disposableRoot, { force: true, recursive: true });
+      } catch {
+        // Preserve the sanitized isolation-setup failure.
+      }
     }
     throw new CodexRuntimeOwnershipError("RUNTIME_VERSION_CHECK_FAILED");
   }

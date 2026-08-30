@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -14,7 +15,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -46,6 +47,8 @@ const NEXT_SELECTION = {
 let runtimeRoot: string;
 let options: CodexRuntimeOwnershipOptions;
 let originalBinaryOverride: string | undefined;
+let originalCodexHome: string | undefined;
+let originalHome: string | undefined;
 let originalNodeEnvironment: string | undefined;
 let originalPath: string | undefined;
 
@@ -53,6 +56,8 @@ beforeEach(() => {
   runtimeRoot = mkdtempSync(join(tmpdir(), "ctc-owned-codex-"));
   options = { trustedRuntimeRoot: runtimeRoot };
   originalBinaryOverride = process.env.CTC_CODEX_BINARY;
+  originalCodexHome = process.env.CODEX_HOME;
+  originalHome = process.env.HOME;
   originalNodeEnvironment = process.env.NODE_ENV;
   originalPath = process.env.PATH;
   process.env.NODE_ENV = "test";
@@ -61,6 +66,8 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreEnvironmentVariable("CTC_CODEX_BINARY", originalBinaryOverride);
+  restoreEnvironmentVariable("CODEX_HOME", originalCodexHome);
+  restoreEnvironmentVariable("HOME", originalHome);
   restoreEnvironmentVariable("NODE_ENV", originalNodeEnvironment);
   restoreEnvironmentVariable("PATH", originalPath);
   try {
@@ -139,6 +146,30 @@ describe("owned Codex candidate resolution", () => {
     });
   });
 
+  it("confines HOME, CODEX_HOME, TMPDIR, and PATH side effects to one cleaned probe root", () => {
+    const ambient = createAmbientProbeFixture();
+    const captureRoot = mkdtempSync(join(tmpdir(), "ctc-probe-capture-"));
+    const capturePath = join(captureRoot, "environment.txt");
+    try {
+      const executablePath = installFakeCandidate(CURRENT_SELECTION);
+      writeExecutableBody(
+        executablePath,
+        probeEnvironmentCaptureBody(
+          capturePath,
+          `printf '%s\\n' '${TESTED_CODEX_VERSION}'`,
+        ),
+      );
+
+      expect(resolveOwnedCodexCandidate(CURRENT_SELECTION, options)).toMatchObject({
+        exactVersionOutput: TESTED_CODEX_VERSION,
+        source: "OWNED_RELEASE",
+      });
+      expectCapturedProbeEnvironmentWasIsolated(capturePath, ambient);
+    } finally {
+      rmSync(captureRoot, { force: true, recursive: true });
+    }
+  });
+
   it("fails closed for a missing or non-executable binary", () => {
     expect(() => resolveOwnedCodexCandidate(CURRENT_SELECTION, options)).toThrowError(
       expect.objectContaining({ code: "RUNTIME_CANDIDATE_UNAVAILABLE" }),
@@ -215,7 +246,7 @@ describe("owned Codex candidate resolution", () => {
     writeExecutableBody(
       executablePath,
       [
-        `mv '${replacementPath}' '${executablePath}'`,
+        `/bin/mv '${replacementPath}' '${executablePath}'`,
         `printf '%s\\n' '${TESTED_CODEX_VERSION}'`,
       ].join("\n"),
     );
@@ -284,17 +315,52 @@ describe("owned Codex candidate resolution", () => {
     }
   });
 
-  it("sanitizes nonzero stderr, signal, and oversized-output failures", () => {
-    const executablePath = installFakeCandidate(CURRENT_SELECTION);
-    writeExecutableBody(executablePath, "printf 'private diagnostic' >&2\nexit 7");
-    expectSanitizedVersionCheckFailure(executablePath);
-
-    writeExecutableBody(executablePath, "kill -TERM $$");
-    expectSanitizedVersionCheckFailure(executablePath);
-
-    writeExecutableBody(executablePath, "yes x | head -c 8192");
-    expectSanitizedVersionCheckFailure(executablePath);
-  });
+  it.each([
+    {
+      body: "printf 'private diagnostic' >&2\nexit 7",
+      expectedCode: "RUNTIME_VERSION_CHECK_FAILED",
+      scenario: "nonzero exit",
+    },
+    {
+      body: "kill -TERM $$",
+      expectedCode: "RUNTIME_VERSION_CHECK_FAILED",
+      scenario: "signal",
+    },
+    {
+      body: "/bin/sleep 10",
+      expectedCode: "RUNTIME_VERSION_CHECK_FAILED",
+      scenario: "timeout",
+    },
+    {
+      body: "/usr/bin/yes x | /usr/bin/head -c 8192",
+      expectedCode: "RUNTIME_VERSION_CHECK_FAILED",
+      scenario: "oversized output",
+    },
+    {
+      body: "printf '%s\\n' 'codex-cli 0.148.0-alpha.8'",
+      expectedCode: "RUNTIME_VERSION_MISMATCH",
+      scenario: "wrong version",
+    },
+  ])(
+    "sanitizes $scenario and cleans its isolated probe state",
+    ({ body, expectedCode }) => {
+      const ambient = createAmbientProbeFixture();
+      const captureRoot = mkdtempSync(join(tmpdir(), "ctc-probe-capture-"));
+      const capturePath = join(captureRoot, "environment.txt");
+      try {
+        const executablePath = installFakeCandidate(CURRENT_SELECTION);
+        writeExecutableBody(
+          executablePath,
+          probeEnvironmentCaptureBody(capturePath, body),
+        );
+        expectSanitizedVersionCheckFailure(executablePath, expectedCode);
+        expectCapturedProbeEnvironmentWasIsolated(capturePath, ambient);
+      } finally {
+        rmSync(captureRoot, { force: true, recursive: true });
+      }
+    },
+    10_000,
+  );
 
   it("executes a confined candidate whose path contains shell metacharacters literally", () => {
     const metacharacterRoot = mkdtempSync(join(tmpdir(), "ctc runtime ;$() "));
@@ -649,6 +715,31 @@ describe("CTC_CODEX_BINARY development override", () => {
     },
   );
 
+  it("applies the same disposable environment to the development override", () => {
+    const ambient = createAmbientProbeFixture();
+    const captureRoot = mkdtempSync(join(tmpdir(), "ctc-probe-capture-"));
+    const capturePath = join(captureRoot, "environment.txt");
+    try {
+      const overridePath = join(runtimeRoot, "development-codex");
+      writeExecutableBody(
+        overridePath,
+        probeEnvironmentCaptureBody(
+          capturePath,
+          `printf '%s\\n' '${TESTED_CODEX_VERSION}'`,
+        ),
+      );
+      process.env.CTC_CODEX_BINARY = realpathSync(overridePath);
+
+      expect(resolveDevelopmentCodexOverride()).toMatchObject({
+        exactVersionOutput: TESTED_CODEX_VERSION,
+        source: "DEVELOPMENT_OVERRIDE",
+      });
+      expectCapturedProbeEnvironmentWasIsolated(capturePath, ambient);
+    } finally {
+      rmSync(captureRoot, { force: true, recursive: true });
+    }
+  });
+
   it("rejects a symlink even when its target is the exact tested executable", () => {
     const overridePath = join(runtimeRoot, "development-codex");
     writeFakeExecutable(overridePath, TESTED_CODEX_VERSION);
@@ -774,15 +865,84 @@ function writeExecutableBody(path: string, body: string): void {
   );
 }
 
-function expectSanitizedVersionCheckFailure(executablePath: string): void {
+function expectSanitizedVersionCheckFailure(
+  executablePath: string,
+  expectedCode = "RUNTIME_VERSION_CHECK_FAILED",
+): void {
   try {
     resolveOwnedCodexCandidate(CURRENT_SELECTION, options);
     throw new Error("expected version check failure");
   } catch (error: unknown) {
-    expect(error).toMatchObject({ code: "RUNTIME_VERSION_CHECK_FAILED" });
+    expect(error).toMatchObject({ code: expectedCode });
     expect((error as Error).message).not.toContain("private diagnostic");
     expect((error as Error).message).not.toContain(executablePath);
   }
+}
+
+interface AmbientProbeFixture {
+  readonly codexHome: string;
+  readonly home: string;
+  readonly pathDirectory: string;
+}
+
+function createAmbientProbeFixture(): AmbientProbeFixture {
+  const fixture = {
+    codexHome: join(runtimeRoot, "ambient-codex-home"),
+    home: join(runtimeRoot, "ambient-home"),
+    pathDirectory: join(runtimeRoot, "ambient-bin"),
+  };
+  mkdirSync(fixture.codexHome);
+  mkdirSync(fixture.home);
+  mkdirSync(fixture.pathDirectory);
+  process.env.CODEX_HOME = fixture.codexHome;
+  process.env.HOME = fixture.home;
+  process.env.PATH = fixture.pathDirectory;
+  return fixture;
+}
+
+function probeEnvironmentCaptureBody(
+  capturePath: string,
+  terminalBody: string,
+): string {
+  return [
+    '/bin/mkdir -p "$HOME/.codex/tmp/arg0" "$CODEX_HOME/tmp/arg0" "$TMPDIR/arg0"',
+    `printf '%s\\n' isolated > "$HOME/.codex/tmp/arg0/sentinel"`,
+    `printf '%s\\n' isolated > "$CODEX_HOME/tmp/arg0/sentinel"`,
+    `printf '%s\\n' isolated > "$TMPDIR/arg0/sentinel"`,
+    `printf '%s\\n' "$HOME" "$CODEX_HOME" "$TMPDIR" "$PATH" > ${shellSingleQuote(capturePath)}`,
+    terminalBody,
+  ].join("\n");
+}
+
+function expectCapturedProbeEnvironmentWasIsolated(
+  capturePath: string,
+  ambient: AmbientProbeFixture,
+): void {
+  const [probeHome, probeCodexHome, probeTemporaryDirectory, probePath] =
+    readFileSync(capturePath, "utf8").trimEnd().split("\n");
+  expect(probeHome).toBeDefined();
+  const probeRoot = dirname(probeHome as string);
+  expect(probeHome).toBe(join(probeRoot, "home"));
+  expect(probeCodexHome).toBe(join(probeRoot, "codex-home"));
+  expect(probeTemporaryDirectory).toBe(join(probeRoot, "tmp"));
+  expect(probePath).toBe(join(probeRoot, "bin"));
+  expect(probeHome).not.toBe(ambient.home);
+  expect(probeCodexHome).not.toBe(ambient.codexHome);
+  expect(probePath).not.toContain(ambient.pathDirectory);
+  expect(existsSync(join(ambient.home, ".codex", "tmp", "arg0", "sentinel"))).toBe(
+    false,
+  );
+  expect(existsSync(join(ambient.codexHome, "tmp", "arg0", "sentinel"))).toBe(
+    false,
+  );
+  expect(existsSync(probeRoot)).toBe(false);
+  expect(existsSync(probeHome as string)).toBe(false);
+  expect(existsSync(probeCodexHome as string)).toBe(false);
+  expect(existsSync(probeTemporaryDirectory as string)).toBe(false);
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function writeSelectorFixture(value: unknown): void {
