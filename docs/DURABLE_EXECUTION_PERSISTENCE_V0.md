@@ -36,4 +36,6 @@ The original forward Drizzle migration adds restrictive `chat_threads` and `exec
 
 Fresh databases, migrated prior-boundary databases, and closed/reopened databases reconstruct the same strict domain state with deterministic timestamp-plus-ID ordering.
 
-This foundation does not automatically connect `executeSingleSubtaskLiveCodex` to storage, resume provider threads, persist live response content, or add orchestration, retry, cancellation, scheduling, worktrees, UI, or provider expansion. Comprehensive Hardening is complete; final acceptance remains pending Focused Fresh Re-QA.
+This foundation does not automatically connect `executeSingleSubtaskLiveCodex` to storage, resume provider threads, persist live response content, or add orchestration, retry, cancellation, scheduling, worktrees, UI, or provider expansion.
+
+Comprehensive Hardening passed. Initial Fresh Independent QA found one strict corrupt-readback blocker, which was repaired at `e2f486a8888d6d8aba8831b861adc5b0cf995047`. Focused Fresh Re-QA passed with no blocking findings. Durable Execution / Thread / Run Persistence V0 is ACCEPTED.

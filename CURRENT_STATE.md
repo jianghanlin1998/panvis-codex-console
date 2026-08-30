@@ -155,24 +155,24 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Accepted implementation/evidence SHA: `1cadebda166881cd9c02c3ef89df28f2ffcc7468`
 - Hardening, repair, QA, and Re-QA used no additional real model turns beyond the documented historical bounded smoke.
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
-- Durable Execution / Thread / Run Persistence V0: HARDENED
+- Durable Execution / Thread / Run Persistence V0: ACCEPTED
 - Durable persistence deterministic baseline: PASS
 - Durable persistence migration baseline: PASS
 - Durable persistence reopen baseline: PASS
 - Durable persistence Live Execution integration: NOT IMPLEMENTED
 - Durable persistence Comprehensive Hardening: PASS
-- Durable persistence migration/reopen/corruption/atomicity/concurrency matrices: PASS
 - CTC-DURABLE-HARD-001: CLOSED — regressing clocks fail atomically without synthetic timestamps
 - CTC-DURABLE-HARD-002: CLOSED — provider-run ownership is application- and DB-unique
-- All CTC-DURABLE-HARD-* blocking findings: CLOSED
-- Durable persistence Fresh Independent QA on `7bdd91a1cb528e4c4b3280d4982030cc5fea7bca`: FAIL
-- CTC-DURABLE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
-- Durable persistence Fresh Independent QA final acceptance: pending Focused Fresh Re-QA
-- Durable persistence ACCEPTED: NO
+- Durable persistence Fresh Independent QA on `7bdd91a1cb528e4c4b3280d4982030cc5fea7bca`: FAIL — historical result; superseded by repaired Focused Fresh Re-QA PASS
+- CTC-DURABLE-FQA-001: CLOSED — repaired and Focused Fresh Re-QA PASS
+- Durable persistence Focused Fresh Re-QA on `e2f486a8888d6d8aba8831b861adc5b0cf995047`: PASS
+- Durable persistence ACCEPTED: YES
+- Accepted implementation/evidence SHA: `e2f486a8888d6d8aba8831b861adc5b0cf995047`
 - Live Execution V0 remains ACCEPTED
+- Durable persistence acceptance required no Provider/model usage.
 
 ## Next safe task
-**Next safe task:** Focused Fresh Re-QA for CTC-DURABLE-FQA-001 in a new chat.
+**Next safe task:** Git/worktree ownership and deterministic write/execution-authority isolation V0.
 
 Hanlin manual QA: NOT REQUIRED
 
