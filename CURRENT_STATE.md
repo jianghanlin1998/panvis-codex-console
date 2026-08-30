@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-30
+Last reconciled: 2026-08-31
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -155,18 +155,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Accepted implementation/evidence SHA: `1cadebda166881cd9c02c3ef89df28f2ffcc7468`
 - Hardening, repair, QA, and Re-QA used no additional real model turns beyond the documented historical bounded smoke.
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
-- Durable Execution / Thread / Run Persistence V0: IMPLEMENTED
+- Durable Execution / Thread / Run Persistence V0: HARDENED
 - Durable persistence deterministic baseline: PASS
 - Durable persistence migration baseline: PASS
 - Durable persistence reopen baseline: PASS
 - Durable persistence Live Execution integration: NOT IMPLEMENTED
-- Durable persistence Comprehensive Hardening: PENDING
-- Durable persistence Fresh Independent QA: NOT READY / pending hardening
+- Durable persistence Comprehensive Hardening: PASS
+- Durable persistence migration/reopen/corruption/atomicity/concurrency matrices: PASS
+- CTC-DURABLE-HARD-001: CLOSED — regressing clocks fail atomically without synthetic timestamps
+- CTC-DURABLE-HARD-002: CLOSED — provider-run ownership is application- and DB-unique
+- All CTC-DURABLE-HARD-* blocking findings: CLOSED
+- Durable persistence Fresh Independent QA: PENDING
 - Durable persistence ACCEPTED: NO
 - Live Execution V0 remains ACCEPTED
 
 ## Next safe task
-**Next safe task:** Durable Execution / Thread / Run Persistence V0 Comprehensive Hardening.
+**Next safe task:** Durable Execution / Thread / Run Persistence V0 Fresh Independent QA in a new chat.
 
 Hanlin manual QA: NOT REQUIRED
 

@@ -106,7 +106,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(6);
+        expect(row.count).toBe(7);
       } finally {
         sqlite.close();
       }
@@ -123,7 +123,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(6);
+        expect(row.count).toBe(7);
       } finally {
         sqlite.close();
       }

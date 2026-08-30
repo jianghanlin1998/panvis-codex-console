@@ -186,6 +186,9 @@ export const executionRunsTable = sqliteTable(
       table.createdAt,
       table.id,
     ),
+    uniqueIndex("execution_runs_provider_run_unique")
+      .on(table.chatThreadId, table.providerRunId)
+      .where(sql`${table.providerRunId} is not null`),
     check(
       "execution_runs_id_check",
       sql`length(${table.id}) between 5 and 128 and ${table.id} glob 'run_*'`,

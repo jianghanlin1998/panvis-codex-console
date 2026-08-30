@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `execution_runs_provider_run_unique` ON `execution_runs` (`chat_thread_id`,`provider_run_id`) WHERE "execution_runs"."provider_run_id" is not null;

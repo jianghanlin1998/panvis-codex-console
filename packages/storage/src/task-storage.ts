@@ -1518,7 +1518,7 @@ export class TaskStorage {
             "The provider thread reference already belongs to another ChatThread.",
           );
         }
-        const timestamp = this.#monotonicTimestampAfter(thread.updatedAt);
+        const timestamp = this.#durableTimestampAtOrAfter(thread.updatedAt);
         const update = this.#database
           .update(chatThreadsTable)
           .set({
@@ -1587,7 +1587,7 @@ export class TaskStorage {
             "A ChatThread with a non-terminal ExecutionRun cannot be closed.",
           );
         }
-        const timestamp = this.#monotonicTimestampAfter(thread.updatedAt);
+        const timestamp = this.#durableTimestampAtOrAfter(thread.updatedAt);
         const update = this.#database
           .update(chatThreadsTable)
           .set({ status: "CLOSED", updatedAt: timestamp, closedAt: timestamp })
@@ -1740,7 +1740,23 @@ export class TaskStorage {
             "The provider model reference does not match the owning ChatThread.",
           );
         }
-        const timestamp = this.#monotonicTimestampAfter(run.updatedAt);
+        const providerRunOwner = this.#database
+          .select({ id: executionRunsTable.id })
+          .from(executionRunsTable)
+          .where(
+            and(
+              eq(executionRunsTable.chatThreadId, run.chatThreadId),
+              eq(executionRunsTable.providerRunId, providerRun.providerRunId),
+            ),
+          )
+          .get();
+        if (providerRunOwner !== undefined && providerRunOwner.id !== run.id) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The provider run reference already belongs to another ExecutionRun.",
+          );
+        }
+        const timestamp = this.#durableTimestampAtOrAfter(run.updatedAt);
         const update = this.#database
           .update(executionRunsTable)
           .set({
@@ -1796,7 +1812,7 @@ export class TaskStorage {
             "Only a created ExecutionRun can fail before start.",
           );
         }
-        const timestamp = this.#monotonicTimestampAfter(run.updatedAt);
+        const timestamp = this.#durableTimestampAtOrAfter(run.updatedAt);
         const update = this.#database
           .update(executionRunsTable)
           .set({ status: "FAILED", updatedAt: timestamp, endedAt: timestamp })
@@ -1868,7 +1884,7 @@ export class TaskStorage {
           );
         }
         const finalProviderModel = providerModel ?? run.providerModel;
-        const timestamp = this.#monotonicTimestampAfter(run.updatedAt);
+        const timestamp = this.#durableTimestampAtOrAfter(run.updatedAt);
         const update = this.#database
           .update(executionRunsTable)
           .set({
@@ -3307,6 +3323,17 @@ export class TaskStorage {
     return currentTime > previousTime
       ? currentTimestamp
       : new Date(previousTime + 1).toISOString();
+  }
+
+  #durableTimestampAtOrAfter(previousUpdatedAt: string): string {
+    const currentTimestamp = this.#timestamp();
+    if (new Date(currentTimestamp).getTime() < new Date(previousUpdatedAt).getTime()) {
+      throw new TaskStorageError(
+        "STORAGE_OPERATION_FAILED",
+        "The storage clock cannot precede durable execution state.",
+      );
+    }
+    return currentTimestamp;
   }
 
   #ensureOpen(): void {
