@@ -105,8 +105,9 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
 - Console-Owned Codex Runtime Ownership V0: ACCEPTED
 - Runtime ownership baseline: official standalone exact-release installer
-- Owned candidate: `0.148.0-alpha.9` INSTALLED, INACTIVE
-- Owned active runtime: NONE
+- Owned candidate: `0.148.0-alpha.9` INSTALLED
+- Owned active runtime: `0.148.0-alpha.9`
+- Runtime target: `aarch64-apple-darwin`
 - Ambient PATH/ChatGPT Codex: `codex-cli 0.148.0-alpha.15`; informational only, not Console execution authority
 - Runtime Ownership Comprehensive Hardening: PASS
 - Runtime Ownership Fresh Independent QA: FAIL — historical initial result; superseded by Focused Fresh Re-QA PASS
@@ -115,30 +116,24 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - External `--version` side-effect finding: CLOSED
 - Runtime Ownership Focused Fresh Re-QA: PASS
 - Runtime Ownership ACCEPTED: YES
-- C-lite Compatibility Check V0: HARDENED
-- C-lite baseline deterministic tests: PASS
-- C-lite owned-candidate `.9` schema-only compatibility check: PASS
+- C-lite Compatibility Check V0: ACCEPTED
 - C-lite Comprehensive Hardening: PASS
 - CTC-CLITE-HARD-001 association/cross-document false-positive validation: CLOSED
 - CTC-CLITE-HARD-002 authoritative-root provenance mismatch: CLOSED
 - CTC-CLITE-HARD-003 unbounded generated-tree/schema traversal: CLOSED
-- C-lite Fresh Independent QA: FAIL
-- CTC-CLITE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
-- CTC-CLITE-FQA-002: REPAIRED — pending Focused Fresh Re-QA
-- C-lite ACCEPTED: NO
-- Codex App Server 0.148 Compatibility Revalidation: HARDENED
-- Codex App Server 0.148 Compatibility Revalidation / Bounded Hardening: PASS
-- Codex App Server 0.148 historical compatibility evidence: PASS
-- Codex App Server 0.148 Compatibility ACCEPTED: NO
+- C-lite Focused Fresh Re-QA: PASS
+- CTC-CLITE-FQA-001: CLOSED
+- CTC-CLITE-FQA-002: CLOSED
+- C-lite ACCEPTED: YES
 - Tested Codex: `codex-cli 0.148.0-alpha.9`
-- Live execution: BLOCKED
+- Live execution: BLOCKED / NOT STARTED
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next safe task:** C-lite Focused Fresh Re-QA
+**Next safe task:** Single-Subtask Live Codex App Server Execution V0
 
-- Do not perform Focused Fresh Re-QA in the repair chat.
-- Keep the owned candidate inactive and live execution blocked.
+- Return to ChatGPT for separate approval and execution planning.
+- Keep live execution blocked until that task is explicitly approved.
 
 Hanlin manual QA: NOT REQUIRED
 
