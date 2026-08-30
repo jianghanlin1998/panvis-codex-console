@@ -1391,7 +1391,13 @@ describe.sequential("trusted repository source property and trust-boundary harde
     expect(
       (production.match(/\.readJitContextSourceSnapshotForSubtask\s*\(/g) ?? [])
         .length,
-    ).toBe(2);
+    ).toBe(3);
+    const worktreeOwnershipSource = productionFiles
+      .find((path) => path.endsWith(join("storage", "src", "worktree-ownership.ts")));
+    expect(worktreeOwnershipSource).toBeDefined();
+    expect(readFileSync(worktreeOwnershipSource!, { encoding: "utf8" })).toMatch(
+      /readJitContextSourceSnapshotForSubtask\(\s*subtaskId,\s*"FRESH_INDEPENDENT_QA",\s*\)/,
+    );
     expect(
       (storageSource.match(/contextItems/gi) ?? []).length,
     ).toBeGreaterThan(0);

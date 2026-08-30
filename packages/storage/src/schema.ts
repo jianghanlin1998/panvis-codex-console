@@ -104,6 +104,120 @@ export const subtasksTable = sqliteTable(
   ],
 );
 
+export const worktreeOwnershipsTable = sqliteTable(
+  "worktree_ownerships",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    subtaskId: text("subtask_id")
+      .notNull()
+      .references(() => subtasksTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    status: text("status").notNull(),
+    worktreePath: text("worktree_path").notNull(),
+    branchName: text("branch_name").notNull(),
+    startingCommitSha: text("starting_commit_sha").notNull(),
+    releaseHeadSha: text("release_head_sha"),
+    createdAt: text("created_at").notNull(),
+    activatedAt: text("activated_at"),
+    releaseStartedAt: text("release_started_at"),
+    releasedAt: text("released_at"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("worktree_ownerships_worktree_path_unique").on(table.worktreePath),
+    uniqueIndex("worktree_ownerships_branch_name_unique").on(table.branchName),
+    uniqueIndex("worktree_ownerships_subtask_non_terminal_unique")
+      .on(table.subtaskId)
+      .where(sql`${table.status} in ('PROVISIONING', 'ACTIVE', 'RELEASING')`),
+    index("worktree_ownerships_subtask_history_index").on(
+      table.subtaskId,
+      table.createdAt,
+      table.id,
+    ),
+    index("worktree_ownerships_project_slots_index").on(
+      table.projectId,
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "worktree_ownerships_id_check",
+      sql`length(${table.id}) = 35
+        and substr(${table.id}, 1, 3) = 'wt_'
+        and substr(${table.id}, 4) not glob '*[^0-9a-f]*'`,
+    ),
+    check(
+      "worktree_ownerships_status_check",
+      sql`${table.status} in ('PROVISIONING', 'ACTIVE', 'RELEASING', 'RELEASED', 'FAILED')`,
+    ),
+    check(
+      "worktree_ownerships_path_check",
+      sql`length(${table.worktreePath}) between 1 and 4096
+        and substr(${table.worktreePath}, 1, 1) = '/'
+        and instr(${table.worktreePath}, char(0)) = 0
+        and instr(${table.worktreePath}, char(10)) = 0
+        and instr(${table.worktreePath}, char(13)) = 0`,
+    ),
+    check(
+      "worktree_ownerships_branch_check",
+      sql`length(${table.branchName}) between 1 and 255
+        and ${table.branchName} = 'ctc/worktree/' || ${table.id}`,
+    ),
+    check(
+      "worktree_ownerships_starting_sha_check",
+      sql`length(${table.startingCommitSha}) in (40, 64)
+        and ${table.startingCommitSha} not glob '*[^0-9a-f]*'`,
+    ),
+    check(
+      "worktree_ownerships_release_sha_check",
+      sql`${table.releaseHeadSha} is null
+        or (length(${table.releaseHeadSha}) in (40, 64)
+          and ${table.releaseHeadSha} not glob '*[^0-9a-f]*')`,
+    ),
+    check(
+      "worktree_ownerships_lifecycle_check",
+      sql`(${table.status} = 'PROVISIONING'
+          and ${table.activatedAt} is null
+          and ${table.releaseStartedAt} is null
+          and ${table.releasedAt} is null
+          and ${table.releaseHeadSha} is null
+          and ${table.updatedAt} = ${table.createdAt})
+        or (${table.status} = 'FAILED'
+          and ${table.activatedAt} is null
+          and ${table.releaseStartedAt} is null
+          and ${table.releasedAt} is null
+          and ${table.releaseHeadSha} is null
+          and ${table.updatedAt} >= ${table.createdAt})
+        or (${table.status} = 'ACTIVE'
+          and ${table.activatedAt} is not null
+          and ${table.releaseStartedAt} is null
+          and ${table.releasedAt} is null
+          and ${table.releaseHeadSha} is null
+          and ${table.activatedAt} >= ${table.createdAt}
+          and ${table.updatedAt} = ${table.activatedAt})
+        or (${table.status} = 'RELEASING'
+          and ${table.activatedAt} is not null
+          and ${table.releaseStartedAt} is not null
+          and ${table.releasedAt} is null
+          and ${table.releaseHeadSha} is not null
+          and ${table.activatedAt} >= ${table.createdAt}
+          and ${table.releaseStartedAt} >= ${table.activatedAt}
+          and ${table.updatedAt} = ${table.releaseStartedAt})
+        or (${table.status} = 'RELEASED'
+          and ${table.activatedAt} is not null
+          and ${table.releaseStartedAt} is not null
+          and ${table.releasedAt} is not null
+          and ${table.releaseHeadSha} is not null
+          and ${table.activatedAt} >= ${table.createdAt}
+          and ${table.releaseStartedAt} >= ${table.activatedAt}
+          and ${table.releasedAt} >= ${table.releaseStartedAt}
+          and ${table.updatedAt} = ${table.releasedAt})`,
+    ),
+  ],
+);
+
 export const chatThreadsTable = sqliteTable(
   "chat_threads",
   {

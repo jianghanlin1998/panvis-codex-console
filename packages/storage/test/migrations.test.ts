@@ -50,6 +50,12 @@ const acceptedS1aMigration = fileURLToPath(
 const acceptedS1b2aMigration = fileURLToPath(
   new URL("../drizzle/20260811143107_spicy_apocalypse", import.meta.url),
 );
+const acceptedDurableExecutionMigration = fileURLToPath(
+  new URL("../drizzle/20260830145904_tough_puma", import.meta.url),
+);
+const acceptedProviderRunUniquenessMigration = fileURLToPath(
+  new URL("../drizzle/20260830155716_spicy_dust", import.meta.url),
+);
 
 describe("database lifecycle and migrations", () => {
   it("migrates a fresh in-memory database", () => {
@@ -89,6 +95,7 @@ describe("database lifecycle and migrations", () => {
           "subtask_implementation_checkpoints",
           "subtasks",
           "task_dependencies",
+          "worktree_ownerships",
         ]);
       } finally {
         sqlite.close();
@@ -106,7 +113,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(7);
+        expect(row.count).toBe(8);
       } finally {
         sqlite.close();
       }
@@ -123,7 +130,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(7);
+        expect(row.count).toBe(8);
       } finally {
         sqlite.close();
       }
@@ -595,6 +602,69 @@ describe("database lifecycle and migrations", () => {
         "FAILED",
       );
       migrated.close();
+    });
+  });
+
+  it("upgrades the exact pre-worktree boundary without changing existing durable rows", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const priorMigrations = join(dirname(databasePath), "prior-worktree-migrations");
+      mkdirSync(priorMigrations);
+      for (const migration of [
+        acceptedS0B1Migration,
+        acceptedS0B2aMigration,
+        acceptedS0B2bMigration,
+        acceptedS1aMigration,
+        acceptedS1b2aMigration,
+        acceptedDurableExecutionMigration,
+        acceptedProviderRunUniquenessMigration,
+      ]) {
+        cpSync(migration, join(priorMigrations, basename(migration)), {
+          recursive: true,
+        });
+      }
+
+      const prior = openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: priorMigrations,
+      });
+      const project = makeProject("prj_prior_worktree", "prior-worktree");
+      const bigTask = makeBigTask("bt_prior_worktree", project.id);
+      const subtask = makeSubtask("st_prior_worktree", bigTask.id, "IN_PROGRESS");
+      prior.createProject(project);
+      prior.createBigTask(bigTask);
+      prior.createSubtask(subtask);
+      prior.close();
+
+      const before = new DatabaseSync(databasePath, { readOnly: true });
+      const exactRows = {
+        projects: before.prepare("SELECT * FROM projects ORDER BY id").all(),
+        bigTasks: before.prepare("SELECT * FROM big_tasks ORDER BY id").all(),
+        subtasks: before.prepare("SELECT * FROM subtasks ORDER BY id").all(),
+      };
+      expect(
+        before.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
+      ).toEqual({ count: 7 });
+      before.close();
+
+      const migrated = openTaskDatabase({ databasePath, clock: fixedClock });
+      migrated.close();
+      const after = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect({
+          projects: after.prepare("SELECT * FROM projects ORDER BY id").all(),
+          bigTasks: after.prepare("SELECT * FROM big_tasks ORDER BY id").all(),
+          subtasks: after.prepare("SELECT * FROM subtasks ORDER BY id").all(),
+        }).toEqual(exactRows);
+        expect(
+          after.prepare("SELECT count(*) AS count FROM worktree_ownerships").get(),
+        ).toEqual({ count: 0 });
+        expect(
+          after.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
+        ).toEqual({ count: 8 });
+      } finally {
+        after.close();
+      }
     });
   });
 

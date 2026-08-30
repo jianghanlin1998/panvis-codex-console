@@ -1598,7 +1598,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         .map((row) => (row as { readonly name: string }).name);
       sqliteAfter.close();
       expect(schemaAfter).toBe(schemaBefore);
-      expect(migrationCount.count).toBe(7);
+      expect(migrationCount.count).toBe(8);
       expect(tables).toEqual([
         "__drizzle_migrations",
         "audit_events",
@@ -1611,6 +1611,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         "subtask_implementation_checkpoints",
         "subtasks",
         "task_dependencies",
+        "worktree_ownerships",
       ]);
       expect(applicationRows(databasePath)).toBe(beforeRows);
     });
@@ -1641,12 +1642,19 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
     expect(consumers.map((path) => path.split("/").at(-1)).sort()).toEqual([
       "operational-context-assembly.ts",
       "trusted-repository-source.ts",
+      "worktree-ownership.ts",
     ]);
     const trustedRepositorySource = sources.find(({ path }) =>
       path.endsWith("/storage/src/trusted-repository-source.ts"),
     )?.source;
     expect(trustedRepositorySource).toMatch(
       /readJitContextSourceSnapshotForSubtask\(\s*input,\s*"FRESH_INDEPENDENT_QA",\s*\)/,
+    );
+    const worktreeOwnershipSource = sources.find(({ path }) =>
+      path.endsWith("/storage/src/worktree-ownership.ts"),
+    )?.source;
+    expect(worktreeOwnershipSource).toMatch(
+      /readJitContextSourceSnapshotForSubtask\(\s*subtaskId,\s*"FRESH_INDEPENDENT_QA",\s*\)/,
     );
     expect(storageSource).not.toMatch(
       /acceptedPromotedContext|rawHistory|providerSerialization|tokenMeter|budgetPrun|Codex App Server/i,

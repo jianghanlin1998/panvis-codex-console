@@ -8,6 +8,7 @@ export {
   ProjectIdSchema,
   SubtaskIdSchema,
   SubtaskImplementationCheckpointIdSchema,
+  WorktreeOwnershipIdSchema,
 } from "./identifiers.js";
 export type {
   AuditEventId,
@@ -19,7 +20,19 @@ export type {
   ProjectId,
   SubtaskId,
   SubtaskImplementationCheckpointId,
+  WorktreeOwnershipId,
 } from "./identifiers.js";
+
+export {
+  WorktreeOwnershipBranchSchema,
+  WorktreeOwnershipPathSchema,
+  WorktreeOwnershipSchema,
+  WorktreeOwnershipStatusSchema,
+} from "./worktree-ownership.js";
+export type {
+  WorktreeOwnership,
+  WorktreeOwnershipStatus,
+} from "./worktree-ownership.js";
 
 export {
   RepositoryCommitShaSchema,

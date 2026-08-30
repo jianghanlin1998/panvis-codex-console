@@ -86,6 +86,7 @@ import {
   taskDependenciesTable,
 } from "./schema.js";
 import { decodeStringArray, encodeStringArray } from "./structured-fields.js";
+import { registerTaskStorageWorktreeAccess } from "./task-storage-internals.js";
 
 export interface OpenTaskDatabaseOptions {
   readonly databasePath: string;
@@ -1210,6 +1211,11 @@ export class TaskStorage {
     this.#sqlite = sqlite;
     this.#database = database;
     this.#clock = clock;
+    registerTaskStorageWorktreeAccess(this, {
+      sqlite,
+      clock,
+      isOpen: () => this.isOpen,
+    });
   }
 
   get isOpen(): boolean {

@@ -54,6 +54,16 @@ export {
   ExecutionInputPreflight,
   ExecutionInputPreflightError,
 } from "./execution-input-preflight.js";
+
+export {
+  createWorktreeOwnershipManager,
+  WorktreeOwnershipError,
+} from "./worktree-ownership.js";
+export type {
+  ResolvedActiveOwnedWorktree,
+  WorktreeOwnershipErrorCode,
+  WorktreeOwnershipManager,
+} from "./worktree-ownership.js";
 export type {
   ExecutionInputPreflightErrorCode,
   ExecutionInputPreflightResult,
