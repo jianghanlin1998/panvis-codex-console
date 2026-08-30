@@ -305,3 +305,21 @@ export type {
   ProviderThreadId,
   ProviderThreadReference,
 } from "./execution.js";
+
+export {
+  CHAT_THREAD_STATUSES,
+  EXECUTION_RUN_STATUSES,
+  TERMINAL_EXECUTION_RUN_STATUSES,
+  ChatThreadSchema,
+  ChatThreadStatusSchema,
+  ExecutionRunSchema,
+  ExecutionRunStatusSchema,
+  TerminalExecutionRunStatusSchema,
+} from "./durable-execution.js";
+export type {
+  ChatThread,
+  ChatThreadStatus,
+  ExecutionRun,
+  ExecutionRunStatus,
+  TerminalExecutionRunStatus,
+} from "./durable-execution.js";

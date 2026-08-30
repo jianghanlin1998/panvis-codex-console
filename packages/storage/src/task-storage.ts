@@ -5,14 +5,23 @@ import {
   AuditEventSchema,
   BigTaskIdSchema,
   BigTaskSchema,
+  ChatThreadIdSchema,
+  ChatThreadSchema,
   ContextDigestIdSchema,
   ContextDigestSchema,
   ContextItemIdSchema,
   ContextItemSchema,
   ContextScopeSchema,
+  ExecutionProviderIdSchema,
+  ExecutionRunIdSchema,
+  ExecutionRunSchema,
   JitContextPacketProfileKindSchema,
   ProjectIdSchema,
   ProjectSchema,
+  ProviderModelReferenceSchema,
+  ProviderRunReferenceSchema,
+  ProviderThreadReferenceSchema,
+  NormalizedUsageSchema,
   SubtaskImplementationCheckpointIdSchema,
   SubtaskImplementationCheckpointSchema,
   SubtaskCreateInputSchema,
@@ -32,6 +41,8 @@ import type {
   AllowedContextSet,
   BigTask,
   BigTaskId,
+  ChatThread,
+  ChatThreadId,
   ContextDigest,
   ContextDigestId,
   ContextItem,
@@ -39,9 +50,16 @@ import type {
   ContextScope,
   DependencyReadinessResult,
   DependencySubtask,
+  ExecutionProviderId,
+  ExecutionRun,
+  ExecutionRunId,
   JitContextPacketProfileKind,
   Project,
   ProjectId,
+  ProviderModelReference,
+  ProviderRunReference,
+  ProviderThreadReference,
+  NormalizedUsage,
   Subtask,
   SubtaskCreateInput,
   SubtaskDependency,
@@ -58,8 +76,10 @@ import { defaultMigrationsFolder, runMigrations } from "./migrations.js";
 import {
   auditEventsTable,
   bigTasksTable,
+  chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
+  executionRunsTable,
   projectsTable,
   subtaskImplementationCheckpointsTable,
   subtasksTable,
@@ -81,6 +101,35 @@ export interface CompleteSubtaskImplementationInput {
 export interface CompleteSubtaskImplementationResult {
   readonly subtask: Subtask;
   readonly checkpoint: SubtaskImplementationCheckpoint;
+}
+
+export interface CreateChatThreadInput {
+  readonly id: ChatThreadId;
+  readonly subtaskId: SubtaskId;
+  readonly providerId: ExecutionProviderId;
+}
+
+export interface BindChatThreadProviderReferenceInput {
+  readonly chatThreadId: ChatThreadId;
+  readonly providerThread: ProviderThreadReference;
+}
+
+export interface CreateExecutionRunInput {
+  readonly id: ExecutionRunId;
+  readonly chatThreadId: ChatThreadId;
+}
+
+export interface StartExecutionRunInput {
+  readonly executionRunId: ExecutionRunId;
+  readonly providerRun: ProviderRunReference;
+  readonly providerModel?: ProviderModelReference;
+}
+
+export interface FinishExecutionRunInput {
+  readonly executionRunId: ExecutionRunId;
+  readonly status: "SUCCEEDED" | "FAILED" | "INTERRUPTED";
+  readonly providerModel?: ProviderModelReference;
+  readonly normalizedUsage?: NormalizedUsage;
 }
 
 type ProjectContextScope = Extract<
@@ -159,6 +208,8 @@ interface CanonicalTaskHierarchy {
 type ProjectRow = typeof projectsTable.$inferSelect;
 type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
+type ChatThreadRow = typeof chatThreadsTable.$inferSelect;
+type ExecutionRunRow = typeof executionRunsTable.$inferSelect;
 type ContextItemRow = typeof contextItemsTable.$inferSelect;
 type ContextDigestRow = typeof contextDigestsTable.$inferSelect;
 type AuditEventRow = typeof auditEventsTable.$inferSelect;
@@ -222,6 +273,159 @@ const parseCanonicalSubtaskId = (input: SubtaskId): SubtaskId => {
     throw invalidInput("Subtask ID");
   }
   return subtaskId;
+};
+
+const parseChatThreadId = (input: ChatThreadId): ChatThreadId => {
+  const result = ChatThreadIdSchema.safeParse(input);
+  if (!result.success || result.data !== input) {
+    throw invalidInput("ChatThread ID");
+  }
+  return result.data;
+};
+
+const parseExecutionRunId = (input: ExecutionRunId): ExecutionRunId => {
+  const result = ExecutionRunIdSchema.safeParse(input);
+  if (!result.success || result.data !== input) {
+    throw invalidInput("ExecutionRun ID");
+  }
+  return result.data;
+};
+
+const parseExecutionProviderId = (
+  input: ExecutionProviderId,
+): ExecutionProviderId => {
+  const result = ExecutionProviderIdSchema.safeParse(input);
+  if (!result.success) {
+    throw invalidInput("Execution provider ID");
+  }
+  return result.data;
+};
+
+const parseStrictInputRecord = (
+  input: unknown,
+  entity: string,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): Record<string, unknown> => {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw invalidInput(entity);
+  }
+  const record = input as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+  if (
+    requiredKeys.some((key) => !Object.hasOwn(record, key)) ||
+    keys.some((key) => !allowedKeys.has(key))
+  ) {
+    throw invalidInput(entity);
+  }
+  return record;
+};
+
+const parseCreateChatThreadInput = (
+  input: CreateChatThreadInput,
+): CreateChatThreadInput => {
+  const record = parseStrictInputRecord(input, "ChatThread", [
+    "id",
+    "subtaskId",
+    "providerId",
+  ]);
+  return {
+    id: parseChatThreadId(record.id as ChatThreadId),
+    subtaskId: parseCanonicalSubtaskId(record.subtaskId as SubtaskId),
+    providerId: parseExecutionProviderId(record.providerId as ExecutionProviderId),
+  };
+};
+
+const parseBindChatThreadProviderReferenceInput = (
+  input: BindChatThreadProviderReferenceInput,
+): BindChatThreadProviderReferenceInput => {
+  const record = parseStrictInputRecord(input, "ChatThread provider binding", [
+    "chatThreadId",
+    "providerThread",
+  ]);
+  const providerThread = ProviderThreadReferenceSchema.safeParse(
+    record.providerThread,
+  );
+  if (!providerThread.success) {
+    throw invalidInput("Provider thread reference");
+  }
+  return {
+    chatThreadId: parseChatThreadId(record.chatThreadId as ChatThreadId),
+    providerThread: providerThread.data,
+  };
+};
+
+const parseCreateExecutionRunInput = (
+  input: CreateExecutionRunInput,
+): CreateExecutionRunInput => {
+  const record = parseStrictInputRecord(input, "ExecutionRun", [
+    "id",
+    "chatThreadId",
+  ]);
+  return {
+    id: parseExecutionRunId(record.id as ExecutionRunId),
+    chatThreadId: parseChatThreadId(record.chatThreadId as ChatThreadId),
+  };
+};
+
+const parseStartExecutionRunInput = (
+  input: StartExecutionRunInput,
+): StartExecutionRunInput => {
+  const record = parseStrictInputRecord(
+    input,
+    "ExecutionRun start",
+    ["executionRunId", "providerRun"],
+    ["providerModel"],
+  );
+  const providerRun = ProviderRunReferenceSchema.safeParse(record.providerRun);
+  const providerModel =
+    record.providerModel === undefined
+      ? undefined
+      : ProviderModelReferenceSchema.safeParse(record.providerModel);
+  if (!providerRun.success || (providerModel !== undefined && !providerModel.success)) {
+    throw invalidInput("ExecutionRun start");
+  }
+  return {
+    executionRunId: parseExecutionRunId(record.executionRunId as ExecutionRunId),
+    providerRun: providerRun.data,
+    ...(providerModel === undefined ? {} : { providerModel: providerModel.data }),
+  };
+};
+
+const parseFinishExecutionRunInput = (
+  input: FinishExecutionRunInput,
+): FinishExecutionRunInput => {
+  const record = parseStrictInputRecord(
+    input,
+    "ExecutionRun finish",
+    ["executionRunId", "status"],
+    ["providerModel", "normalizedUsage"],
+  );
+  const status = record.status;
+  const providerModel =
+    record.providerModel === undefined
+      ? undefined
+      : ProviderModelReferenceSchema.safeParse(record.providerModel);
+  const normalizedUsage =
+    record.normalizedUsage === undefined
+      ? undefined
+      : NormalizedUsageSchema.safeParse(record.normalizedUsage);
+  if (
+    (status !== "SUCCEEDED" && status !== "FAILED" && status !== "INTERRUPTED") ||
+    (providerModel !== undefined && !providerModel.success) ||
+    (normalizedUsage !== undefined && !normalizedUsage.success)
+  ) {
+    throw invalidInput("ExecutionRun finish");
+  }
+  return {
+    executionRunId: parseExecutionRunId(record.executionRunId as ExecutionRunId),
+    status,
+    ...(providerModel === undefined ? {} : { providerModel: providerModel.data }),
+    ...(normalizedUsage === undefined
+      ? {}
+      : { normalizedUsage: normalizedUsage.data }),
+  };
 };
 
 const parseJitContextPacketProfileKind = (
@@ -465,6 +669,141 @@ const subtaskFromRow = (row: SubtaskRow): Subtask => {
     throw malformedStoredData();
   }
   return subtask;
+};
+
+const chatThreadFromRow = (row: ChatThreadRow): ChatThread => {
+  if (
+    !isCanonicalUtcTimestamp(row.createdAt) ||
+    !isCanonicalUtcTimestamp(row.updatedAt) ||
+    (row.closedAt !== null && !isCanonicalUtcTimestamp(row.closedAt))
+  ) {
+    throw malformedStoredData();
+  }
+  const providerThread =
+    row.providerThreadId === null
+      ? null
+      : {
+          providerId: row.providerId,
+          providerThreadId: row.providerThreadId,
+        };
+  const result = ChatThreadSchema.safeParse({
+    id: row.id,
+    subtaskId: row.subtaskId,
+    providerId: row.providerId,
+    providerThread,
+    status: row.status,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    closedAt: row.closedAt,
+  });
+  if (
+    !result.success ||
+    result.data.id !== row.id ||
+    result.data.subtaskId !== row.subtaskId ||
+    result.data.providerId !== row.providerId ||
+    result.data.providerThread?.providerThreadId !==
+      (row.providerThreadId ?? undefined)
+  ) {
+    throw malformedStoredData();
+  }
+  return result.data;
+};
+
+const executionRunFromRow = (
+  row: ExecutionRunRow,
+  owningThread: ChatThread,
+): ExecutionRun => {
+  if (
+    !isCanonicalUtcTimestamp(row.createdAt) ||
+    !isCanonicalUtcTimestamp(row.updatedAt) ||
+    (row.startedAt !== null && !isCanonicalUtcTimestamp(row.startedAt)) ||
+    (row.endedAt !== null && !isCanonicalUtcTimestamp(row.endedAt)) ||
+    (row.providerThreadId === null) !== (row.providerRunId === null)
+  ) {
+    throw malformedStoredData();
+  }
+  const usageValues = [
+    row.inputTokens,
+    row.cachedInputTokens,
+    row.outputTokens,
+    row.reasoningTokens,
+    row.totalTokens,
+    row.runtimeSeconds,
+    row.toolCallCount,
+  ];
+  if (
+    (row.usagePresent !== 0 && row.usagePresent !== 1) ||
+    (row.usagePresent === 0 && usageValues.some((value) => value !== null))
+  ) {
+    throw malformedStoredData();
+  }
+  const normalizedUsage =
+    row.usagePresent === 0
+      ? null
+      : {
+          ...(row.inputTokens === null ? {} : { inputTokens: row.inputTokens }),
+          ...(row.cachedInputTokens === null
+            ? {}
+            : { cachedInputTokens: row.cachedInputTokens }),
+          ...(row.outputTokens === null ? {} : { outputTokens: row.outputTokens }),
+          ...(row.reasoningTokens === null
+            ? {}
+            : { reasoningTokens: row.reasoningTokens }),
+          ...(row.totalTokens === null ? {} : { totalTokens: row.totalTokens }),
+          ...(row.runtimeSeconds === null
+            ? {}
+            : { runtimeSeconds: row.runtimeSeconds }),
+          ...(row.toolCallCount === null
+            ? {}
+            : { toolCallCount: row.toolCallCount }),
+        };
+  const providerRun =
+    row.providerThreadId === null || row.providerRunId === null
+      ? null
+      : {
+          providerId: owningThread.providerId,
+          providerThreadId: row.providerThreadId,
+          providerRunId: row.providerRunId,
+        };
+  const providerModel =
+    row.providerModelId === null
+      ? null
+      : {
+          providerId: owningThread.providerId,
+          providerModelId: row.providerModelId,
+        };
+  if (
+    providerRun !== null &&
+    (owningThread.providerThread === null ||
+      providerRun.providerThreadId !== owningThread.providerThread.providerThreadId)
+  ) {
+    throw malformedStoredData();
+  }
+  const result = ExecutionRunSchema.safeParse({
+    id: row.id,
+    chatThreadId: row.chatThreadId,
+    status: row.status,
+    providerRun,
+    providerModel,
+    normalizedUsage,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    startedAt: row.startedAt,
+    endedAt: row.endedAt,
+  });
+  if (
+    !result.success ||
+    result.data.id !== row.id ||
+    result.data.chatThreadId !== row.chatThreadId ||
+    result.data.providerRun?.providerThreadId !==
+      (row.providerThreadId ?? undefined) ||
+    result.data.providerRun?.providerRunId !== (row.providerRunId ?? undefined) ||
+    result.data.providerModel?.providerModelId !==
+      (row.providerModelId ?? undefined)
+  ) {
+    throw malformedStoredData();
+  }
+  return result.data;
 };
 
 const dependencyFromRow = (row: {
@@ -1060,6 +1399,515 @@ export class TaskStorage {
         .orderBy(asc(subtasksTable.createdAt), asc(subtasksTable.id))
         .all()
         .map(subtaskFromRow),
+    );
+  }
+
+  createChatThread(input: CreateChatThreadInput): ChatThread {
+    const threadInput = parseCreateChatThreadInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        if (this.#getSubtask(threadInput.subtaskId) === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The parent Subtask does not exist.",
+          );
+        }
+        if (this.#getChatThread(threadInput.id) !== null) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "A ChatThread with this ID already exists.",
+          );
+        }
+        const timestamp = this.#timestamp();
+        this.#database
+          .insert(chatThreadsTable)
+          .values({
+            id: threadInput.id,
+            subtaskId: threadInput.subtaskId,
+            providerId: threadInput.providerId,
+            providerThreadId: null,
+            status: "OPEN",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            closedAt: null,
+          })
+          .run();
+        const stored = this.#getChatThread(threadInput.id);
+        if (stored === null) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The ChatThread was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  getChatThreadById(input: ChatThreadId): ChatThread | null {
+    const chatThreadId = parseChatThreadId(input);
+    return this.#operation(() => this.#getChatThread(chatThreadId));
+  }
+
+  listChatThreadsForSubtask(input: SubtaskId): readonly ChatThread[] {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    return this.#operation(() =>
+      this.#database
+        .select()
+        .from(chatThreadsTable)
+        .where(eq(chatThreadsTable.subtaskId, subtaskId))
+        .orderBy(asc(chatThreadsTable.createdAt), asc(chatThreadsTable.id))
+        .all()
+        .map((row) => this.#chatThreadFromRow(row)),
+    );
+  }
+
+  bindChatThreadProviderReference(
+    input: BindChatThreadProviderReferenceInput,
+  ): ChatThread {
+    const { chatThreadId, providerThread } =
+      parseBindChatThreadProviderReferenceInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const row = this.#database
+          .select()
+          .from(chatThreadsTable)
+          .where(eq(chatThreadsTable.id, chatThreadId))
+          .get();
+        if (row === undefined) {
+          throw new TaskStorageError("PARENT_NOT_FOUND", "The ChatThread does not exist.");
+        }
+        const thread = this.#chatThreadFromRow(row);
+        if (providerThread.providerId !== thread.providerId) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The provider thread reference does not match the ChatThread provider.",
+          );
+        }
+        if (thread.providerThread !== null) {
+          if (
+            thread.providerThread.providerId === providerThread.providerId &&
+            thread.providerThread.providerThreadId === providerThread.providerThreadId
+          ) {
+            return thread;
+          }
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The ChatThread provider reference is immutable.",
+          );
+        }
+        if (thread.status !== "OPEN") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "A closed ChatThread cannot acquire a provider reference.",
+          );
+        }
+        const owner = this.#database
+          .select({ id: chatThreadsTable.id })
+          .from(chatThreadsTable)
+          .where(
+            and(
+              eq(chatThreadsTable.providerId, providerThread.providerId),
+              eq(chatThreadsTable.providerThreadId, providerThread.providerThreadId),
+            ),
+          )
+          .get();
+        if (owner !== undefined && owner.id !== thread.id) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The provider thread reference already belongs to another ChatThread.",
+          );
+        }
+        const timestamp = this.#monotonicTimestampAfter(thread.updatedAt);
+        const update = this.#database
+          .update(chatThreadsTable)
+          .set({
+            providerThreadId: providerThread.providerThreadId,
+            updatedAt: timestamp,
+          })
+          .where(
+            and(
+              eq(chatThreadsTable.id, thread.id),
+              eq(chatThreadsTable.status, "OPEN"),
+              isNull(chatThreadsTable.providerThreadId),
+              eq(chatThreadsTable.updatedAt, thread.updatedAt),
+            ),
+          )
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The ChatThread provider reference could not be persisted.",
+          );
+        }
+        const stored = this.#getChatThread(thread.id);
+        if (stored?.providerThread?.providerThreadId !== providerThread.providerThreadId) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The ChatThread provider reference was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  closeChatThread(input: ChatThreadId): ChatThread {
+    const chatThreadId = parseChatThreadId(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const row = this.#database
+          .select()
+          .from(chatThreadsTable)
+          .where(eq(chatThreadsTable.id, chatThreadId))
+          .get();
+        if (row === undefined) {
+          throw new TaskStorageError("PARENT_NOT_FOUND", "The ChatThread does not exist.");
+        }
+        const thread = this.#chatThreadFromRow(row);
+        if (thread.status !== "OPEN") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The ChatThread is already closed.",
+          );
+        }
+        const activeRun = this.#database
+          .select({ id: executionRunsTable.id })
+          .from(executionRunsTable)
+          .where(
+            and(
+              eq(executionRunsTable.chatThreadId, thread.id),
+              inArray(executionRunsTable.status, ["CREATED", "RUNNING"]),
+            ),
+          )
+          .get();
+        if (activeRun !== undefined) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "A ChatThread with a non-terminal ExecutionRun cannot be closed.",
+          );
+        }
+        const timestamp = this.#monotonicTimestampAfter(thread.updatedAt);
+        const update = this.#database
+          .update(chatThreadsTable)
+          .set({ status: "CLOSED", updatedAt: timestamp, closedAt: timestamp })
+          .where(
+            and(
+              eq(chatThreadsTable.id, thread.id),
+              eq(chatThreadsTable.status, "OPEN"),
+              eq(chatThreadsTable.updatedAt, thread.updatedAt),
+            ),
+          )
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The ChatThread close transition could not be persisted.",
+          );
+        }
+        const stored = this.#getChatThread(thread.id);
+        if (stored?.status !== "CLOSED") {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The ChatThread close transition was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  createExecutionRun(input: CreateExecutionRunInput): ExecutionRun {
+    const runInput = parseCreateExecutionRunInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const thread = this.#getChatThread(runInput.chatThreadId);
+        if (thread === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The parent ChatThread does not exist.",
+          );
+        }
+        if (thread.status !== "OPEN") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "A closed ChatThread cannot receive an ExecutionRun.",
+          );
+        }
+        if (this.#getExecutionRun(runInput.id) !== null) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "An ExecutionRun with this ID already exists.",
+          );
+        }
+        const timestamp = this.#timestamp();
+        this.#database
+          .insert(executionRunsTable)
+          .values({
+            id: runInput.id,
+            chatThreadId: runInput.chatThreadId,
+            status: "CREATED",
+            providerThreadId: null,
+            providerRunId: null,
+            providerModelId: null,
+            usagePresent: 0,
+            inputTokens: null,
+            cachedInputTokens: null,
+            outputTokens: null,
+            reasoningTokens: null,
+            totalTokens: null,
+            runtimeSeconds: null,
+            toolCallCount: null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            startedAt: null,
+            endedAt: null,
+          })
+          .run();
+        const stored = this.#getExecutionRun(runInput.id);
+        if (stored === null) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The ExecutionRun was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  getExecutionRunById(input: ExecutionRunId): ExecutionRun | null {
+    const executionRunId = parseExecutionRunId(input);
+    return this.#operation(() => this.#getExecutionRun(executionRunId));
+  }
+
+  listExecutionRunsForChatThread(input: ChatThreadId): readonly ExecutionRun[] {
+    const chatThreadId = parseChatThreadId(input);
+    return this.#operation(() =>
+      this.#database
+        .select()
+        .from(executionRunsTable)
+        .where(eq(executionRunsTable.chatThreadId, chatThreadId))
+        .orderBy(asc(executionRunsTable.createdAt), asc(executionRunsTable.id))
+        .all()
+        .map((row) => this.#executionRunFromRow(row)),
+    );
+  }
+
+  startExecutionRun(input: StartExecutionRunInput): ExecutionRun {
+    const { executionRunId, providerRun, providerModel } =
+      parseStartExecutionRunInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const row = this.#database
+          .select()
+          .from(executionRunsTable)
+          .where(eq(executionRunsTable.id, executionRunId))
+          .get();
+        if (row === undefined) {
+          throw new TaskStorageError("PARENT_NOT_FOUND", "The ExecutionRun does not exist.");
+        }
+        const run = this.#executionRunFromRow(row);
+        const thread = this.#getChatThread(run.chatThreadId);
+        if (thread === null) {
+          throw malformedStoredData();
+        }
+        if (run.status !== "CREATED") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "Only a created ExecutionRun can be started.",
+          );
+        }
+        if (thread.status !== "OPEN") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "An ExecutionRun cannot start on a closed ChatThread.",
+          );
+        }
+        if (
+          thread.providerThread === null ||
+          providerRun.providerId !== thread.providerId ||
+          providerRun.providerThreadId !== thread.providerThread.providerThreadId
+        ) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The provider run reference does not match the owning ChatThread.",
+          );
+        }
+        if (providerModel !== undefined && providerModel.providerId !== thread.providerId) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The provider model reference does not match the owning ChatThread.",
+          );
+        }
+        const timestamp = this.#monotonicTimestampAfter(run.updatedAt);
+        const update = this.#database
+          .update(executionRunsTable)
+          .set({
+            status: "RUNNING",
+            providerThreadId: providerRun.providerThreadId,
+            providerRunId: providerRun.providerRunId,
+            providerModelId: providerModel?.providerModelId ?? null,
+            updatedAt: timestamp,
+            startedAt: timestamp,
+          })
+          .where(
+            and(
+              eq(executionRunsTable.id, run.id),
+              eq(executionRunsTable.status, "CREATED"),
+              eq(executionRunsTable.updatedAt, run.updatedAt),
+            ),
+          )
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The ExecutionRun start transition could not be persisted.",
+          );
+        }
+        const stored = this.#getExecutionRun(run.id);
+        if (stored?.status !== "RUNNING") {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The ExecutionRun start transition was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  failExecutionRunBeforeStart(input: ExecutionRunId): ExecutionRun {
+    const executionRunId = parseExecutionRunId(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const row = this.#database
+          .select()
+          .from(executionRunsTable)
+          .where(eq(executionRunsTable.id, executionRunId))
+          .get();
+        if (row === undefined) {
+          throw new TaskStorageError("PARENT_NOT_FOUND", "The ExecutionRun does not exist.");
+        }
+        const run = this.#executionRunFromRow(row);
+        if (run.status !== "CREATED") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "Only a created ExecutionRun can fail before start.",
+          );
+        }
+        const timestamp = this.#monotonicTimestampAfter(run.updatedAt);
+        const update = this.#database
+          .update(executionRunsTable)
+          .set({ status: "FAILED", updatedAt: timestamp, endedAt: timestamp })
+          .where(
+            and(
+              eq(executionRunsTable.id, run.id),
+              eq(executionRunsTable.status, "CREATED"),
+              eq(executionRunsTable.updatedAt, run.updatedAt),
+            ),
+          )
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The pre-start failure transition could not be persisted.",
+          );
+        }
+        const stored = this.#getExecutionRun(run.id);
+        if (stored?.status !== "FAILED" || stored.startedAt !== null) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The pre-start failure transition was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  finishExecutionRun(input: FinishExecutionRunInput): ExecutionRun {
+    const { executionRunId, status, providerModel, normalizedUsage } =
+      parseFinishExecutionRunInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const row = this.#database
+          .select()
+          .from(executionRunsTable)
+          .where(eq(executionRunsTable.id, executionRunId))
+          .get();
+        if (row === undefined) {
+          throw new TaskStorageError("PARENT_NOT_FOUND", "The ExecutionRun does not exist.");
+        }
+        const run = this.#executionRunFromRow(row);
+        const thread = this.#getChatThread(run.chatThreadId);
+        if (thread === null) {
+          throw malformedStoredData();
+        }
+        if (run.status !== "RUNNING") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "Only a running ExecutionRun can enter a terminal state.",
+          );
+        }
+        if (providerModel !== undefined && providerModel.providerId !== thread.providerId) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The provider model reference does not match the owning ChatThread.",
+          );
+        }
+        if (
+          run.providerModel !== null &&
+          providerModel !== undefined &&
+          (run.providerModel.providerId !== providerModel.providerId ||
+            run.providerModel.providerModelId !== providerModel.providerModelId)
+        ) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The ExecutionRun provider model reference is immutable.",
+          );
+        }
+        const finalProviderModel = providerModel ?? run.providerModel;
+        const timestamp = this.#monotonicTimestampAfter(run.updatedAt);
+        const update = this.#database
+          .update(executionRunsTable)
+          .set({
+            status,
+            providerModelId: finalProviderModel?.providerModelId ?? null,
+            usagePresent: normalizedUsage === undefined ? 0 : 1,
+            inputTokens: normalizedUsage?.inputTokens ?? null,
+            cachedInputTokens: normalizedUsage?.cachedInputTokens ?? null,
+            outputTokens: normalizedUsage?.outputTokens ?? null,
+            reasoningTokens: normalizedUsage?.reasoningTokens ?? null,
+            totalTokens: normalizedUsage?.totalTokens ?? null,
+            runtimeSeconds: normalizedUsage?.runtimeSeconds ?? null,
+            toolCallCount: normalizedUsage?.toolCallCount ?? null,
+            updatedAt: timestamp,
+            endedAt: timestamp,
+          })
+          .where(
+            and(
+              eq(executionRunsTable.id, run.id),
+              eq(executionRunsTable.status, "RUNNING"),
+              eq(executionRunsTable.updatedAt, run.updatedAt),
+            ),
+          )
+          .run();
+        if (update.changes !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The ExecutionRun terminal transition could not be persisted.",
+          );
+        }
+        const stored = this.#getExecutionRun(run.id);
+        if (stored?.status !== status) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The ExecutionRun terminal transition was not persisted.",
+          );
+        }
+        return stored;
+      }),
     );
   }
 
@@ -1932,6 +2780,44 @@ export class TaskStorage {
       .where(eq(subtasksTable.id, subtaskId))
       .get();
     return row === undefined ? null : subtaskFromRow(row);
+  }
+
+  #chatThreadFromRow(row: ChatThreadRow): ChatThread {
+    const thread = chatThreadFromRow(row);
+    if (this.#getSubtask(thread.subtaskId) === null) {
+      throw malformedStoredData();
+    }
+    return thread;
+  }
+
+  #getChatThread(chatThreadId: ChatThreadId): ChatThread | null {
+    const row = this.#database
+      .select()
+      .from(chatThreadsTable)
+      .where(eq(chatThreadsTable.id, chatThreadId))
+      .get();
+    return row === undefined ? null : this.#chatThreadFromRow(row);
+  }
+
+  #executionRunFromRow(row: ExecutionRunRow): ExecutionRun {
+    const threadId = ChatThreadIdSchema.safeParse(row.chatThreadId);
+    if (!threadId.success || threadId.data !== row.chatThreadId) {
+      throw malformedStoredData();
+    }
+    const owningThread = this.#getChatThread(threadId.data);
+    if (owningThread === null) {
+      throw malformedStoredData();
+    }
+    return executionRunFromRow(row, owningThread);
+  }
+
+  #getExecutionRun(executionRunId: ExecutionRunId): ExecutionRun | null {
+    const row = this.#database
+      .select()
+      .from(executionRunsTable)
+      .where(eq(executionRunsTable.id, executionRunId))
+      .get();
+    return row === undefined ? null : this.#executionRunFromRow(row);
   }
 
   #getSubtaskImplementationCheckpoint(

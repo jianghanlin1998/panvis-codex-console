@@ -1598,13 +1598,15 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         .map((row) => (row as { readonly name: string }).name);
       sqliteAfter.close();
       expect(schemaAfter).toBe(schemaBefore);
-      expect(migrationCount.count).toBe(5);
+      expect(migrationCount.count).toBe(6);
       expect(tables).toEqual([
         "__drizzle_migrations",
         "audit_events",
         "big_tasks",
+        "chat_threads",
         "context_digests",
         "context_items",
+        "execution_runs",
         "projects",
         "subtask_implementation_checkpoints",
         "subtasks",

@@ -5,7 +5,12 @@ import { basename, dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ContextScopeSchema } from "@codex-task-console/domain";
+import {
+  ChatThreadIdSchema,
+  ContextScopeSchema,
+  ExecutionProviderIdSchema,
+  ExecutionRunIdSchema,
+} from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import {
   captureTaskStorageError,
@@ -42,6 +47,9 @@ const acceptedS0B2bMigration = fileURLToPath(
 const acceptedS1aMigration = fileURLToPath(
   new URL("../drizzle/20260810161248_crazy_lightspeed", import.meta.url),
 );
+const acceptedS1b2aMigration = fileURLToPath(
+  new URL("../drizzle/20260811143107_spicy_apocalypse", import.meta.url),
+);
 
 describe("database lifecycle and migrations", () => {
   it("migrates a fresh in-memory database", () => {
@@ -73,8 +81,10 @@ describe("database lifecycle and migrations", () => {
           "__drizzle_migrations",
           "audit_events",
           "big_tasks",
+          "chat_threads",
           "context_digests",
           "context_items",
+          "execution_runs",
           "projects",
           "subtask_implementation_checkpoints",
           "subtasks",
@@ -96,7 +106,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(5);
+        expect(row.count).toBe(6);
       } finally {
         sqlite.close();
       }
@@ -113,7 +123,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(5);
+        expect(row.count).toBe(6);
       } finally {
         sqlite.close();
       }
@@ -479,6 +489,112 @@ describe("database lifecycle and migrations", () => {
       } finally {
         reopened.close();
       }
+    });
+  });
+
+  it("upgrades the exact prior migration boundary without changing existing durable rows", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const priorMigrations = join(dirname(databasePath), "prior-execution-migrations");
+      mkdirSync(priorMigrations);
+      for (const migration of [
+        acceptedS0B1Migration,
+        acceptedS0B2aMigration,
+        acceptedS0B2bMigration,
+        acceptedS1aMigration,
+        acceptedS1b2aMigration,
+      ]) {
+        cpSync(migration, join(priorMigrations, basename(migration)), {
+          recursive: true,
+        });
+      }
+
+      const beforeMigration = openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: priorMigrations,
+      });
+      const project = makeProject();
+      const bigTask = makeBigTask();
+      const target = makeSubtask("st_a", "bt_v1", "IN_PROGRESS");
+      const upstream = makeSubtask("st_b");
+      const dependency = makeDependency(upstream.id, target.id);
+      const scope = ContextScopeSchema.parse({
+        scopeType: "SUBTASK",
+        projectId: project.id,
+        bigTaskId: bigTask.id,
+        subtaskId: target.id,
+      });
+      const contextItem = makeContextItem("ctx_prior_execution", scope);
+      const digest = makeContextDigest("dgt_prior_execution", scope);
+      const auditEvent = makeAuditEvent("aud_prior_execution", scope);
+      const checkpoint = makeImplementationCheckpoint(
+        "icp_prior_execution",
+        target.id,
+      );
+      beforeMigration.createProject(project);
+      beforeMigration.createBigTask(bigTask);
+      beforeMigration.createSubtask(target);
+      beforeMigration.createSubtask(upstream);
+      beforeMigration.replaceDependenciesForBigTask(bigTask.id, [dependency]);
+      beforeMigration.createContextItem(contextItem);
+      beforeMigration.createContextDigest(digest);
+      beforeMigration.appendAuditEvent(auditEvent);
+      beforeMigration.completeSubtaskImplementation({
+        subtaskId: target.id,
+        checkpoint,
+      });
+      beforeMigration.close();
+
+      const readExistingRows = () => {
+        const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+          return {
+            projects: sqlite.prepare("SELECT * FROM projects ORDER BY id").all(),
+            bigTasks: sqlite.prepare("SELECT * FROM big_tasks ORDER BY id").all(),
+            subtasks: sqlite.prepare("SELECT * FROM subtasks ORDER BY id").all(),
+            dependencies: sqlite
+              .prepare(
+                "SELECT * FROM task_dependencies ORDER BY upstream_subtask_id, downstream_subtask_id",
+              )
+              .all(),
+            contextItems: sqlite.prepare("SELECT * FROM context_items ORDER BY id").all(),
+            contextDigests: sqlite.prepare("SELECT * FROM context_digests ORDER BY id").all(),
+            auditEvents: sqlite.prepare("SELECT * FROM audit_events ORDER BY id").all(),
+            checkpoints: sqlite
+              .prepare("SELECT * FROM subtask_implementation_checkpoints ORDER BY id")
+              .all(),
+          };
+        } finally {
+          sqlite.close();
+        }
+      };
+      const exactRowsBefore = readExistingRows();
+
+      const migrated = openTaskDatabase({ databasePath, clock: fixedClock });
+      expect(readExistingRows()).toEqual(exactRowsBefore);
+      expect(migrated.getProjectById(project.id)).toEqual(project);
+      expect(migrated.getBigTaskById(bigTask.id)).toEqual(bigTask);
+      expect(migrated.listDependenciesForBigTask(bigTask.id)).toEqual([dependency]);
+      expect(migrated.getContextItemById(contextItem.id)).toEqual(contextItem);
+      expect(migrated.getContextDigestById(digest.id)).toEqual(digest);
+      expect(migrated.listAuditEventsByScope(scope)).toEqual([auditEvent]);
+      expect(migrated.getSubtaskImplementationCheckpointById(checkpoint.id)).toEqual(
+        checkpoint,
+      );
+      expect(migrated.listChatThreadsForSubtask(target.id)).toEqual([]);
+
+      const chatThreadId = ChatThreadIdSchema.parse("thr_after_migration");
+      const executionRunId = ExecutionRunIdSchema.parse("run_after_migration");
+      migrated.createChatThread({
+        id: chatThreadId,
+        subtaskId: target.id,
+        providerId: ExecutionProviderIdSchema.parse("codex-app-server"),
+      });
+      migrated.createExecutionRun({ id: executionRunId, chatThreadId });
+      expect(migrated.failExecutionRunBeforeStart(executionRunId).status).toBe(
+        "FAILED",
+      );
+      migrated.close();
     });
   });
 

@@ -4,8 +4,10 @@ export type { StorageErrorCode } from "./errors.js";
 export {
   auditEventsTable,
   bigTasksTable,
+  chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
+  executionRunsTable,
   projectsTable,
   subtaskImplementationCheckpointsTable,
   subtasksTable,
@@ -18,10 +20,15 @@ export type {
   ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
+  BindChatThreadProviderReferenceInput,
   CompleteSubtaskImplementationInput,
   CompleteSubtaskImplementationResult,
+  CreateChatThreadInput,
+  CreateExecutionRunInput,
+  FinishExecutionRunInput,
   JitContextStorageSourceSnapshot,
   OpenTaskDatabaseOptions,
+  StartExecutionRunInput,
 } from "./task-storage.js";
 
 export {

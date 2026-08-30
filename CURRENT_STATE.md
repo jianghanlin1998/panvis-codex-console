@@ -155,9 +155,18 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Accepted implementation/evidence SHA: `1cadebda166881cd9c02c3ef89df28f2ffcc7468`
 - Hardening, repair, QA, and Re-QA used no additional real model turns beyond the documented historical bounded smoke.
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
+- Durable Execution / Thread / Run Persistence V0: IMPLEMENTED
+- Durable persistence deterministic baseline: PASS
+- Durable persistence migration baseline: PASS
+- Durable persistence reopen baseline: PASS
+- Durable persistence Live Execution integration: NOT IMPLEMENTED
+- Durable persistence Comprehensive Hardening: PENDING
+- Durable persistence Fresh Independent QA: NOT READY / pending hardening
+- Durable persistence ACCEPTED: NO
+- Live Execution V0 remains ACCEPTED
 
 ## Next safe task
-**Next safe task:** Durable execution/thread/run persistence and lifecycle transitions V0.
+**Next safe task:** Durable Execution / Thread / Run Persistence V0 Comprehensive Hardening.
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -172,7 +181,7 @@ Hanlin manual QA: NOT REQUIRED
 - Digest integration or raw-history injection
 - token-based pre-execution metering or automatic budget pruning
 - accepted production live Codex App Server execution beyond the bounded V0 path
-- execution/thread/run persistence
+- automatic Live Execution integration with durable thread/run persistence
 - trusted deterministic evidence producer/verifier or automatic deterministic `ENGINEERING_FACT` acceptance
 - trusted human-action controller/UI command
 - public operational Promoted Context acceptance command

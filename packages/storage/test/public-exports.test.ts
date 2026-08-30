@@ -3,10 +3,12 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   auditEventsTable,
   bigTasksTable,
+  chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
   ExecutionInputPreflight,
   ExecutionInputPreflightError,
+  executionRunsTable,
   openTaskDatabase,
   OperationalJitContextAssembler,
   OperationalJitContextAssemblyError,
@@ -25,11 +27,16 @@ import type {
   ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
+  BindChatThreadProviderReferenceInput,
+  CreateChatThreadInput,
+  CreateExecutionRunInput,
   ExecutionInputPreflightErrorCode,
   ExecutionInputPreflightResult,
+  FinishExecutionRunInput,
   JitContextStorageSourceSnapshot,
   OperationalJitContextAssemblyErrorCode,
   OperationalJitContextProfile,
+  StartExecutionRunInput,
   TrustedRepositorySourceErrorCode,
   TrustedRepositorySourceSnapshot,
   TrustedRepositorySourceTextBlock,
@@ -49,6 +56,8 @@ describe("storage package public exports", () => {
     expect(STORAGE_ERROR_CODES).toContain("MIGRATION_FAILED");
     expect(projectsTable).toBeDefined();
     expect(bigTasksTable).toBeDefined();
+    expect(chatThreadsTable).toBeDefined();
+    expect(executionRunsTable).toBeDefined();
     expect(contextDigestsTable).toBeDefined();
     expect(auditEventsTable).toBeDefined();
     expect(contextItemsTable).toBeDefined();
@@ -59,6 +68,11 @@ describe("storage package public exports", () => {
     expectTypeOf<ActiveContextItemSnapshot>().toBeObject();
     expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
     expectTypeOf<AllowedRawContextItemSnapshot>().toBeObject();
+    expectTypeOf<BindChatThreadProviderReferenceInput>().toBeObject();
+    expectTypeOf<CreateChatThreadInput>().toBeObject();
+    expectTypeOf<CreateExecutionRunInput>().toBeObject();
+    expectTypeOf<StartExecutionRunInput>().toBeObject();
+    expectTypeOf<FinishExecutionRunInput>().toBeObject();
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
     expectTypeOf<OperationalJitContextAssemblyErrorCode>().toBeString();
     expectTypeOf<OperationalJitContextProfile>().toBeString();

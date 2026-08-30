@@ -7,6 +7,7 @@ import {
   AuditEventSchema,
   BudgetPolicySchema,
   BoundedRetestTargetSchema,
+  ChatThreadSchema,
   ContextDigestSchema,
   DeterministicEngineeringFactDataSchema,
   ContextItemSchema,
@@ -14,6 +15,7 @@ import {
   DependencyRequiredGateSchema,
   DurableTaskSchema,
   ExecutionProviderDescriptorSchema,
+  ExecutionRunSchema,
   JitContextPacketCompilationInputSchema,
   JitContextPacketCompilationReasonSchema,
   JitContextPacketProfileKindSchema,
@@ -113,6 +115,8 @@ describe("domain package public exports", () => {
     expect(NativeSubagentOwnershipSchema).toBeDefined();
     expect(BudgetPolicySchema).toBeDefined();
     expect(ExecutionProviderDescriptorSchema).toBeDefined();
+    expect(ChatThreadSchema).toBeDefined();
+    expect(ExecutionRunSchema).toBeDefined();
     expect(ProviderThreadReferenceSchema).toBeDefined();
     expect(ProviderRunReferenceSchema).toBeDefined();
     expect(NormalizedUsageSchema).toBeDefined();

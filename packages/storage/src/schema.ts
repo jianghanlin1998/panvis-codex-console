@@ -4,6 +4,7 @@ import {
   index,
   integer,
   primaryKey,
+  real,
   sqliteTable,
   text,
   uniqueIndex,
@@ -99,6 +100,190 @@ export const subtasksTable = sqliteTable(
     check(
       "subtasks_reasoning_level_check",
       sql`${table.recommendedReasoningLevel} in ('LOW', 'MEDIUM', 'HIGH', 'XHIGH')`,
+    ),
+  ],
+);
+
+export const chatThreadsTable = sqliteTable(
+  "chat_threads",
+  {
+    id: text("id").primaryKey(),
+    subtaskId: text("subtask_id")
+      .notNull()
+      .references(() => subtasksTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    providerId: text("provider_id").notNull(),
+    providerThreadId: text("provider_thread_id"),
+    status: text("status").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    closedAt: text("closed_at"),
+  },
+  (table) => [
+    index("chat_threads_subtask_order_index").on(
+      table.subtaskId,
+      table.createdAt,
+      table.id,
+    ),
+    uniqueIndex("chat_threads_provider_thread_unique")
+      .on(table.providerId, table.providerThreadId)
+      .where(sql`${table.providerThreadId} is not null`),
+    check(
+      "chat_threads_id_check",
+      sql`length(${table.id}) between 5 and 128 and ${table.id} glob 'thr_*'`,
+    ),
+    check(
+      "chat_threads_provider_id_check",
+      sql`length(${table.providerId}) between 1 and 64
+        and ${table.providerId} = lower(${table.providerId})
+        and ${table.providerId} not glob '*[^a-z0-9-]*'
+        and ${table.providerId} not glob '-*'
+        and ${table.providerId} not glob '*-'
+        and ${table.providerId} not glob '*--*'`,
+    ),
+    check(
+      "chat_threads_provider_thread_id_check",
+      sql`${table.providerThreadId} is null
+        or (length(${table.providerThreadId}) between 1 and 512
+          and trim(${table.providerThreadId}) = ${table.providerThreadId})`,
+    ),
+    check(
+      "chat_threads_lifecycle_check",
+      sql`(${table.status} = 'OPEN' and ${table.closedAt} is null)
+        or (${table.status} = 'CLOSED'
+          and ${table.closedAt} is not null
+          and ${table.closedAt} = ${table.updatedAt})`,
+    ),
+  ],
+);
+
+export const executionRunsTable = sqliteTable(
+  "execution_runs",
+  {
+    id: text("id").primaryKey(),
+    chatThreadId: text("chat_thread_id")
+      .notNull()
+      .references(() => chatThreadsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    status: text("status").notNull(),
+    providerThreadId: text("provider_thread_id"),
+    providerRunId: text("provider_run_id"),
+    providerModelId: text("provider_model_id"),
+    usagePresent: integer("usage_present").notNull(),
+    inputTokens: integer("input_tokens"),
+    cachedInputTokens: integer("cached_input_tokens"),
+    outputTokens: integer("output_tokens"),
+    reasoningTokens: integer("reasoning_tokens"),
+    totalTokens: integer("total_tokens"),
+    runtimeSeconds: real("runtime_seconds"),
+    toolCallCount: integer("tool_call_count"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    startedAt: text("started_at"),
+    endedAt: text("ended_at"),
+  },
+  (table) => [
+    index("execution_runs_thread_order_index").on(
+      table.chatThreadId,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "execution_runs_id_check",
+      sql`length(${table.id}) between 5 and 128 and ${table.id} glob 'run_*'`,
+    ),
+    check(
+      "execution_runs_provider_thread_id_check",
+      sql`${table.providerThreadId} is null
+        or (length(${table.providerThreadId}) between 1 and 512
+          and trim(${table.providerThreadId}) = ${table.providerThreadId})`,
+    ),
+    check(
+      "execution_runs_provider_run_id_check",
+      sql`${table.providerRunId} is null
+        or (length(${table.providerRunId}) between 1 and 512
+          and trim(${table.providerRunId}) = ${table.providerRunId})`,
+    ),
+    check(
+      "execution_runs_provider_model_id_check",
+      sql`${table.providerModelId} is null
+        or (length(${table.providerModelId}) between 1 and 512
+          and trim(${table.providerModelId}) = ${table.providerModelId})`,
+    ),
+    check(
+      "execution_runs_provider_run_pair_check",
+      sql`(${table.providerThreadId} is null and ${table.providerRunId} is null)
+        or (${table.providerThreadId} is not null and ${table.providerRunId} is not null)`,
+    ),
+    check(
+      "execution_runs_usage_check",
+      sql`${table.usagePresent} in (0, 1)
+        and (${table.inputTokens} is null or (typeof(${table.inputTokens}) = 'integer' and ${table.inputTokens} between 0 and 9007199254740991))
+        and (${table.cachedInputTokens} is null or (typeof(${table.cachedInputTokens}) = 'integer' and ${table.cachedInputTokens} between 0 and 9007199254740991))
+        and (${table.outputTokens} is null or (typeof(${table.outputTokens}) = 'integer' and ${table.outputTokens} between 0 and 9007199254740991))
+        and (${table.reasoningTokens} is null or (typeof(${table.reasoningTokens}) = 'integer' and ${table.reasoningTokens} between 0 and 9007199254740991))
+        and (${table.totalTokens} is null or (typeof(${table.totalTokens}) = 'integer' and ${table.totalTokens} between 0 and 9007199254740991))
+        and (${table.runtimeSeconds} is null or (typeof(${table.runtimeSeconds}) in ('integer', 'real') and ${table.runtimeSeconds} >= 0))
+        and (${table.toolCallCount} is null or (typeof(${table.toolCallCount}) = 'integer' and ${table.toolCallCount} between 0 and 9007199254740991))
+        and (${table.inputTokens} is null or ${table.outputTokens} is null or ${table.totalTokens} is null
+          or ${table.totalTokens} = ${table.inputTokens} + ${table.outputTokens})
+        and (${table.usagePresent} = 1
+          or (${table.inputTokens} is null
+            and ${table.cachedInputTokens} is null
+            and ${table.outputTokens} is null
+            and ${table.reasoningTokens} is null
+            and ${table.totalTokens} is null
+            and ${table.runtimeSeconds} is null
+            and ${table.toolCallCount} is null))`,
+    ),
+    check(
+      "execution_runs_lifecycle_check",
+      sql`(${table.status} = 'CREATED'
+          and ${table.providerThreadId} is null
+          and ${table.providerRunId} is null
+          and ${table.providerModelId} is null
+          and ${table.usagePresent} = 0
+          and ${table.inputTokens} is null
+          and ${table.cachedInputTokens} is null
+          and ${table.outputTokens} is null
+          and ${table.reasoningTokens} is null
+          and ${table.totalTokens} is null
+          and ${table.runtimeSeconds} is null
+          and ${table.toolCallCount} is null
+          and ${table.startedAt} is null
+          and ${table.endedAt} is null
+          and ${table.updatedAt} = ${table.createdAt})
+        or (${table.status} = 'RUNNING'
+          and ${table.providerThreadId} is not null
+          and ${table.providerRunId} is not null
+          and ${table.startedAt} is not null
+          and ${table.endedAt} is null
+          and ${table.usagePresent} = 0
+          and ${table.inputTokens} is null
+          and ${table.cachedInputTokens} is null
+          and ${table.outputTokens} is null
+          and ${table.reasoningTokens} is null
+          and ${table.totalTokens} is null
+          and ${table.runtimeSeconds} is null
+          and ${table.toolCallCount} is null
+          and ${table.updatedAt} = ${table.startedAt})
+        or (${table.status} in ('SUCCEEDED', 'FAILED', 'INTERRUPTED')
+          and ${table.endedAt} is not null
+          and ${table.updatedAt} = ${table.endedAt}
+          and ((${table.startedAt} is null
+              and ${table.status} = 'FAILED'
+              and ${table.providerThreadId} is null
+              and ${table.providerRunId} is null
+              and ${table.providerModelId} is null
+              and ${table.usagePresent} = 0
+              and ${table.inputTokens} is null
+              and ${table.cachedInputTokens} is null
+              and ${table.outputTokens} is null
+              and ${table.reasoningTokens} is null
+              and ${table.totalTokens} is null
+              and ${table.runtimeSeconds} is null
+              and ${table.toolCallCount} is null)
+            or (${table.startedAt} is not null
+              and ${table.providerThreadId} is not null
+              and ${table.providerRunId} is not null)))`,
     ),
   ],
 );
