@@ -11,6 +11,7 @@
     }
   },
   "dependencies": {
-    "@codex-task-console/domain": "workspace:*"
+    "@codex-task-console/domain": "workspace:*",
+    "@codex-task-console/storage": "workspace:*"
   }
 }

@@ -126,14 +126,24 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-CLITE-FQA-002: CLOSED
 - C-lite ACCEPTED: YES
 - Tested Codex: `codex-cli 0.148.0-alpha.9`
-- Live execution: BLOCKED / NOT STARTED
+- Single-Subtask Live Codex App Server Execution V0: IMPLEMENTED
+- Deterministic baseline: PASS
+- Real ChatGPT-authenticated ephemeral read-only smoke: PASS
+- Real model turn count: 1
+- Codex usage consumed: YES — bounded smoke only
+- App Server stdio lifecycle: PASS
+- ChatGPT auth gate: PASS
+- API-key fallback: NONE
+- Execution Input Preflight binding: PASS
+- Live persistence: NOT IMPLEMENTED
+- Worktree execution: NOT IMPLEMENTED
+- Lifecycle orchestration: NOT IMPLEMENTED
+- Comprehensive Hardening: PENDING
+- Live Execution V0 ACCEPTED: NO
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next safe task:** Single-Subtask Live Codex App Server Execution V0
-
-- Return to ChatGPT for separate approval and execution planning.
-- Keep live execution blocked until that task is explicitly approved.
+**Next safe task:** Single-Subtask Live Execution V0 Comprehensive Hardening
 
 Hanlin manual QA: NOT REQUIRED
 
@@ -147,7 +157,7 @@ Hanlin manual QA: NOT REQUIRED
 - accepted Promoted Context retrieval or injection
 - Digest integration or raw-history injection
 - token-based pre-execution metering or automatic budget pruning
-- provider serialization or live Codex App Server execution
+- accepted production live Codex App Server execution beyond the bounded V0 path
 - execution/thread/run persistence
 - trusted deterministic evidence producer/verifier or automatic deterministic `ENGINEERING_FACT` acceptance
 - trusted human-action controller/UI command

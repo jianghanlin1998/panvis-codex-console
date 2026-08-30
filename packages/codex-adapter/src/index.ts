@@ -90,7 +90,19 @@ export type {
 export {
   CODEX_APP_SERVER_PROVIDER_DESCRIPTOR,
   CODEX_APP_SERVER_PROVIDER_ID,
+  mapCodexModelReference,
   mapCodexThreadReference,
   mapCodexTokenUsage,
   mapCodexTurnReference,
 } from "./provider.js";
+
+export {
+  LIVE_CODEX_EXECUTION_FAILURE_CODES,
+  executeSingleSubtaskLiveCodex,
+} from "./live-execution.js";
+export type {
+  LiveCodexExecutionDiagnostics,
+  LiveCodexExecutionFailureCode,
+  LiveCodexExecutionResult,
+  LiveCodexExecutionSuccess,
+} from "./live-execution.js";

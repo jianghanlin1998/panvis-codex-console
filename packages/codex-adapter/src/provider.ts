@@ -2,6 +2,7 @@ import {
   ExecutionProviderDescriptorSchema,
   ExecutionProviderIdSchema,
   NormalizedUsageSchema,
+  ProviderModelReferenceSchema,
   ProviderRunReferenceSchema,
   ProviderThreadReferenceSchema,
 } from "@codex-task-console/domain";
@@ -9,6 +10,7 @@ import type {
   ExecutionProviderDescriptor,
   ExecutionProviderId,
   NormalizedUsage,
+  ProviderModelReference,
   ProviderRunReference,
   ProviderThreadReference,
 } from "@codex-task-console/domain";
@@ -50,6 +52,13 @@ export function mapCodexTurnReference(
     providerId: CODEX_APP_SERVER_PROVIDER_ID,
     providerRunId: providerTurnId,
     providerThreadId,
+  });
+}
+
+export function mapCodexModelReference(providerModelId: string): ProviderModelReference {
+  return ProviderModelReferenceSchema.parse({
+    providerId: CODEX_APP_SERVER_PROVIDER_ID,
+    providerModelId,
   });
 }
 

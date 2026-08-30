@@ -35,6 +35,9 @@ importers:
       '@codex-task-console/domain':
         specifier: workspace:*
         version: link:../domain
+      '@codex-task-console/storage':
+        specifier: workspace:*
+        version: link:../storage
 
   packages/domain:
     dependencies:

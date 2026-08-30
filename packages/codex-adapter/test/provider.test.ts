@@ -8,6 +8,7 @@ import {
   CODEX_APP_SERVER_PROVIDER_ID,
   EXCLUDED_EXPERIMENTAL_CAPABILITIES,
   TESTED_CODEX_VERSION,
+  mapCodexModelReference,
   mapCodexThreadReference,
   mapCodexTokenUsage,
   mapCodexTurnReference,
@@ -82,6 +83,13 @@ describe("Codex provider mappings", () => {
     });
   });
 
+  it("maps a Codex model to the provider-neutral model reference", () => {
+    expect(mapCodexModelReference("fixture-model-live")).toEqual({
+      providerId: "codex-app-server",
+      providerModelId: "fixture-model-live",
+    });
+  });
+
   it("maps S0C token usage without mutation or fabricated fields", () => {
     const before = structuredClone(fixtureUsage);
     expect(mapCodexTokenUsage(fixtureUsage)).toEqual({
@@ -141,6 +149,7 @@ describe("provider dependency direction", () => {
     );
     expect(adapterPackage.dependencies).toMatchObject({
       "@codex-task-console/domain": "workspace:*",
+      "@codex-task-console/storage": "workspace:*",
     });
   });
 });
