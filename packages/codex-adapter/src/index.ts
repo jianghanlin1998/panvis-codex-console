@@ -9,6 +9,16 @@ export type {
   ProtocolCompatibilityRecord,
 } from "./compatibility.js";
 
+export {
+  C_LITE_COMPATIBILITY_FAILURE_CODES,
+  checkOwnedCodexCompatibility,
+} from "./c-lite-compatibility.js";
+export type {
+  CLiteCompatibilityCheckOptions,
+  CLiteCompatibilityFailureCode,
+  CLiteCompatibilityResult,
+} from "./c-lite-compatibility.js";
+
 export { CODEX_ADAPTER_ERROR_CODES, CodexAdapterError } from "./errors.js";
 export type { CodexAdapterErrorCode } from "./errors.js";
 

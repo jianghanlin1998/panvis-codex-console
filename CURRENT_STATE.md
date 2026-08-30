@@ -115,25 +115,23 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - External `--version` side-effect finding: CLOSED
 - Runtime Ownership Focused Fresh Re-QA: PASS
 - Runtime Ownership ACCEPTED: YES
-- C-lite Compatibility Check V0: NOT STARTED — dependency-eligible from the Runtime Ownership side
+- C-lite Compatibility Check V0: IMPLEMENTED
+- C-lite baseline deterministic tests: PASS
+- C-lite owned-candidate `.9` schema-only compatibility check: PASS
+- C-lite Comprehensive Hardening: PENDING
+- C-lite ACCEPTED: NO
 - Codex App Server 0.148 Compatibility Revalidation: HARDENED
 - Codex App Server 0.148 Compatibility Revalidation / Bounded Hardening: PASS
-- Codex App Server 0.148 Fresh Independent Compatibility QA: FAIL — prior run, timeout blockers repaired
-- Codex App Server 0.148 compatibility evidence: PASS; prior Fresh QA failed only on unrelated regression-timeout blockers
-- CTC-COMPAT-FQA-001: CLOSED pending Fresh Re-QA
-- CTC-COMPAT-FQA-002: CLOSED pending Fresh Re-QA
-- Codex App Server 0.148 Focused Fresh Compatibility Re-QA: PENDING; the latest attempt was interrupted because the ambient ChatGPT bundle drifted from `.9` to `.15` before runtime ownership existed
+- Codex App Server 0.148 historical compatibility evidence: PASS
 - Codex App Server 0.148 Compatibility ACCEPTED: NO
 - Tested Codex: `codex-cli 0.148.0-alpha.9`
 - Live execution: BLOCKED
 - Runtime preflight: self-recovering compatible bundled Node / verified pnpm 11 range.
 
 ## Next safe task
-**Next product-direction step:** Edict-inspired Governed Autonomy / Master Scope & Direction V2 revision
+**Next safe task:** C-lite Comprehensive Hardening
 
-**Next engineering dependency after product-direction reconciliation:** C-lite Compatibility Check V0
-
-- C-lite has not started.
+- Treat this implementation as baseline evidence, not acceptance.
 - Keep the owned candidate inactive and live execution blocked.
 
 Hanlin manual QA: NOT REQUIRED
