@@ -59,6 +59,9 @@ const acceptedProviderRunUniquenessMigration = fileURLToPath(
 const acceptedWorktreeMigration = fileURLToPath(
   new URL("../drizzle/20260830175200_acoustic_scream", import.meta.url),
 );
+const checkoutGenerationRepairMigration = fileURLToPath(
+  new URL("../drizzle/20260831044031_tired_riptide", import.meta.url),
+);
 
 describe("database lifecycle and migrations", () => {
   it("migrates a fresh in-memory database", () => {
@@ -98,6 +101,7 @@ describe("database lifecycle and migrations", () => {
           "subtask_implementation_checkpoints",
           "subtasks",
           "task_dependencies",
+          "worktree_checkout_generations",
           "worktree_ownerships",
         ]);
       } finally {
@@ -116,7 +120,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(8);
+        expect(row.count).toBe(9);
       } finally {
         sqlite.close();
       }
@@ -133,7 +137,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(8);
+        expect(row.count).toBe(9);
       } finally {
         sqlite.close();
       }
@@ -708,9 +712,190 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           after.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 8 });
+        ).toEqual({ count: 9 });
       } finally {
         after.close();
+      }
+    });
+  });
+
+  it("upgrades the acoustic_scream boundary without fabricating checkout-generation evidence", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const priorMigrations = join(
+        dirname(databasePath),
+        "prior-checkout-generation-repair",
+      );
+      mkdirSync(priorMigrations);
+      for (const migration of [
+        acceptedS0B1Migration,
+        acceptedS0B2aMigration,
+        acceptedS0B2bMigration,
+        acceptedS1aMigration,
+        acceptedS1b2aMigration,
+        acceptedDurableExecutionMigration,
+        acceptedProviderRunUniquenessMigration,
+        acceptedWorktreeMigration,
+      ]) {
+        cpSync(migration, join(priorMigrations, basename(migration)), {
+          recursive: true,
+        });
+      }
+
+      const prior = openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: priorMigrations,
+      });
+      const project = makeProject("prj_generation_upgrade", "generation-upgrade");
+      const bigTask = makeBigTask("bt_generation_upgrade", project.id);
+      const activeSubtask = makeSubtask(
+        "st_generation_active",
+        bigTask.id,
+        "IN_PROGRESS",
+      );
+      const releasedSubtask = makeSubtask(
+        "st_generation_released",
+        bigTask.id,
+        "IN_PROGRESS",
+      );
+      prior.createProject(project);
+      prior.createBigTask(bigTask);
+      prior.createSubtask(activeSubtask);
+      prior.createSubtask(releasedSubtask);
+      prior.close();
+
+      const activeId = `wt_${"a".repeat(32)}`;
+      const releasedId = `wt_${"b".repeat(32)}`;
+      const timestamp = fixedClock().toISOString();
+      const beforeMigration = new DatabaseSync(databasePath);
+      try {
+        const insert = beforeMigration.prepare(
+          `INSERT INTO worktree_ownerships (
+             id, project_id, subtask_id, status, worktree_path, branch_name,
+             starting_commit_sha, release_head_sha, created_at, activated_at,
+             release_started_at, released_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        insert.run(
+          activeId,
+          project.id,
+          activeSubtask.id,
+          "ACTIVE",
+          `/synthetic/owned/${activeId}`,
+          `ctc/worktree/${activeId}`,
+          "1".repeat(40),
+          null,
+          timestamp,
+          timestamp,
+          null,
+          null,
+          timestamp,
+        );
+        insert.run(
+          releasedId,
+          project.id,
+          releasedSubtask.id,
+          "RELEASED",
+          `/synthetic/owned/${releasedId}`,
+          `ctc/worktree/${releasedId}`,
+          "2".repeat(40),
+          "3".repeat(40),
+          timestamp,
+          timestamp,
+          timestamp,
+          timestamp,
+          timestamp,
+        );
+      } finally {
+        beforeMigration.close();
+      }
+
+      const priorRead = new DatabaseSync(databasePath, { readOnly: true });
+      const ownershipRows = priorRead
+        .prepare("SELECT * FROM worktree_ownerships ORDER BY id")
+        .all();
+      expect(
+        priorRead.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
+      ).toEqual({ count: 8 });
+      priorRead.close();
+
+      openTaskDatabase({ databasePath, clock: fixedClock }).close();
+      const migrated = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          migrated.prepare("SELECT * FROM worktree_ownerships ORDER BY id").all(),
+        ).toEqual(ownershipRows);
+        expect(
+          migrated
+            .prepare("SELECT count(*) AS count FROM worktree_checkout_generations")
+            .get(),
+        ).toEqual({ count: 0 });
+        expect(
+          migrated.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
+        ).toEqual({ count: 9 });
+      } finally {
+        migrated.close();
+      }
+    });
+  });
+
+  it("rolls back the checkout-generation migration on collision and preserves the prior ledger", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const priorMigrations = join(
+        dirname(databasePath),
+        "collision-prior-checkout-generation",
+      );
+      mkdirSync(priorMigrations);
+      for (const migration of [
+        acceptedS0B1Migration,
+        acceptedS0B2aMigration,
+        acceptedS0B2bMigration,
+        acceptedS1aMigration,
+        acceptedS1b2aMigration,
+        acceptedDurableExecutionMigration,
+        acceptedProviderRunUniquenessMigration,
+        acceptedWorktreeMigration,
+      ]) {
+        cpSync(migration, join(priorMigrations, basename(migration)), {
+          recursive: true,
+        });
+      }
+      openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: priorMigrations,
+      }).close();
+
+      const collision = new DatabaseSync(databasePath);
+      collision.exec(
+        "CREATE TABLE worktree_checkout_generations (collision_sentinel TEXT NOT NULL)",
+      );
+      collision.close();
+
+      let thrown: unknown;
+      try {
+        openTaskDatabase({
+          databasePath,
+          clock: fixedClock,
+          migrationsFolder: dirname(checkoutGenerationRepairMigration),
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TaskStorageError);
+      expect(thrown).toMatchObject({ code: "MIGRATION_FAILED" });
+      expect((thrown as Error).message).toBe("Task database migration failed.");
+
+      const verified = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          verified.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
+        ).toEqual({ count: 8 });
+        expect(
+          verified.prepare("PRAGMA table_info(worktree_checkout_generations)").all(),
+        ).toEqual([expect.objectContaining({ name: "collision_sentinel" })]);
+      } finally {
+        verified.close();
       }
     });
   });

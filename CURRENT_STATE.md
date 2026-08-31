@@ -176,17 +176,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Worktree migration/reopen/corruption matrix: PASS
 - Worktree provisioning/release/recovery matrix: PASS
 - Worktree concurrency/slot matrix: PASS
-- All blocking CTC-WORKTREE-HARD-* findings: CLOSED
+- Worktree Ownership Fresh Independent QA on `b551278ad89a474c952afd4befef81fbee5337d0`: FAIL — historical result
+- CTC-WORKTREE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
+- CTC-WORKTREE-HARD-001: superseded/closed by the stronger repaired physical-generation regression
+- CTC-WORKTREE-HARD-002: CLOSED
+- CTC-WORKTREE-HARD-003: CLOSED
+- CTC-WORKTREE-HARD-004: CLOSED
 - Real target worktree use: NO
 - Write-Enabled Execution Authority Binding V0: NOT IMPLEMENTED
 - Live Execution V0 remains ACCEPTED and read-only
 - Durable Persistence V0 remains ACCEPTED
-- Worktree Ownership Fresh Independent QA: PENDING
+- Worktree Ownership Focused Fresh Re-QA for CTC-WORKTREE-FQA-001: PENDING
 - Worktree Ownership ACCEPTED: NO
 - Roadmap Step 5 overall: PARTIAL
 
 ## Next safe task
-**Next safe task:** Git Worktree Ownership & Provisioning V0 Fresh Independent QA.
+**Next safe task:** new-chat Focused Fresh Re-QA for CTC-WORKTREE-FQA-001.
 
 Hanlin manual QA: NOT REQUIRED
 

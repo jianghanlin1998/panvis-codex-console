@@ -1598,7 +1598,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         .map((row) => (row as { readonly name: string }).name);
       sqliteAfter.close();
       expect(schemaAfter).toBe(schemaBefore);
-      expect(migrationCount.count).toBe(8);
+      expect(migrationCount.count).toBe(9);
       expect(tables).toEqual([
         "__drizzle_migrations",
         "audit_events",
@@ -1611,6 +1611,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         "subtask_implementation_checkpoints",
         "subtasks",
         "task_dependencies",
+        "worktree_checkout_generations",
         "worktree_ownerships",
       ]);
       expect(applicationRows(databasePath)).toBe(beforeRows);

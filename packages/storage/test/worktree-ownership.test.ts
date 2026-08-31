@@ -930,6 +930,7 @@ describe("Git Worktree Ownership & Provisioning V0", () => {
     expect(storagePackage.WorktreeOwnershipError).toBe(WorktreeOwnershipError);
     expect("createWorktreeOwnershipManagerForTesting" in storagePackage).toBe(false);
     expect("parseRegisteredWorktreesForTesting" in storagePackage).toBe(false);
+    expect("worktreeCheckoutGenerationsTable" in storagePackage).toBe(false);
     expect("worktreeOwnershipsTable" in storagePackage).toBe(false);
 
     const scenario = createScenario();

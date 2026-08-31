@@ -93,6 +93,7 @@ export interface WorktreeOwnershipManager {
 interface WorktreeOwnershipFailureHooks {
   readonly beforeReservation?: () => void;
   readonly beforeGitAdd?: () => void;
+  readonly beforeGenerationEvidencePersist?: () => void;
   readonly afterGitAdd?: () => void;
   readonly beforeGitRemove?: () => void;
   readonly afterGitRemove?: () => void;
@@ -113,6 +114,10 @@ interface ManagerDependencies {
 interface RepositoryIdentity {
   readonly device: bigint;
   readonly inode: bigint;
+}
+
+interface PhysicalGenerationIdentity extends RepositoryIdentity {
+  readonly birthtimeNanoseconds: bigint;
 }
 
 interface VerifiedPath {
@@ -158,6 +163,21 @@ interface OwnershipRow {
   readonly release_started_at: string | null;
   readonly released_at: string | null;
   readonly updated_at: string;
+}
+
+interface CheckoutGenerationEvidence {
+  readonly gitDirectory: PhysicalGenerationIdentity;
+  readonly marker: PhysicalGenerationIdentity;
+}
+
+interface CheckoutGenerationRow {
+  readonly ownership_id: string;
+  readonly git_admin_device: string;
+  readonly git_admin_inode: string;
+  readonly git_admin_birthtime_ns: string;
+  readonly marker_device: string;
+  readonly marker_inode: string;
+  readonly marker_birthtime_ns: string;
 }
 
 const ownershipError = (
@@ -221,10 +241,31 @@ const readIdentity = (path: string): RepositoryIdentity => {
   });
 };
 
+const readPhysicalGenerationIdentity = (
+  path: string,
+): PhysicalGenerationIdentity => {
+  const observation = statSync(path, { bigint: true });
+  if (!observation.isDirectory()) {
+    throw new Error("not a directory");
+  }
+  return Object.freeze({
+    device: observation.dev,
+    inode: observation.ino,
+    birthtimeNanoseconds: observation.birthtimeNs,
+  });
+};
+
 const identitiesEqual = (
   left: RepositoryIdentity,
   right: RepositoryIdentity,
 ): boolean => left.device === right.device && left.inode === right.inode;
+
+const physicalGenerationIdentitiesEqual = (
+  left: PhysicalGenerationIdentity,
+  right: PhysicalGenerationIdentity,
+): boolean =>
+  identitiesEqual(left, right) &&
+  left.birthtimeNanoseconds === right.birthtimeNanoseconds;
 
 const assertPathIdentity = (path: VerifiedPath): void => {
   try {
@@ -911,6 +952,7 @@ const transitionOwnership = (
     let result;
     switch (`${from}->${to}`) {
       case "PROVISIONING->ACTIVE":
+        requireCheckoutGenerationEvidence(access, id);
         result = access.sqlite
           .prepare(
             "UPDATE worktree_ownerships SET status = 'ACTIVE', activated_at = ?, updated_at = ? WHERE id = ? AND status = 'PROVISIONING'",
@@ -988,6 +1030,104 @@ const selectCurrentOwnership = (
     : parseOwnershipRow(terminal, configuredRoot);
 };
 
+const parseStoredIdentityComponent = (value: string): bigint => {
+  if (!/^(?:0|[1-9][0-9]{0,19})$/.test(value)) {
+    throw ownershipError(
+      "MALFORMED_STORED_OWNERSHIP",
+      "Stored worktree checkout-generation evidence is malformed.",
+    );
+  }
+  return BigInt(value);
+};
+
+const selectCheckoutGenerationEvidence = (
+  access: TaskStorageWorktreeAccess,
+  ownershipId: WorktreeOwnershipId,
+): CheckoutGenerationEvidence | null => {
+  const row = access.sqlite
+    .prepare("SELECT * FROM worktree_checkout_generations WHERE ownership_id = ?")
+    .get(ownershipId) as CheckoutGenerationRow | undefined;
+  if (row === undefined) {
+    return null;
+  }
+  if (row.ownership_id !== ownershipId) {
+    throw ownershipError(
+      "MALFORMED_STORED_OWNERSHIP",
+      "Stored worktree checkout-generation evidence is malformed.",
+    );
+  }
+  return Object.freeze({
+    gitDirectory: Object.freeze({
+      device: parseStoredIdentityComponent(row.git_admin_device),
+      inode: parseStoredIdentityComponent(row.git_admin_inode),
+      birthtimeNanoseconds: parseStoredIdentityComponent(
+        row.git_admin_birthtime_ns,
+      ),
+    }),
+    marker: Object.freeze({
+      device: parseStoredIdentityComponent(row.marker_device),
+      inode: parseStoredIdentityComponent(row.marker_inode),
+      birthtimeNanoseconds: parseStoredIdentityComponent(
+        row.marker_birthtime_ns,
+      ),
+    }),
+  });
+};
+
+const requireCheckoutGenerationEvidence = (
+  access: TaskStorageWorktreeAccess,
+  ownershipId: WorktreeOwnershipId,
+): CheckoutGenerationEvidence => {
+  const evidence = selectCheckoutGenerationEvidence(access, ownershipId);
+  if (evidence === null) {
+    throw ownershipError(
+      "OWNERSHIP_DRIFT",
+      "The owned worktree checkout generation lacks durable authority evidence.",
+    );
+  }
+  return evidence;
+};
+
+const persistCheckoutGenerationEvidence = (
+  access: TaskStorageWorktreeAccess,
+  ownership: WorktreeOwnership,
+  evidence: CheckoutGenerationEvidence,
+  configuredRoot: string,
+): CheckoutGenerationEvidence =>
+  withImmediateTransaction(access, () => {
+    const current = selectOwnershipById(access, ownership.id, configuredRoot);
+    if (current.status !== "PROVISIONING") {
+      throw ownershipError(
+        "OWNERSHIP_CONFLICT",
+        "Checkout-generation evidence can only be established while provisioning.",
+      );
+    }
+    const result = access.sqlite
+      .prepare(
+        `INSERT INTO worktree_checkout_generations (
+           ownership_id, git_admin_device, git_admin_inode,
+           git_admin_birthtime_ns, marker_device, marker_inode,
+           marker_birthtime_ns
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        ownership.id,
+        evidence.gitDirectory.device.toString(),
+        evidence.gitDirectory.inode.toString(),
+        evidence.gitDirectory.birthtimeNanoseconds.toString(),
+        evidence.marker.device.toString(),
+        evidence.marker.inode.toString(),
+        evidence.marker.birthtimeNanoseconds.toString(),
+      );
+    if (result.changes !== 1) {
+      throw ownershipError(
+        "STORAGE_UNAVAILABLE",
+        "The worktree checkout-generation evidence could not be stored.",
+      );
+    }
+    return requireCheckoutGenerationEvidence(access, ownership.id);
+  });
+
 const assertGeneratedBranchIsAbsent = (
   repository: VerifiedRepository,
   branchName: string,
@@ -1041,6 +1181,7 @@ const assertStoredPathIsDerived = (
 
 interface CheckoutIdentityEvidence {
   readonly sourceHeadReference: string | null;
+  readonly generation: CheckoutGenerationEvidence;
 }
 
 const encodeHeadReference = (reference: string | null): string =>
@@ -1092,6 +1233,7 @@ const assertCheckoutIdentityMarker = (
   source: VerifiedRepository,
   ownedRepository: VerifiedRepository,
   ownership: WorktreeOwnership,
+  expectedGeneration: CheckoutGenerationEvidence | null = null,
 ): CheckoutIdentityEvidence => {
   assertOwnedGitAdministrativeDirectory(source, ownedRepository);
   assertPathIdentity(ownedRepository.gitDirectory);
@@ -1141,6 +1283,7 @@ const assertCheckoutIdentityMarker = (
     if (
       before.dev !== after.dev ||
       before.ino !== after.ino ||
+      before.birthtimeNs !== after.birthtimeNs ||
       before.size !== after.size ||
       fields.length !== 9 ||
       fields[0] !== "ctc-worktree-ownership-v0" ||
@@ -1154,8 +1297,31 @@ const assertCheckoutIdentityMarker = (
     ) {
       throw new Error("marker drift");
     }
+    const generation = Object.freeze({
+      gitDirectory: readPhysicalGenerationIdentity(
+        ownedRepository.gitDirectory.path,
+      ),
+      marker: Object.freeze({
+        device: before.dev,
+        inode: before.ino,
+        birthtimeNanoseconds: before.birthtimeNs,
+      }),
+    });
+    if (
+      expectedGeneration !== null &&
+      (!physicalGenerationIdentitiesEqual(
+        generation.gitDirectory,
+        expectedGeneration.gitDirectory,
+      ) ||
+        !physicalGenerationIdentitiesEqual(
+          generation.marker,
+          expectedGeneration.marker,
+        ))
+    ) {
+      throw new Error("physical generation drift");
+    }
     assertPathIdentity(ownedRepository.gitDirectory);
-    return Object.freeze({ sourceHeadReference });
+    return Object.freeze({ sourceHeadReference, generation });
   } catch {
     throw ownershipError(
       "OWNERSHIP_DRIFT",
@@ -1176,7 +1342,7 @@ const installCheckoutIdentityMarker = (
   source: VerifiedRepository,
   root: VerifiedPath,
   ownership: WorktreeOwnership,
-): void => {
+): CheckoutIdentityEvidence => {
   assertPathIdentity(root);
   assertPathIdentity(source.commonDirectory);
   const ownedRepository = resolveVerifiedRepository(ownership.worktreePath);
@@ -1206,9 +1372,14 @@ const installCheckoutIdentityMarker = (
       "The owned worktree checkout identity could not be established safely.",
     );
   }
-  assertCheckoutIdentityMarker(source, ownedRepository, ownership);
+  const evidence = assertCheckoutIdentityMarker(
+    source,
+    ownedRepository,
+    ownership,
+  );
   assertPathIdentity(root);
   assertPathIdentity(source.commonDirectory);
+  return evidence;
 };
 
 const observeExactOwnedWorktree = (
@@ -1216,7 +1387,7 @@ const observeExactOwnedWorktree = (
   root: VerifiedPath,
   ownership: WorktreeOwnership,
   requireStartingHead: boolean,
-  requireCheckoutIdentity = true,
+  expectedGeneration: CheckoutGenerationEvidence | null,
   requireStableSourceCheckout = false,
 ): RepositoryCommitSha => {
   assertPathIdentity(root);
@@ -1268,11 +1439,12 @@ const observeExactOwnedWorktree = (
       "The owned worktree belongs to a different Git repository.",
     );
   }
-  if (requireCheckoutIdentity) {
+  if (expectedGeneration !== null) {
     const checkoutIdentity = assertCheckoutIdentityMarker(
       source,
       ownedRepository,
       ownership,
+      expectedGeneration,
     );
     if (
       requireStableSourceCheckout &&
@@ -1463,10 +1635,28 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
           "The owned worktree could not be created.",
         );
       }
-      observeExactOwnedWorktree(source, worktreeRoot, persisted, true, false);
-      installCheckoutIdentityMarker(source, worktreeRoot, persisted);
+      observeExactOwnedWorktree(source, worktreeRoot, persisted, true, null);
+      const installedIdentity = installCheckoutIdentityMarker(
+        source,
+        worktreeRoot,
+        persisted,
+      );
+      this.#dependencies.failureHooks.beforeGenerationEvidencePersist?.();
+      const durableGeneration = persistCheckoutGenerationEvidence(
+        access,
+        persisted,
+        installedIdentity.generation,
+        this.#dependencies.worktreeRoot,
+      );
       this.#dependencies.failureHooks.afterGitAdd?.();
-      observeExactOwnedWorktree(source, worktreeRoot, persisted, true, true, true);
+      observeExactOwnedWorktree(
+        source,
+        worktreeRoot,
+        persisted,
+        true,
+        durableGeneration,
+        true,
+      );
       const stableSource = resolveVerifiedRepository(hierarchy.project.repository.path);
       if (
         stableSource.head !== persisted.startingCommitSha ||
@@ -1561,11 +1751,13 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
     }
     const worktreeRoot = verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot);
     const source = resolveVerifiedRepository(hierarchy.project.repository.path);
+    const generation = requireCheckoutGenerationEvidence(access, current.id);
     const currentHeadSha = observeExactOwnedWorktree(
       source,
       worktreeRoot,
       current,
       false,
+      generation,
     );
     return freezeRecursively({ ownership: current, currentHeadSha });
   }
@@ -1608,6 +1800,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
         verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot),
         releasing,
         false,
+        requireCheckoutGenerationEvidence(access, releasing.id),
       );
       if (
         preRemovalHead !== releasing.releaseHeadSha ||
@@ -1709,7 +1902,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
             worktreeRoot,
             current,
             true,
-            true,
+            requireCheckoutGenerationEvidence(access, current.id),
             true,
           );
         } catch {
@@ -1749,7 +1942,13 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
         );
       }
       if (state.exists && state.registeredCount === 1) {
-        const head = observeExactOwnedWorktree(source, worktreeRoot, current, false);
+        const head = observeExactOwnedWorktree(
+          source,
+          worktreeRoot,
+          current,
+          false,
+          requireCheckoutGenerationEvidence(access, current.id),
+        );
         if (head !== current.releaseHeadSha) {
           throw ownershipError(
             "OWNERSHIP_DRIFT",
@@ -1763,7 +1962,13 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       );
     }
 
-    observeExactOwnedWorktree(source, worktreeRoot, current, false);
+    observeExactOwnedWorktree(
+      source,
+      worktreeRoot,
+      current,
+      false,
+      requireCheckoutGenerationEvidence(access, current.id),
+    );
     return current;
   }
 

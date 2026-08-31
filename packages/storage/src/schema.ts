@@ -218,6 +218,47 @@ export const worktreeOwnershipsTable = sqliteTable(
   ],
 );
 
+export const worktreeCheckoutGenerationsTable = sqliteTable(
+  "worktree_checkout_generations",
+  {
+    ownershipId: text("ownership_id")
+      .primaryKey()
+      .references(() => worktreeOwnershipsTable.id, {
+        onDelete: "restrict",
+        onUpdate: "cascade",
+      }),
+    gitAdminDevice: text("git_admin_device").notNull(),
+    gitAdminInode: text("git_admin_inode").notNull(),
+    gitAdminBirthtimeNs: text("git_admin_birthtime_ns").notNull(),
+    markerDevice: text("marker_device").notNull(),
+    markerInode: text("marker_inode").notNull(),
+    markerBirthtimeNs: text("marker_birthtime_ns").notNull(),
+  },
+  (table) => [
+    check(
+      "worktree_checkout_generations_identity_check",
+      sql`length(${table.gitAdminDevice}) between 1 and 20
+        and ${table.gitAdminDevice} not glob '*[^0-9]*'
+        and (length(${table.gitAdminDevice}) = 1 or substr(${table.gitAdminDevice}, 1, 1) != '0')
+        and length(${table.gitAdminInode}) between 1 and 20
+        and ${table.gitAdminInode} not glob '*[^0-9]*'
+        and (length(${table.gitAdminInode}) = 1 or substr(${table.gitAdminInode}, 1, 1) != '0')
+        and length(${table.gitAdminBirthtimeNs}) between 1 and 20
+        and ${table.gitAdminBirthtimeNs} not glob '*[^0-9]*'
+        and (length(${table.gitAdminBirthtimeNs}) = 1 or substr(${table.gitAdminBirthtimeNs}, 1, 1) != '0')
+        and length(${table.markerDevice}) between 1 and 20
+        and ${table.markerDevice} not glob '*[^0-9]*'
+        and (length(${table.markerDevice}) = 1 or substr(${table.markerDevice}, 1, 1) != '0')
+        and length(${table.markerInode}) between 1 and 20
+        and ${table.markerInode} not glob '*[^0-9]*'
+        and (length(${table.markerInode}) = 1 or substr(${table.markerInode}, 1, 1) != '0')
+        and length(${table.markerBirthtimeNs}) between 1 and 20
+        and ${table.markerBirthtimeNs} not glob '*[^0-9]*'
+        and (length(${table.markerBirthtimeNs}) = 1 or substr(${table.markerBirthtimeNs}, 1, 1) != '0')`,
+    ),
+  ],
+);
+
 export const chatThreadsTable = sqliteTable(
   "chat_threads",
   {
