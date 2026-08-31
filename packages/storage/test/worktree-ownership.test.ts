@@ -401,7 +401,7 @@ describe("Git Worktree Ownership & Provisioning V0", () => {
       });
       expect(
         captureOwnershipError(() => failing.provisionOwnedWorktreeForSubtask(firstId!)).code,
-      ).toBe("RECOVERY_REQUIRED");
+      ).toBe("GIT_OPERATION_FAILED");
       expect(failing.listWorktreeOwnershipHistoryForSubtask(firstId!)[0]?.status).toBe(
         "FAILED",
       );
@@ -898,6 +898,9 @@ describe("Git Worktree Ownership & Provisioning V0", () => {
         sqlite.prepare("DELETE FROM subtasks WHERE id = ?").run(subtaskId!),
       ).toThrow();
       expect(() =>
+        sqlite.prepare("DELETE FROM projects WHERE id = ?").run("prj_worktree"),
+      ).toThrow();
+      expect(() =>
         sqlite
           .prepare(
             `INSERT INTO worktree_ownerships (
@@ -926,6 +929,7 @@ describe("Git Worktree Ownership & Provisioning V0", () => {
     expect(storagePackage.createWorktreeOwnershipManager).toBeTypeOf("function");
     expect(storagePackage.WorktreeOwnershipError).toBe(WorktreeOwnershipError);
     expect("createWorktreeOwnershipManagerForTesting" in storagePackage).toBe(false);
+    expect("parseRegisteredWorktreesForTesting" in storagePackage).toBe(false);
     expect("worktreeOwnershipsTable" in storagePackage).toBe(false);
 
     const scenario = createScenario();

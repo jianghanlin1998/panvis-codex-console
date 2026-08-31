@@ -112,6 +112,10 @@ describe("WorktreeOwnership domain contract", () => {
       { ...validActive, releaseHeadSha: "2".repeat(40) },
       { ...validActive, updatedAt: releaseStartedAt },
       { ...validActive, activatedAt: "2026-08-30T23:59:00.000Z" },
+      { ...validActive, projectId: " prj_worktree" },
+      { ...validActive, subtaskId: "st_worktree " },
+      { ...validActive, createdAt: "2026-08-31T08:00:00+08:00" },
+      { ...validActive, createdAt: "2026-08-31T00:00:00Z" },
       { ...validActive, branchName: "ctc/worktree/wt_ffffffffffffffffffffffffffffffff" },
       { ...validActive, extra: true },
     ]) {
@@ -125,6 +129,9 @@ describe("WorktreeOwnership domain contract", () => {
       false,
     );
     expect(WorktreeOwnershipPathSchema.safeParse("/tmp/a\0b").success).toBe(false);
+    expect(WorktreeOwnershipPathSchema.safeParse("/tmp/a/../b").success).toBe(false);
+    expect(WorktreeOwnershipPathSchema.safeParse("/tmp//b").success).toBe(false);
+    expect(WorktreeOwnershipPathSchema.safeParse("/tmp/./b").success).toBe(false);
     expect(WorktreeOwnershipBranchSchema.parse(`ctc/worktree/${id}`)).toBe(
       `ctc/worktree/${id}`,
     );

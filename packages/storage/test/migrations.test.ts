@@ -56,6 +56,9 @@ const acceptedDurableExecutionMigration = fileURLToPath(
 const acceptedProviderRunUniquenessMigration = fileURLToPath(
   new URL("../drizzle/20260830155716_spicy_dust", import.meta.url),
 );
+const acceptedWorktreeMigration = fileURLToPath(
+  new URL("../drizzle/20260830175200_acoustic_scream", import.meta.url),
+);
 
 describe("database lifecycle and migrations", () => {
   it("migrates a fresh in-memory database", () => {
@@ -631,9 +634,39 @@ describe("database lifecycle and migrations", () => {
       const project = makeProject("prj_prior_worktree", "prior-worktree");
       const bigTask = makeBigTask("bt_prior_worktree", project.id);
       const subtask = makeSubtask("st_prior_worktree", bigTask.id, "IN_PROGRESS");
+      const upstream = makeSubtask("st_prior_worktree_upstream", bigTask.id, "TODO");
+      const dependency = makeDependency(upstream.id, subtask.id);
+      const scope = ContextScopeSchema.parse({
+        scopeType: "SUBTASK",
+        projectId: project.id,
+        bigTaskId: bigTask.id,
+        subtaskId: subtask.id,
+      });
+      const contextItem = makeContextItem("ctx_prior_worktree", scope);
+      const digest = makeContextDigest("dgt_prior_worktree", scope);
+      const auditEvent = makeAuditEvent("aud_prior_worktree", scope);
+      const checkpoint = makeImplementationCheckpoint(
+        "icp_prior_worktree",
+        subtask.id,
+      );
+      const chatThreadId = ChatThreadIdSchema.parse("thr_prior_worktree");
+      const executionRunId = ExecutionRunIdSchema.parse("run_prior_worktree");
       prior.createProject(project);
       prior.createBigTask(bigTask);
       prior.createSubtask(subtask);
+      prior.createSubtask(upstream);
+      prior.replaceDependenciesForBigTask(bigTask.id, [dependency]);
+      prior.createContextItem(contextItem);
+      prior.createContextDigest(digest);
+      prior.appendAuditEvent(auditEvent);
+      prior.completeSubtaskImplementation({ subtaskId: subtask.id, checkpoint });
+      prior.createChatThread({
+        id: chatThreadId,
+        subtaskId: subtask.id,
+        providerId: ExecutionProviderIdSchema.parse("codex-app-server"),
+      });
+      prior.createExecutionRun({ id: executionRunId, chatThreadId });
+      prior.failExecutionRunBeforeStart(executionRunId);
       prior.close();
 
       const before = new DatabaseSync(databasePath, { readOnly: true });
@@ -641,6 +674,13 @@ describe("database lifecycle and migrations", () => {
         projects: before.prepare("SELECT * FROM projects ORDER BY id").all(),
         bigTasks: before.prepare("SELECT * FROM big_tasks ORDER BY id").all(),
         subtasks: before.prepare("SELECT * FROM subtasks ORDER BY id").all(),
+        dependencies: before.prepare("SELECT * FROM task_dependencies ORDER BY upstream_subtask_id, downstream_subtask_id").all(),
+        checkpoints: before.prepare("SELECT * FROM subtask_implementation_checkpoints ORDER BY id").all(),
+        contextItems: before.prepare("SELECT * FROM context_items ORDER BY id").all(),
+        contextDigests: before.prepare("SELECT * FROM context_digests ORDER BY id").all(),
+        auditEvents: before.prepare("SELECT * FROM audit_events ORDER BY id").all(),
+        chatThreads: before.prepare("SELECT * FROM chat_threads ORDER BY id").all(),
+        executionRuns: before.prepare("SELECT * FROM execution_runs ORDER BY id").all(),
       };
       expect(
         before.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
@@ -655,6 +695,13 @@ describe("database lifecycle and migrations", () => {
           projects: after.prepare("SELECT * FROM projects ORDER BY id").all(),
           bigTasks: after.prepare("SELECT * FROM big_tasks ORDER BY id").all(),
           subtasks: after.prepare("SELECT * FROM subtasks ORDER BY id").all(),
+          dependencies: after.prepare("SELECT * FROM task_dependencies ORDER BY upstream_subtask_id, downstream_subtask_id").all(),
+          checkpoints: after.prepare("SELECT * FROM subtask_implementation_checkpoints ORDER BY id").all(),
+          contextItems: after.prepare("SELECT * FROM context_items ORDER BY id").all(),
+          contextDigests: after.prepare("SELECT * FROM context_digests ORDER BY id").all(),
+          auditEvents: after.prepare("SELECT * FROM audit_events ORDER BY id").all(),
+          chatThreads: after.prepare("SELECT * FROM chat_threads ORDER BY id").all(),
+          executionRuns: after.prepare("SELECT * FROM execution_runs ORDER BY id").all(),
         }).toEqual(exactRows);
         expect(
           after.prepare("SELECT count(*) AS count FROM worktree_ownerships").get(),
@@ -664,6 +711,77 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 8 });
       } finally {
         after.close();
+      }
+    });
+  });
+
+  it("rolls back acoustic_scream on a schema collision and keeps the prior ledger truthful", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const priorMigrations = join(dirname(databasePath), "collision-prior-worktree");
+      mkdirSync(priorMigrations);
+      for (const migration of [
+        acceptedS0B1Migration,
+        acceptedS0B2aMigration,
+        acceptedS0B2bMigration,
+        acceptedS1aMigration,
+        acceptedS1b2aMigration,
+        acceptedDurableExecutionMigration,
+        acceptedProviderRunUniquenessMigration,
+      ]) {
+        cpSync(migration, join(priorMigrations, basename(migration)), {
+          recursive: true,
+        });
+      }
+
+      const prior = openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: priorMigrations,
+      });
+      const project = makeProject("prj_worktree_collision", "worktree-collision");
+      prior.createProject(project);
+      prior.close();
+
+      const collision = new DatabaseSync(databasePath);
+      collision.exec(
+        "CREATE TABLE worktree_ownerships (collision_sentinel TEXT NOT NULL)",
+      );
+      collision.close();
+
+      let thrown: unknown;
+      try {
+        openTaskDatabase({
+          databasePath,
+          clock: fixedClock,
+          migrationsFolder: dirname(acceptedWorktreeMigration),
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TaskStorageError);
+      expect(thrown).toMatchObject({ code: "MIGRATION_FAILED" });
+      expect((thrown as Error).message).toBe("Task database migration failed.");
+
+      const verified = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          verified.prepare("SELECT id FROM projects WHERE id = ?").get(project.id),
+        ).toEqual({ id: project.id });
+        expect(
+          verified.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
+        ).toEqual({ count: 7 });
+        expect(verified.prepare("PRAGMA table_info(worktree_ownerships)").all()).toEqual([
+          expect.objectContaining({ name: "collision_sentinel" }),
+        ]);
+        expect(
+          verified
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'worktree_ownerships'",
+            )
+            .all(),
+        ).toEqual([]);
+      } finally {
+        verified.close();
       }
     });
   });

@@ -170,23 +170,23 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Accepted implementation/evidence SHA: `e2f486a8888d6d8aba8831b861adc5b0cf995047`
 - Live Execution V0 remains ACCEPTED
 - Durable persistence acceptance required no Provider/model usage.
-- Git Worktree Ownership & Provisioning V0: IMPLEMENTED
-- Worktree deterministic baseline: PASS
-- Synthetic local Git provisioning/release baseline: PASS
-- Worktree migration/reopen baseline: PASS
-- Worktree ownership/concurrency baseline: PASS
-- Worktree crash/reconcile baseline: PASS
+- Git Worktree Ownership & Provisioning V0: HARDENED
+- Worktree Ownership Comprehensive Hardening: PASS
+- Worktree replacement/drift identity matrix: PASS
+- Worktree migration/reopen/corruption matrix: PASS
+- Worktree provisioning/release/recovery matrix: PASS
+- Worktree concurrency/slot matrix: PASS
+- All blocking CTC-WORKTREE-HARD-* findings: CLOSED
 - Real target worktree use: NO
 - Write-Enabled Execution Authority Binding V0: NOT IMPLEMENTED
 - Live Execution V0 remains ACCEPTED and read-only
 - Durable Persistence V0 remains ACCEPTED
-- Worktree Ownership Comprehensive Hardening: PENDING
-- Worktree Ownership Fresh Independent QA: NOT READY — pending hardening
+- Worktree Ownership Fresh Independent QA: PENDING
 - Worktree Ownership ACCEPTED: NO
 - Roadmap Step 5 overall: PARTIAL
 
 ## Next safe task
-**Next safe task:** Git Worktree Ownership & Provisioning V0 Comprehensive Hardening.
+**Next safe task:** Git Worktree Ownership & Provisioning V0 Fresh Independent QA.
 
 Hanlin manual QA: NOT REQUIRED
 

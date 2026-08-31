@@ -1,6 +1,6 @@
 # Git Worktree Ownership & Provisioning V0
 
-Status: IMPLEMENTED baseline. Comprehensive Hardening and Fresh Independent QA remain pending. This contract establishes worktree ownership only; it does not authorize write-enabled Codex execution.
+Status: HARDENED. Comprehensive Hardening passed; Fresh Independent QA remains pending. This contract establishes worktree ownership only; it does not authorize write-enabled Codex execution.
 
 ## Authority and identity
 
@@ -8,11 +8,15 @@ Provisioning accepts one canonical Subtask ID. The Console resolves its Big Task
 
 The configured source path is resolved to its canonical real path and must be the exact local Git worktree root. Stable filesystem identity, the exact committed local `HEAD`, and the Git common-directory identity are observed around critical probes. A dirty source checkout is allowed: its tracked and untracked changes remain untouched and are not copied. The owned worktree starts from the exact committed source `HEAD` observed during provisioning.
 
+Each owned generation also installs an owner-private Console marker inside that linked worktree's Git administrative directory. The marker binds the durable ownership ID and starting SHA to the observed source-root and common-repository filesystem identities and the pre-activation source HEAD reference. ACTIVE resolution requires the administrative directory to remain the exact linked-worktree directory under the same Git common repository and requires the marker to match. Removing and recreating a worktree at the same path, branch, and common repository therefore creates a different unmarked generation and fails closed. The marker survives close/reopen, ordinary file edits, and commits, and is removed naturally by normal `git worktree remove`.
+
 Each generation receives a production-generated `wt_<32 lowercase hex>` ID. The dedicated persistent production root is:
 
 `~/Library/Application Support/Codex Task Console/worktrees/`
 
 The root must be a private, owner-only, non-symlink directory. The generated path is the strict root child named by the ownership ID, and the branch is `ctc/worktree/<ownership-id>`. Existing path, symlink, registered-worktree, durable identity, or branch collisions fail closed and are never adopted, overwritten, reset, or force-cleaned.
+
+Provisioning may create the Console-owned root. ACTIVE resolution, release, and reconciliation only verify an existing root; they never recreate missing authority state. Durable ownership readback requires canonical IDs, canonical UTC millisecond timestamps, canonical absolute paths, derived root/ID path equality, the ID-derived branch, lowercase SHAs, coherent lifecycle fields, and the canonical Project/Subtask hierarchy. Corrupt terminal history is not skipped or normalized.
 
 ## Durable lifecycle
 
@@ -26,7 +30,7 @@ The statuses and normal transitions are:
 
 `PROVISIONING`, `ACTIVE`, and `RELEASING` consume the Project's existing `maxActiveCodingSubtasks` capacity. `RELEASED` and `FAILED` are terminal and release the slot. SQLite transactionally enforces one non-terminal ownership per Subtask; the reservation transaction also revalidates the canonical hierarchy and counts Project slots. Terminal history remains durable and is listed by creation time and ID.
 
-Provisioning durably reserves `PROVISIONING` before `git worktree add`. Activation requires the exact generated path, branch, starting HEAD, common repository, source identity, and stable source HEAD. Returned records are detached and recursively frozen.
+Provisioning durably reserves `PROVISIONING` before `git worktree add`. Activation requires the exact generated path, branch, starting HEAD, common repository, source identity, checkout-generation marker, and stable source HEAD/reference. Returned records are detached and recursively frozen.
 
 ## Trusted ACTIVE resolver
 
@@ -40,12 +44,14 @@ Release requires an exact `ACTIVE` worktree with no tracked, untracked, or unmer
 
 Reconciliation is deliberately bounded because SQLite and Git cannot share one atomic transaction:
 
-- An exact pending `PROVISIONING` worktree at the reserved path, branch, starting HEAD, and common repository may become `ACTIVE`.
+- An exact pending `PROVISIONING` worktree at the reserved path, branch, starting HEAD, common repository, checkout-generation marker, and unchanged source checkout may become `ACTIVE`.
 - A pending reservation with both path and registration proven absent becomes `FAILED`; a leftover generated branch is retained.
 - A `RELEASING` record becomes `RELEASED` only when the checkout is absent/unregistered and the retained branch matches the durable release HEAD.
 - An existing exact `RELEASING` worktree remains pending; ordinary reconciliation does not pretend removal completed.
 - `ACTIVE` is validated but never auto-repaired. Terminal records are never resurrected.
 - Wrong, partial, inconsistent, or ambiguous state is preserved and requires repair intervention; no unexpected artifact is adopted or deleted.
+
+When a post-reservation failure proves both the generated path and registration absent, the reservation becomes terminal `FAILED`, releases its slot, and reports a Git operation failure rather than claiming reconciliation is required. Any partial or ambiguous external evidence preserves `PROVISIONING` and reports recovery required.
 
 ## Git and security boundary
 
@@ -53,6 +59,8 @@ Git is invoked only through fixed argument-vector operations with `shell: false`
 
 This is a local same-user V1 ownership boundary, not an adversarial-repository OS sandbox. It does not provide OS-level same-user read confinement. It grants no App Server `workspaceWrite`, writable-root serialization, provider run integration, orchestration, or execution write authority. Live Execution V0 remains read-only and continues using its disposable temporary workspace.
 
+V0 invokes the ambient `git` executable selected by the Console process PATH. Git binary provenance is not promoted into a new runtime-ownership policy by this contract; inherited `GIT_*` control variables, global/system configuration, prompting, paging, and hooks remain neutralized for each operation.
+
 ## Next maturity gate
 
-The next task is Git Worktree Ownership & Provisioning V0 Comprehensive Hardening, followed by Fresh Independent QA and explicit acceptance. Write-Enabled Execution Authority Binding V0 (roadmap Step 5B) remains out of scope until this ownership foundation is accepted.
+The next task is Git Worktree Ownership & Provisioning V0 Fresh Independent QA, followed by explicit acceptance. Write-Enabled Execution Authority Binding V0 (roadmap Step 5B) remains out of scope until this ownership foundation is accepted.

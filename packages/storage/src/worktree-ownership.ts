@@ -1,10 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  closeSync,
+  constants,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
+  readFileSync,
   realpathSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir, devNull } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -35,6 +41,7 @@ import {
 const GIT_OUTPUT_MAX_BYTES = 4 * 1_024 * 1_024;
 const GIT_TIMEOUT_MILLISECONDS = 15_000;
 const OWNERSHIP_BRANCH_PREFIX = "ctc/worktree/";
+const OWNERSHIP_MARKER_NAME = "ctc-worktree-ownership-v0";
 
 export type WorktreeOwnershipErrorCode =
   | "INVALID_SUBTASK_ID"
@@ -84,8 +91,10 @@ export interface WorktreeOwnershipManager {
 }
 
 interface WorktreeOwnershipFailureHooks {
+  readonly beforeReservation?: () => void;
   readonly beforeGitAdd?: () => void;
   readonly afterGitAdd?: () => void;
+  readonly beforeGitRemove?: () => void;
   readonly afterGitRemove?: () => void;
 }
 
@@ -114,7 +123,9 @@ interface VerifiedPath {
 interface VerifiedRepository {
   readonly root: VerifiedPath;
   readonly commonDirectory: VerifiedPath;
+  readonly gitDirectory: VerifiedPath;
   readonly head: RepositoryCommitSha;
+  readonly headReference: string | null;
 }
 
 interface GitResult {
@@ -365,6 +376,33 @@ const resolveVerifiedRepository = (configuredPath: string): VerifiedRepository =
     );
   }
 
+  const gitDirectoryResult = runLocalGit(root, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--absolute-git-dir",
+  ]);
+  if (gitDirectoryResult.status !== 0) {
+    throw ownershipError(
+      "GIT_OPERATION_FAILED",
+      "The local repository identity could not be observed.",
+    );
+  }
+  const reportedGitDirectory = decodeSingleLine(gitDirectoryResult.stdout);
+  let gitDirectoryPath: string;
+  let gitDirectoryIdentity: RepositoryIdentity;
+  try {
+    gitDirectoryPath =
+      reportedGitDirectory === null
+        ? ""
+        : realpathSync.native(reportedGitDirectory);
+    gitDirectoryIdentity = readIdentity(gitDirectoryPath);
+  } catch {
+    throw ownershipError(
+      "GIT_OPERATION_FAILED",
+      "The local repository identity could not be observed.",
+    );
+  }
+
   const headResult = runLocalGit(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
   if (headResult.status !== 0) {
     throw ownershipError(
@@ -373,13 +411,44 @@ const resolveVerifiedRepository = (configuredPath: string): VerifiedRepository =
     );
   }
   const head = parseCommitSha(decodeSingleLine(headResult.stdout));
+  const headReferenceResult = runLocalGit(root, [
+    "symbolic-ref",
+    "--quiet",
+    "HEAD",
+  ]);
+  const headReference =
+    headReferenceResult.status === 0
+      ? decodeSingleLine(headReferenceResult.stdout)
+      : headReferenceResult.status === 1 && headReferenceResult.stdout.length === 0
+        ? null
+        : undefined;
+  if (
+    headReference === undefined ||
+    (headReference !== null && !headReference.startsWith("refs/heads/"))
+  ) {
+    throw ownershipError(
+      "GIT_OPERATION_FAILED",
+      "The local repository identity could not be observed.",
+    );
+  }
   assertPathIdentity(root);
   const commonDirectory = Object.freeze({
     path: commonPath,
     identity: commonIdentity,
   });
+  const gitDirectory = Object.freeze({
+    path: gitDirectoryPath,
+    identity: gitDirectoryIdentity,
+  });
   assertPathIdentity(commonDirectory);
-  return Object.freeze({ root, commonDirectory, head });
+  assertPathIdentity(gitDirectory);
+  return Object.freeze({
+    root,
+    commonDirectory,
+    gitDirectory,
+    head,
+    headReference,
+  });
 };
 
 const parseRegisteredWorktrees = (result: GitResult): readonly RegisteredWorktree[] => {
@@ -465,6 +534,13 @@ const parseRegisteredWorktrees = (result: GitResult): readonly RegisteredWorktre
   return Object.freeze(worktrees);
 };
 
+/** Package-private parser seam; intentionally not exported from the package root. */
+export const parseRegisteredWorktreesForTesting = (
+  status: number,
+  stdout: Buffer,
+): readonly RegisteredWorktree[] =>
+  parseRegisteredWorktrees(Object.freeze({ status, stdout }));
+
 const listRegisteredWorktrees = (
   repository: VerifiedRepository,
 ): readonly RegisteredWorktree[] =>
@@ -500,10 +576,15 @@ const pathExists = (path: string): boolean => {
   }
 };
 
-const ensurePrivateOwnershipRoot = (configuredRoot: string): VerifiedPath => {
+const inspectPrivateOwnershipRoot = (
+  configuredRoot: string,
+  create: boolean,
+): VerifiedPath => {
   const expectedRoot = resolve(configuredRoot);
   try {
-    mkdirSync(expectedRoot, { recursive: true, mode: 0o700 });
+    if (create) {
+      mkdirSync(expectedRoot, { recursive: true, mode: 0o700 });
+    }
     const linkObservation = lstatSync(expectedRoot);
     const observation = statSync(expectedRoot, { bigint: true });
     const ownerMatches =
@@ -525,6 +606,12 @@ const ensurePrivateOwnershipRoot = (configuredRoot: string): VerifiedPath => {
     );
   }
 };
+
+const ensurePrivateOwnershipRoot = (configuredRoot: string): VerifiedPath =>
+  inspectPrivateOwnershipRoot(configuredRoot, true);
+
+const verifyPrivateOwnershipRoot = (configuredRoot: string): VerifiedPath =>
+  inspectPrivateOwnershipRoot(configuredRoot, false);
 
 const deriveOwnedPath = (
   root: VerifiedPath,
@@ -602,7 +689,10 @@ const timestamp = (access: TaskStorageWorktreeAccess): string => {
   }
 };
 
-const parseOwnershipRow = (row: OwnershipRow): WorktreeOwnership => {
+const parseOwnershipRow = (
+  row: OwnershipRow,
+  configuredRoot: string,
+): WorktreeOwnership => {
   const result = WorktreeOwnershipSchema.safeParse({
     id: row.id,
     projectId: row.project_id,
@@ -624,12 +714,19 @@ const parseOwnershipRow = (row: OwnershipRow): WorktreeOwnership => {
       "Stored worktree ownership data is malformed.",
     );
   }
+  if (row.worktree_path !== join(resolve(configuredRoot), result.data.id)) {
+    throw ownershipError(
+      "MALFORMED_STORED_OWNERSHIP",
+      "Stored worktree ownership data is malformed.",
+    );
+  }
   return freezeRecursively(result.data);
 };
 
 const selectOwnershipById = (
   access: TaskStorageWorktreeAccess,
   id: WorktreeOwnershipId,
+  configuredRoot: string,
 ): WorktreeOwnership => {
   const row = access.sqlite
     .prepare("SELECT * FROM worktree_ownerships WHERE id = ?")
@@ -640,7 +737,7 @@ const selectOwnershipById = (
       "The worktree ownership record is unavailable.",
     );
   }
-  return parseOwnershipRow(row);
+  return parseOwnershipRow(row, configuredRoot);
 };
 
 const withImmediateTransaction = <T>(
@@ -683,6 +780,7 @@ const reserveOwnership = (
   access: TaskStorageWorktreeAccess,
   hierarchy: CanonicalHierarchy,
   ownership: WorktreeOwnership,
+  configuredRoot: string,
 ): WorktreeOwnership =>
   withImmediateTransaction(access, () => {
     const durableHierarchy = access.sqlite
@@ -783,7 +881,7 @@ const reserveOwnership = (
         ownership.createdAt,
         ownership.updatedAt,
       );
-    return selectOwnershipById(access, ownership.id);
+    return selectOwnershipById(access, ownership.id, configuredRoot);
   });
 
 const transitionOwnership = (
@@ -791,10 +889,11 @@ const transitionOwnership = (
   id: WorktreeOwnershipId,
   from: WorktreeOwnershipStatus,
   to: WorktreeOwnershipStatus,
+  configuredRoot: string,
   releaseHeadSha: RepositoryCommitSha | null = null,
 ): WorktreeOwnership =>
   withImmediateTransaction(access, () => {
-    const current = selectOwnershipById(access, id);
+    const current = selectOwnershipById(access, id, configuredRoot);
     if (current.status !== from) {
       throw ownershipError(
         "OWNERSHIP_CONFLICT",
@@ -857,18 +956,19 @@ const transitionOwnership = (
         "The durable worktree ownership state changed unexpectedly.",
       );
     }
-    return selectOwnershipById(access, id);
+    return selectOwnershipById(access, id, configuredRoot);
   });
 
 const selectCurrentOwnership = (
   access: TaskStorageWorktreeAccess,
   subtaskId: SubtaskId,
+  configuredRoot: string,
 ): WorktreeOwnership | null => {
   const nonTerminalRows = access.sqlite
     .prepare(
-      "SELECT * FROM worktree_ownerships WHERE subtask_id = ? AND status IN ('PROVISIONING', 'ACTIVE', 'RELEASING') ORDER BY created_at, id",
+      "SELECT * FROM worktree_ownerships WHERE (subtask_id = ? OR trim(subtask_id) = ?) AND status IN ('PROVISIONING', 'ACTIVE', 'RELEASING') ORDER BY created_at, id",
     )
-    .all(subtaskId) as unknown as OwnershipRow[];
+    .all(subtaskId, subtaskId) as unknown as OwnershipRow[];
   if (nonTerminalRows.length > 1) {
     throw ownershipError(
       "MALFORMED_STORED_OWNERSHIP",
@@ -876,14 +976,16 @@ const selectCurrentOwnership = (
     );
   }
   if (nonTerminalRows.length === 1) {
-    return parseOwnershipRow(nonTerminalRows[0]!);
+    return parseOwnershipRow(nonTerminalRows[0]!, configuredRoot);
   }
   const terminal = access.sqlite
     .prepare(
-      "SELECT * FROM worktree_ownerships WHERE subtask_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+      "SELECT * FROM worktree_ownerships WHERE subtask_id = ? OR trim(subtask_id) = ? ORDER BY created_at DESC, id DESC LIMIT 1",
     )
-    .get(subtaskId) as OwnershipRow | undefined;
-  return terminal === undefined ? null : parseOwnershipRow(terminal);
+    .get(subtaskId, subtaskId) as OwnershipRow | undefined;
+  return terminal === undefined
+    ? null
+    : parseOwnershipRow(terminal, configuredRoot);
 };
 
 const assertGeneratedBranchIsAbsent = (
@@ -937,11 +1039,185 @@ const assertStoredPathIsDerived = (
   }
 };
 
+interface CheckoutIdentityEvidence {
+  readonly sourceHeadReference: string | null;
+}
+
+const encodeHeadReference = (reference: string | null): string =>
+  reference === null ? "-" : Buffer.from(reference, "utf8").toString("base64url");
+
+const markerContents = (
+  source: VerifiedRepository,
+  ownership: WorktreeOwnership,
+): string =>
+  [
+    "ctc-worktree-ownership-v0",
+    ownership.id,
+    ownership.startingCommitSha,
+    source.root.identity.device.toString(),
+    source.root.identity.inode.toString(),
+    source.commonDirectory.identity.device.toString(),
+    source.commonDirectory.identity.inode.toString(),
+    encodeHeadReference(source.headReference),
+    "",
+  ].join("\n");
+
+const assertOwnedGitAdministrativeDirectory = (
+  source: VerifiedRepository,
+  ownedRepository: VerifiedRepository,
+): void => {
+  let expectedParent: string;
+  try {
+    expectedParent = realpathSync.native(
+      join(source.commonDirectory.path, "worktrees"),
+    );
+  } catch {
+    throw ownershipError(
+      "OWNERSHIP_DRIFT",
+      "The owned worktree Git administration is unavailable.",
+    );
+  }
+  if (
+    dirname(ownedRepository.gitDirectory.path) !== expectedParent ||
+    ownedRepository.gitDirectory.path === source.commonDirectory.path
+  ) {
+    throw ownershipError(
+      "OWNERSHIP_DRIFT",
+      "The owned worktree Git administration is not independently owned.",
+    );
+  }
+};
+
+const assertCheckoutIdentityMarker = (
+  source: VerifiedRepository,
+  ownedRepository: VerifiedRepository,
+  ownership: WorktreeOwnership,
+): CheckoutIdentityEvidence => {
+  assertOwnedGitAdministrativeDirectory(source, ownedRepository);
+  assertPathIdentity(ownedRepository.gitDirectory);
+  const markerPath = join(ownedRepository.gitDirectory.path, OWNERSHIP_MARKER_NAME);
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(markerPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = fstatSync(descriptor, { bigint: true });
+    const ownerMatches =
+      typeof process.getuid !== "function" || before.uid === BigInt(process.getuid());
+    if (
+      !before.isFile() ||
+      !ownerMatches ||
+      (before.mode & 0o077n) !== 0n ||
+      before.size < 1n ||
+      before.size > 8_192n
+    ) {
+      throw new Error("unsafe marker");
+    }
+    const contents = readFileSync(descriptor, "utf8");
+    const after = fstatSync(descriptor, { bigint: true });
+    const fields = contents.split("\n");
+    const referenceToken = fields[7];
+    let sourceHeadReference: string | null;
+    if (referenceToken === "-") {
+      sourceHeadReference = null;
+    } else if (
+      typeof referenceToken === "string" &&
+      /^[A-Za-z0-9_-]+$/.test(referenceToken)
+    ) {
+      const decodedReference = decodeUtf8(
+        Buffer.from(referenceToken, "base64url"),
+      );
+      sourceHeadReference =
+        decodedReference !== null &&
+        decodedReference.startsWith("refs/heads/") &&
+        decodedReference.length <= 4_096 &&
+        !/[\0\r\n]/.test(decodedReference)
+          ? decodedReference
+          : null;
+      if (sourceHeadReference === null) {
+        throw new Error("invalid source reference");
+      }
+    } else {
+      throw new Error("invalid source reference");
+    }
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      fields.length !== 9 ||
+      fields[0] !== "ctc-worktree-ownership-v0" ||
+      fields[1] !== ownership.id ||
+      fields[2] !== ownership.startingCommitSha ||
+      fields[3] !== source.root.identity.device.toString() ||
+      fields[4] !== source.root.identity.inode.toString() ||
+      fields[5] !== source.commonDirectory.identity.device.toString() ||
+      fields[6] !== source.commonDirectory.identity.inode.toString() ||
+      fields[8] !== ""
+    ) {
+      throw new Error("marker drift");
+    }
+    assertPathIdentity(ownedRepository.gitDirectory);
+    return Object.freeze({ sourceHeadReference });
+  } catch {
+    throw ownershipError(
+      "OWNERSHIP_DRIFT",
+      "The owned worktree checkout generation does not match durable ownership.",
+    );
+  } finally {
+    if (descriptor !== null) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // The authoritative result is already fail-closed above.
+      }
+    }
+  }
+};
+
+const installCheckoutIdentityMarker = (
+  source: VerifiedRepository,
+  root: VerifiedPath,
+  ownership: WorktreeOwnership,
+): void => {
+  assertPathIdentity(root);
+  assertPathIdentity(source.commonDirectory);
+  const ownedRepository = resolveVerifiedRepository(ownership.worktreePath);
+  if (
+    ownedRepository.commonDirectory.path !== source.commonDirectory.path ||
+    !identitiesEqual(
+      ownedRepository.commonDirectory.identity,
+      source.commonDirectory.identity,
+    )
+  ) {
+    throw ownershipError(
+      "OWNERSHIP_DRIFT",
+      "The owned worktree belongs to a different Git repository.",
+    );
+  }
+  assertOwnedGitAdministrativeDirectory(source, ownedRepository);
+  const markerPath = join(ownedRepository.gitDirectory.path, OWNERSHIP_MARKER_NAME);
+  try {
+    writeFileSync(markerPath, markerContents(source, ownership), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch {
+    throw ownershipError(
+      "RECOVERY_REQUIRED",
+      "The owned worktree checkout identity could not be established safely.",
+    );
+  }
+  assertCheckoutIdentityMarker(source, ownedRepository, ownership);
+  assertPathIdentity(root);
+  assertPathIdentity(source.commonDirectory);
+};
+
 const observeExactOwnedWorktree = (
   source: VerifiedRepository,
   root: VerifiedPath,
   ownership: WorktreeOwnership,
   requireStartingHead: boolean,
+  requireCheckoutIdentity = true,
+  requireStableSourceCheckout = false,
 ): RepositoryCommitSha => {
   assertPathIdentity(root);
   assertPathIdentity(source.root);
@@ -992,6 +1268,23 @@ const observeExactOwnedWorktree = (
       "The owned worktree belongs to a different Git repository.",
     );
   }
+  if (requireCheckoutIdentity) {
+    const checkoutIdentity = assertCheckoutIdentityMarker(
+      source,
+      ownedRepository,
+      ownership,
+    );
+    if (
+      requireStableSourceCheckout &&
+      (source.head !== ownership.startingCommitSha ||
+        source.headReference !== checkoutIdentity.sourceHeadReference)
+    ) {
+      throw ownershipError(
+        "OWNERSHIP_DRIFT",
+        "The source checkout changed before worktree activation.",
+      );
+    }
+  }
   const branchResult = runLocalGit(ownedRepository.root, [
     "symbolic-ref",
     "--quiet",
@@ -1018,6 +1311,7 @@ const observeExactOwnedWorktree = (
   assertPathIdentity(root);
   assertPathIdentity(source.root);
   assertPathIdentity(source.commonDirectory);
+  assertPathIdentity(ownedRepository.gitDirectory);
   return ownedRepository.head;
 };
 
@@ -1144,7 +1438,13 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       );
     }
     const reservation = reservationResult.data;
-    const persisted = reserveOwnership(access, hierarchy, reservation);
+    this.#dependencies.failureHooks.beforeReservation?.();
+    const persisted = reserveOwnership(
+      access,
+      hierarchy,
+      reservation,
+      this.#dependencies.worktreeRoot,
+    );
 
     try {
       this.#dependencies.failureHooks.beforeGitAdd?.();
@@ -1163,11 +1463,14 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
           "The owned worktree could not be created.",
         );
       }
+      observeExactOwnedWorktree(source, worktreeRoot, persisted, true, false);
+      installCheckoutIdentityMarker(source, worktreeRoot, persisted);
       this.#dependencies.failureHooks.afterGitAdd?.();
-      observeExactOwnedWorktree(source, worktreeRoot, persisted, true);
+      observeExactOwnedWorktree(source, worktreeRoot, persisted, true, true, true);
       const stableSource = resolveVerifiedRepository(hierarchy.project.repository.path);
       if (
         stableSource.head !== persisted.startingCommitSha ||
+        stableSource.headReference !== source.headReference ||
         stableSource.root.path !== source.root.path ||
         !identitiesEqual(stableSource.root.identity, source.root.identity) ||
         stableSource.commonDirectory.path !== source.commonDirectory.path ||
@@ -1181,28 +1484,45 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
           "The source repository changed during worktree provisioning.",
         );
       }
-      return transitionOwnership(access, persisted.id, "PROVISIONING", "ACTIVE");
+      return transitionOwnership(
+        access,
+        persisted.id,
+        "PROVISIONING",
+        "ACTIVE",
+        this.#dependencies.worktreeRoot,
+      );
     } catch (error) {
+      let state: ReturnType<typeof ownedPathState>;
       try {
-        const state = ownedPathState(source, persisted.worktreePath);
-        if (!state.exists && state.registeredCount === 0) {
-          transitionOwnership(access, persisted.id, "PROVISIONING", "FAILED");
-          if (error instanceof WorktreeOwnershipError) {
-            throw error;
-          }
+        state = ownedPathState(source, persisted.worktreePath);
+      } catch {
+        throw ownershipError(
+          "RECOVERY_REQUIRED",
+          "Worktree provisioning requires bounded reconciliation.",
+        );
+      }
+      if (!state.exists && state.registeredCount === 0) {
+        try {
+          transitionOwnership(
+            access,
+            persisted.id,
+            "PROVISIONING",
+            "FAILED",
+            this.#dependencies.worktreeRoot,
+          );
+        } catch {
           throw ownershipError(
-            "GIT_OPERATION_FAILED",
-            "The owned worktree could not be created.",
+            "RECOVERY_REQUIRED",
+            "Worktree provisioning requires bounded reconciliation.",
           );
         }
-      } catch (inspectionError) {
-        if (
-          inspectionError instanceof WorktreeOwnershipError &&
-          inspectionError.code !== "RECOVERY_REQUIRED" &&
-          inspectionError.code !== "GIT_OPERATION_FAILED"
-        ) {
-          // Preserve the reservation and return the recovery-required contract below.
+        if (error instanceof WorktreeOwnershipError) {
+          throw error;
         }
+        throw ownershipError(
+          "GIT_OPERATION_FAILED",
+          "The owned worktree could not be created.",
+        );
       }
       throw ownershipError(
         "RECOVERY_REQUIRED",
@@ -1222,7 +1542,11 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       );
     }
     const access = getStorageAccess(this.#storage);
-    const current = selectCurrentOwnership(access, hierarchy.subtask.id);
+    const current = selectCurrentOwnership(
+      access,
+      hierarchy.subtask.id,
+      this.#dependencies.worktreeRoot,
+    );
     if (current === null || current.status !== "ACTIVE") {
       throw ownershipError(
         "OWNERSHIP_NOT_ACTIVE",
@@ -1235,7 +1559,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
         "The durable worktree hierarchy does not match the canonical task hierarchy.",
       );
     }
-    const worktreeRoot = ensurePrivateOwnershipRoot(this.#dependencies.worktreeRoot);
+    const worktreeRoot = verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot);
     const source = resolveVerifiedRepository(hierarchy.project.repository.path);
     const currentHeadSha = observeExactOwnedWorktree(
       source,
@@ -1272,14 +1596,16 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       releaseEvidence.ownership.id,
       "ACTIVE",
       "RELEASING",
+      this.#dependencies.worktreeRoot,
       releaseEvidence.currentHeadSha,
     );
     const source = resolveVerifiedRepository(hierarchy.project.repository.path);
 
     try {
+      this.#dependencies.failureHooks.beforeGitRemove?.();
       const preRemovalHead = observeExactOwnedWorktree(
         source,
-        ensurePrivateOwnershipRoot(this.#dependencies.worktreeRoot),
+        verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot),
         releasing,
         false,
       );
@@ -1317,7 +1643,13 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
           "The retained owned-worktree branch changed during release.",
         );
       }
-      return transitionOwnership(access, releasing.id, "RELEASING", "RELEASED");
+      return transitionOwnership(
+        access,
+        releasing.id,
+        "RELEASING",
+        "RELEASED",
+        this.#dependencies.worktreeRoot,
+      );
     } catch {
       throw ownershipError(
         "RECOVERY_REQUIRED",
@@ -1329,7 +1661,11 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
   reconcileWorktreeOwnershipForSubtask(input: SubtaskId): WorktreeOwnership {
     const hierarchy = resolveCanonicalHierarchy(this.#storage, input);
     const access = getStorageAccess(this.#storage);
-    const current = selectCurrentOwnership(access, hierarchy.subtask.id);
+    const current = selectCurrentOwnership(
+      access,
+      hierarchy.subtask.id,
+      this.#dependencies.worktreeRoot,
+    );
     if (current === null) {
       throw ownershipError(
         "OWNERSHIP_CONFLICT",
@@ -1352,24 +1688,43 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       );
     }
 
-    const worktreeRoot = ensurePrivateOwnershipRoot(this.#dependencies.worktreeRoot);
+    const worktreeRoot = verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot);
     const source = resolveVerifiedRepository(hierarchy.project.repository.path);
     const state = ownedPathState(source, current.worktreePath);
 
     if (current.status === "PROVISIONING") {
       if (!state.exists && state.registeredCount === 0) {
-        return transitionOwnership(access, current.id, "PROVISIONING", "FAILED");
+        return transitionOwnership(
+          access,
+          current.id,
+          "PROVISIONING",
+          "FAILED",
+          this.#dependencies.worktreeRoot,
+        );
       }
       if (state.exists && state.registeredCount === 1) {
         try {
-          observeExactOwnedWorktree(source, worktreeRoot, current, true);
+          observeExactOwnedWorktree(
+            source,
+            worktreeRoot,
+            current,
+            true,
+            true,
+            true,
+          );
         } catch {
           throw ownershipError(
             "RECOVERY_REQUIRED",
             "The pending worktree does not match its durable reservation.",
           );
         }
-        return transitionOwnership(access, current.id, "PROVISIONING", "ACTIVE");
+        return transitionOwnership(
+          access,
+          current.id,
+          "PROVISIONING",
+          "ACTIVE",
+          this.#dependencies.worktreeRoot,
+        );
       }
       throw ownershipError(
         "RECOVERY_REQUIRED",
@@ -1385,7 +1740,13 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
             "The retained owned-worktree branch does not match release evidence.",
           );
         }
-        return transitionOwnership(access, current.id, "RELEASING", "RELEASED");
+        return transitionOwnership(
+          access,
+          current.id,
+          "RELEASING",
+          "RELEASED",
+          this.#dependencies.worktreeRoot,
+        );
       }
       if (state.exists && state.registeredCount === 1) {
         const head = observeExactOwnedWorktree(source, worktreeRoot, current, false);
@@ -1409,14 +1770,29 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
   listWorktreeOwnershipHistoryForSubtask(
     input: SubtaskId,
   ): readonly WorktreeOwnership[] {
-    const subtaskId = parseCanonicalSubtaskId(input);
+    const hierarchy = resolveCanonicalHierarchy(this.#storage, input);
     const access = getStorageAccess(this.#storage);
     const rows = access.sqlite
       .prepare(
-        "SELECT * FROM worktree_ownerships WHERE subtask_id = ? ORDER BY created_at, id",
+        "SELECT * FROM worktree_ownerships WHERE subtask_id = ? OR trim(subtask_id) = ? ORDER BY created_at, id",
       )
-      .all(subtaskId) as unknown as OwnershipRow[];
-    return freezeRecursively(rows.map(parseOwnershipRow));
+      .all(hierarchy.subtask.id, hierarchy.subtask.id) as unknown as OwnershipRow[];
+    const history = rows.map((row) =>
+      parseOwnershipRow(row, this.#dependencies.worktreeRoot),
+    );
+    if (
+      history.some(
+        (ownership) =>
+          ownership.projectId !== hierarchy.project.id ||
+          ownership.subtaskId !== hierarchy.subtask.id,
+      )
+    ) {
+      throw ownershipError(
+        "MALFORMED_STORED_OWNERSHIP",
+        "Stored worktree ownership hierarchy is malformed.",
+      );
+    }
+    return freezeRecursively(history);
   }
 }
 

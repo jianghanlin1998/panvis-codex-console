@@ -7,9 +7,18 @@ import {
 } from "./identifiers.js";
 import { RepositoryCommitShaSchema } from "./implementation-checkpoint.js";
 
+const strictIdentifier = <Schema extends z.ZodType<string, string>>(schema: Schema) =>
+  z
+    .string()
+    .refine((value) => {
+      const parsed = schema.safeParse(value);
+      return parsed.success && parsed.data === value;
+    })
+    .pipe(schema);
+
 const canonicalTimestamp = z
   .iso.datetime({ offset: true })
-  .transform((value) => new Date(value).toISOString());
+  .refine((value) => new Date(value).toISOString() === value);
 
 export const WorktreeOwnershipStatusSchema = z.enum([
   "PROVISIONING",
@@ -23,7 +32,16 @@ export const WorktreeOwnershipPathSchema = z
   .string()
   .min(1)
   .max(4_096)
-  .refine((value) => value.startsWith("/") && !/[\0\r\n]/.test(value));
+  .refine(
+    (value) =>
+      value.startsWith("/") &&
+      value !== "/" &&
+      !/[\0\r\n]/.test(value) &&
+      value
+        .slice(1)
+        .split("/")
+        .every((segment) => segment.length > 0 && segment !== "." && segment !== ".."),
+  );
 
 export const WorktreeOwnershipBranchSchema = z
   .string()
@@ -34,8 +52,8 @@ export const WorktreeOwnershipBranchSchema = z
 export const WorktreeOwnershipSchema = z
   .object({
     id: WorktreeOwnershipIdSchema,
-    projectId: ProjectIdSchema,
-    subtaskId: SubtaskIdSchema,
+    projectId: strictIdentifier(ProjectIdSchema),
+    subtaskId: strictIdentifier(SubtaskIdSchema),
     status: WorktreeOwnershipStatusSchema,
     worktreePath: WorktreeOwnershipPathSchema,
     branchName: WorktreeOwnershipBranchSchema,
