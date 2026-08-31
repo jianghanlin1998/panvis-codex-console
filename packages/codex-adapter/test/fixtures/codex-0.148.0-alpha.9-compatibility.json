@@ -25,6 +25,9 @@
       "turn/started",
       "item/started",
       "item/agentMessage/delta",
+      "item/commandExecution/outputDelta",
+      "item/fileChange/outputDelta",
+      "item/fileChange/patchUpdated",
       "item/completed",
       "thread/tokenUsage/updated",
       "turn/completed",
@@ -78,13 +81,41 @@
     "turnRequired": ["id", "items", "status"],
     "textInputRequired": ["text", "type"],
     "textInputDefaultFields": ["text_elements"],
-    "turnStartProperties": ["input", "model", "threadId"],
-    "threadStartProperties": [
-      "baseInstructions",
-      "developerInstructions",
+    "turnStartProperties": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "input",
       "model",
-      "modelProvider"
+      "sandboxPolicy",
+      "threadId"
     ],
+    "threadStartProperties": [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "cwd",
+      "developerInstructions",
+      "ephemeral",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "serviceName"
+    ],
+    "workspaceWritePolicyProperties": [
+      "networkAccess",
+      "type",
+      "writableRoots"
+    ],
+    "commandExecutionItemRequired": [
+      "command",
+      "commandActions",
+      "cwd",
+      "id",
+      "status",
+      "type"
+    ],
+    "fileChangeItemRequired": ["changes", "id", "status", "type"],
     "threadTokenUsageRequired": ["last", "total"],
     "threadTokenUsageProperties": ["last", "modelContextWindow", "total"],
     "tokenUsageBreakdownRequired": [

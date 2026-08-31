@@ -83,12 +83,26 @@ const REQUIRED_REQUEST_PARAMS: Readonly<Record<string, readonly string[]>> = {
 
 const REQUIRED_METHOD_PROPERTIES: Readonly<Record<string, readonly string[]>> = {
   "thread/start": [
+    "approvalPolicy",
+    "approvalsReviewer",
     "baseInstructions",
+    "cwd",
     "developerInstructions",
+    "ephemeral",
     "model",
     "modelProvider",
+    "sandbox",
+    "serviceName",
   ],
-  "turn/start": ["input", "model", "threadId"],
+  "turn/start": [
+    "approvalPolicy",
+    "approvalsReviewer",
+    "cwd",
+    "input",
+    "model",
+    "sandboxPolicy",
+    "threadId",
+  ],
 };
 
 const REQUIRED_APPROVAL_PARAMS = ["itemId", "startedAtMs", "threadId", "turnId"];
@@ -140,6 +154,21 @@ const METHOD_PARAMS_DEFINITIONS: Readonly<
     "AgentMessageDeltaNotification",
   ],
   "item/completed": ["definitions", "v2", "ItemCompletedNotification"],
+  "item/commandExecution/outputDelta": [
+    "definitions",
+    "v2",
+    "CommandExecutionOutputDeltaNotification",
+  ],
+  "item/fileChange/outputDelta": [
+    "definitions",
+    "v2",
+    "FileChangeOutputDeltaNotification",
+  ],
+  "item/fileChange/patchUpdated": [
+    "definitions",
+    "v2",
+    "FileChangePatchUpdatedNotification",
+  ],
   "item/started": ["definitions", "v2", "ItemStartedNotification"],
   "serverRequest/resolved": [
     "definitions",
@@ -256,6 +285,33 @@ const NAMED_OBJECT_CONTRACTS = [
     definitionPath: ["definitions", "v2", "Turn"],
     properties: ["id", "items", "status"],
     required: ["id", "items", "status"],
+  },
+  {
+    definitionPath: [
+      "definitions",
+      "v2",
+      "CommandExecutionOutputDeltaNotification",
+    ],
+    properties: ["delta", "itemId", "threadId", "turnId"],
+    required: ["delta", "itemId", "threadId", "turnId"],
+  },
+  {
+    definitionPath: [
+      "definitions",
+      "v2",
+      "FileChangeOutputDeltaNotification",
+    ],
+    properties: ["delta", "itemId", "threadId", "turnId"],
+    required: ["delta", "itemId", "threadId", "turnId"],
+  },
+  {
+    definitionPath: [
+      "definitions",
+      "v2",
+      "FileChangePatchUpdatedNotification",
+    ],
+    properties: ["changes", "itemId", "threadId", "turnId"],
+    required: ["changes", "itemId", "threadId", "turnId"],
   },
   {
     definitionPath: ["definitions", "v2", "ThreadTokenUsage"],
@@ -1075,6 +1131,8 @@ function validateConsumedProtocolContract(
   }
 
   validateTextInput(context);
+  validateWriteSandboxContract(context);
+  validateWriteToolItemContract(context);
   validateApprovalContract(
     context,
     ["definitions", "CommandExecutionRequestApprovalResponse"],
@@ -1084,6 +1142,170 @@ function validateConsumedProtocolContract(
     context,
     ["definitions", "FileChangeRequestApprovalResponse"],
     ["definitions", "FileChangeApprovalDecision"],
+  );
+}
+
+function validateWriteToolItemContract(context: SchemaValidationContext): void {
+  const threadItems = schemaAlternatives(
+    requireLocation(context, ["definitions", "v2", "ThreadItem"]),
+    context,
+  );
+  const commandItems = threadItems.filter((variant) =>
+    schemaAllowsExactlyObjectPropertyLiteral(
+      variant,
+      "type",
+      "commandExecution",
+      context,
+      { activePaths: new Set() },
+    ),
+  );
+  const fileItems = threadItems.filter((variant) =>
+    schemaAllowsExactlyObjectPropertyLiteral(
+      variant,
+      "type",
+      "fileChange",
+      context,
+      { activePaths: new Set() },
+    ),
+  );
+  if (
+    commandItems.length !== 1 ||
+    fileItems.length !== 1 ||
+    commandItems[0] === undefined ||
+    fileItems[0] === undefined ||
+    !schemaHasObjectContract(
+      commandItems[0],
+      ["command", "commandActions", "cwd", "id", "status", "type"],
+      ["command", "commandActions", "cwd", "id", "status", "type"],
+      context,
+    ) ||
+    !schemaHasObjectContract(
+      fileItems[0],
+      ["changes", "id", "status", "type"],
+      ["changes", "id", "status", "type"],
+      context,
+    )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+  for (const notification of [
+    ["definitions", "v2", "ItemStartedNotification"],
+    ["definitions", "v2", "ItemCompletedNotification"],
+  ] as const) {
+    assertPropertyTargets(
+      context,
+      notification,
+      "item",
+      ["definitions", "v2", "ThreadItem"],
+    );
+  }
+}
+
+function validateWriteSandboxContract(context: SchemaValidationContext): void {
+  const sandboxModes = evaluateBoundedStringSet(
+    requireLocation(context, ["definitions", "v2", "SandboxMode"]),
+    context,
+    { activePaths: new Set() },
+  );
+  if (
+    sandboxModes === null ||
+    !boundedStringSetHas(sandboxModes, "read-only") ||
+    !boundedStringSetHas(sandboxModes, "workspace-write")
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+
+  const sandboxPolicy = requireLocation(context, [
+    "definitions",
+    "v2",
+    "SandboxPolicy",
+  ]);
+  const workspaceWriteVariants = schemaAlternatives(
+    sandboxPolicy,
+    context,
+  ).filter((variant) =>
+    schemaAllowsExactlyObjectPropertyLiteral(
+      variant,
+      "type",
+      "workspaceWrite",
+      context,
+      { activePaths: new Set() },
+    ),
+  );
+  const workspaceWrite = workspaceWriteVariants[0];
+  if (
+    workspaceWriteVariants.length !== 1 ||
+    workspaceWrite === undefined ||
+    !schemaHasObjectContract(
+      workspaceWrite,
+      ["type"],
+      ["networkAccess", "type", "writableRoots"],
+      context,
+    )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+
+  const networkLocations = objectPropertyLocations(
+    workspaceWrite,
+    "networkAccess",
+    context,
+    { activePaths: new Set() },
+  );
+  if (
+    !networkLocations.some((location) =>
+      schemaTypeAllows(location.node, "boolean"),
+    )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+
+  const writableRoots = objectPropertyLocations(
+    workspaceWrite,
+    "writableRoots",
+    context,
+    { activePaths: new Set() },
+  );
+  const absolutePath = requireLocation(context, [
+    "definitions",
+    "v2",
+    "AbsolutePathBuf",
+  ]);
+  if (
+    !writableRoots.some((location) => {
+      const items = schemaRecord(location.node.items);
+      return (
+        location.node.type === "array" &&
+        items !== undefined &&
+        schemaTargetsLocation(
+          { node: items, path: [...location.path, "items"] },
+          absolutePath,
+          context,
+          { activePaths: new Set() },
+        )
+      );
+    })
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "ThreadStartParams"],
+    "sandbox",
+    ["definitions", "v2", "SandboxMode"],
+  );
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "TurnStartParams"],
+    "sandboxPolicy",
+    ["definitions", "v2", "SandboxPolicy"],
+  );
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "ThreadStartResponse"],
+    "sandbox",
+    ["definitions", "v2", "SandboxPolicy"],
   );
 }
 

@@ -98,6 +98,8 @@ export {
 
 export {
   LIVE_CODEX_EXECUTION_FAILURE_CODES,
+  OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
+  executeSingleSubtaskOwnedWorktreeCodex,
   executeSingleSubtaskLiveCodex,
 } from "./live-execution.js";
 export type {
@@ -105,4 +107,8 @@ export type {
   LiveCodexExecutionFailureCode,
   LiveCodexExecutionResult,
   LiveCodexExecutionSuccess,
+  OwnedWorktreeCodexExecutionFailure,
+  OwnedWorktreeCodexExecutionFailureCode,
+  OwnedWorktreeCodexExecutionResult,
+  OwnedWorktreeCodexExecutionSuccess,
 } from "./live-execution.js";

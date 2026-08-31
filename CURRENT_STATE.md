@@ -170,28 +170,40 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Accepted implementation/evidence SHA: `e2f486a8888d6d8aba8831b861adc5b0cf995047`
 - Live Execution V0 remains ACCEPTED
 - Durable persistence acceptance required no Provider/model usage.
-- Git Worktree Ownership & Provisioning V0: HARDENED
+- Git Worktree Ownership & Provisioning V0: ACCEPTED
 - Worktree Ownership Comprehensive Hardening: PASS
 - Worktree replacement/drift identity matrix: PASS
 - Worktree migration/reopen/corruption matrix: PASS
 - Worktree provisioning/release/recovery matrix: PASS
 - Worktree concurrency/slot matrix: PASS
 - Worktree Ownership Fresh Independent QA on `b551278ad89a474c952afd4befef81fbee5337d0`: FAIL — historical result
-- CTC-WORKTREE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
+- CTC-WORKTREE-FQA-001: CLOSED
+- Worktree Ownership Focused Fresh Re-QA on `2db4e28b9929c75afcf17bde07df550de8f0de66`: PASS
+- Worktree Ownership ACCEPTED: YES
+- Accepted implementation/evidence SHA: `2db4e28b9929c75afcf17bde07df550de8f0de66`
 - CTC-WORKTREE-HARD-001: superseded/closed by the stronger repaired physical-generation regression
 - CTC-WORKTREE-HARD-002: CLOSED
 - CTC-WORKTREE-HARD-003: CLOSED
 - CTC-WORKTREE-HARD-004: CLOSED
-- Real target worktree use: NO
-- Write-Enabled Execution Authority Binding V0: NOT IMPLEMENTED
+- Real target WorktreeOwnership feature writes before acceptance: NO
+- Write-Enabled Execution Authority Binding V0: IMPLEMENTED
+- Write-enabled deterministic baseline: PASS
+- ACTIVE owned worktree binding: PASS
+- workspaceWrite exact-root binding: PASS
+- Write-enabled network access: false
+- Write-enabled approval escalation: NONE / fail-closed
+- Durable ChatThread/ExecutionRun integration baseline: PASS
 - Live Execution V0 remains ACCEPTED and read-only
 - Durable Persistence V0 remains ACCEPTED
-- Worktree Ownership Focused Fresh Re-QA for CTC-WORKTREE-FQA-001: PENDING
-- Worktree Ownership ACCEPTED: NO
+- Real target write-enabled execution: NO
+- Provider/model write-enabled turns: 0
+- Write-Enabled Execution Comprehensive Hardening: PENDING
+- Write-Enabled Execution Fresh Independent QA: NOT READY
+- Step 5B ACCEPTED: NO
 - Roadmap Step 5 overall: PARTIAL
 
 ## Next safe task
-**Next safe task:** new-chat Focused Fresh Re-QA for CTC-WORKTREE-FQA-001.
+**Next safe task:** new-chat Write-Enabled Execution Authority Binding V0 Comprehensive Hardening.
 
 Hanlin manual QA: NOT REQUIRED
 

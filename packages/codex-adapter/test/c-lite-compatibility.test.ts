@@ -92,11 +92,30 @@ const REQUIRED_FIELD_CASES = [
 
 const METHOD_PROPERTY_CASES = [
   {
-    fields: ["baseInstructions", "developerInstructions", "model", "modelProvider"],
+    fields: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "cwd",
+      "developerInstructions",
+      "ephemeral",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "serviceName",
+    ],
     path: ["definitions", "v2", "ThreadStartParams"],
   },
   {
-    fields: ["input", "model", "threadId"],
+    fields: [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "input",
+      "model",
+      "sandboxPolicy",
+      "threadId",
+    ],
     path: ["definitions", "v2", "TurnStartParams"],
   },
 ] as const;
@@ -149,6 +168,18 @@ const NAMED_OBJECT_CASES = [
     path: ["definitions", "v2", "Thread"],
   },
   { fields: ["id", "items", "status"], path: ["definitions", "v2", "Turn"] },
+  {
+    fields: ["delta", "itemId", "threadId", "turnId"],
+    path: ["definitions", "v2", "CommandExecutionOutputDeltaNotification"],
+  },
+  {
+    fields: ["delta", "itemId", "threadId", "turnId"],
+    path: ["definitions", "v2", "FileChangeOutputDeltaNotification"],
+  },
+  {
+    fields: ["changes", "itemId", "threadId", "turnId"],
+    path: ["definitions", "v2", "FileChangePatchUpdatedNotification"],
+  },
   { fields: ["last", "total"], path: ["definitions", "v2", "ThreadTokenUsage"] },
   {
     fields: [
@@ -608,6 +639,55 @@ describe("association-correct semantic validation", () => {
     expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
   });
 
+  it("rejects removal of the consumed workspace-write sandbox mode", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2", "SandboxMode"]).enum = [
+      "read-only",
+      "danger-full-access",
+    ];
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a workspaceWrite policy without writableRoots", () => {
+    const bundle = buildCompatibilityBundle();
+    const variant = schemaArrayAt(bundle, [
+      "definitions",
+      "v2",
+      "SandboxPolicy",
+      "oneOf",
+    ]).find((candidate) =>
+      stringArray(schemaRecord(schemaRecord(candidate.properties).type).enum).includes(
+        "workspaceWrite",
+      ),
+    );
+    if (variant === undefined) {
+      throw new Error("Expected the workspaceWrite fixture variant.");
+    }
+    delete schemaRecord(variant.properties).writableRoots;
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a malformed consumed commandExecution item shape", () => {
+    const bundle = buildCompatibilityBundle();
+    const variant = schemaArrayAt(bundle, [
+      "definitions",
+      "v2",
+      "ThreadItem",
+      "oneOf",
+    ]).find((candidate) =>
+      stringArray(schemaRecord(schemaRecord(candidate.properties).type).enum).includes(
+        "commandExecution",
+      ),
+    );
+    if (variant === undefined) {
+      throw new Error("Expected the commandExecution fixture variant.");
+    }
+    variant.required = stringArray(variant.required).filter(
+      (field) => field !== "commandActions",
+    );
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
   it("rejects a duplicate-method decoy outside the authoritative message root", () => {
     const bundle = buildCompatibilityBundle();
     const actual = methodVariant(bundle, "ClientRequest", "thread/start");
@@ -1019,10 +1099,57 @@ function fakeCandidateBody(
 
 function buildCompatibilityBundle(): MutableSchema {
   const v2: MutableSchema = {
+    AbsolutePathBuf: { type: "string" },
     AgentMessageDeltaNotification: objectSchema([], []),
+    CommandExecutionOutputDeltaNotification: objectSchema(
+      ["delta", "itemId", "threadId", "turnId"],
+      ["delta", "itemId", "threadId", "turnId"],
+    ),
     EmptyParams: objectSchema([], []),
-    ItemCompletedNotification: objectSchema([], []),
-    ItemStartedNotification: objectSchema([], []),
+    FileChangeOutputDeltaNotification: objectSchema(
+      ["delta", "itemId", "threadId", "turnId"],
+      ["delta", "itemId", "threadId", "turnId"],
+    ),
+    FileChangePatchUpdatedNotification: objectSchema(
+      ["changes", "itemId", "threadId", "turnId"],
+      ["changes", "itemId", "threadId", "turnId"],
+    ),
+    ItemCompletedNotification: referencedObjectSchema(
+      "item",
+      "#/definitions/v2/ThreadItem",
+    ),
+    ItemStartedNotification: referencedObjectSchema(
+      "item",
+      "#/definitions/v2/ThreadItem",
+    ),
+    SandboxMode: {
+      enum: ["read-only", "workspace-write", "danger-full-access"],
+      type: "string",
+    },
+    SandboxPolicy: {
+      oneOf: [
+        {
+          properties: {
+            networkAccess: { type: "boolean" },
+            type: { enum: ["readOnly"] },
+          },
+          required: ["type"],
+          type: "object",
+        },
+        {
+          properties: {
+            networkAccess: { type: "boolean" },
+            type: { enum: ["workspaceWrite"] },
+            writableRoots: {
+              items: { $ref: "#/definitions/v2/AbsolutePathBuf" },
+              type: "array",
+            },
+          },
+          required: ["type"],
+          type: "object",
+        },
+      ],
+    },
     ServerRequestResolvedNotification: objectSchema([], []),
     SkillsListParams: objectSchema([], []),
     TextElement: objectSchema([], []),
@@ -1031,10 +1158,7 @@ function buildCompatibilityBundle(): MutableSchema {
     ThreadGoalSetParams: objectSchema(["threadId"], ["threadId"]),
     ThreadGoalUpdatedNotification: objectSchema([], []),
     ThreadResumeParams: objectSchema(["threadId"], ["threadId"]),
-    ThreadStartParams: objectSchema(
-      ["baseInstructions", "developerInstructions", "model", "modelProvider"],
-      [],
-    ),
+    ThreadStartParams: threadStartParamsSchema(),
     ThreadStartResponse: threadResponseSchema(),
     ThreadResumeResponse: threadResponseSchema(),
     ThreadStartedNotification: referencedObjectSchema(
@@ -1054,6 +1178,20 @@ function buildCompatibilityBundle(): MutableSchema {
       "tokenUsage",
       "#/definitions/v2/ThreadTokenUsage",
     ),
+    ThreadItem: {
+      oneOf: [
+        typedObjectSchema(
+          "commandExecution",
+          ["command", "commandActions", "cwd", "id", "status", "type"],
+          ["command", "commandActions", "cwd", "id", "status", "type"],
+        ),
+        typedObjectSchema(
+          "fileChange",
+          ["changes", "id", "status", "type"],
+          ["changes", "id", "status", "type"],
+        ),
+      ],
+    },
     TokenUsageBreakdown: objectSchema(
       [
         "cacheWriteInputTokens",
@@ -1080,10 +1218,7 @@ function buildCompatibilityBundle(): MutableSchema {
       ["threadId", "turnId"],
       ["threadId", "turnId"],
     ),
-    TurnStartParams: objectSchema(
-      ["input", "model", "threadId"],
-      ["input", "threadId"],
-    ),
+    TurnStartParams: turnStartParamsSchema(),
     TurnStartResponse: referencedObjectSchema("turn", "#/definitions/v2/Turn"),
     TurnStartedNotification: referencedObjectSchema(
       "turn",
@@ -1124,7 +1259,13 @@ function buildCompatibilityBundle(): MutableSchema {
   };
   const serverNotificationParams: Readonly<Record<string, string>> = {
     "item/agentMessage/delta": "#/definitions/v2/AgentMessageDeltaNotification",
+    "item/commandExecution/outputDelta":
+      "#/definitions/v2/CommandExecutionOutputDeltaNotification",
     "item/completed": "#/definitions/v2/ItemCompletedNotification",
+    "item/fileChange/outputDelta":
+      "#/definitions/v2/FileChangeOutputDeltaNotification",
+    "item/fileChange/patchUpdated":
+      "#/definitions/v2/FileChangePatchUpdatedNotification",
     "item/started": "#/definitions/v2/ItemStartedNotification",
     "serverRequest/resolved": "#/definitions/v2/ServerRequestResolvedNotification",
     "thread/goal/updated": "#/definitions/v2/ThreadGoalUpdatedNotification",
@@ -1221,6 +1362,50 @@ function threadResponseSchema(): MutableSchema {
   ];
   const schema = objectSchema(fields, fields);
   schemaRecord(schema.properties).thread = { $ref: "#/definitions/v2/Thread" };
+  schemaRecord(schema.properties).sandbox = {
+    $ref: "#/definitions/v2/SandboxPolicy",
+  };
+  return schema;
+}
+
+function threadStartParamsSchema(): MutableSchema {
+  const schema = objectSchema(
+    [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "baseInstructions",
+      "cwd",
+      "developerInstructions",
+      "ephemeral",
+      "model",
+      "modelProvider",
+      "sandbox",
+      "serviceName",
+    ],
+    [],
+  );
+  schemaRecord(schema.properties).sandbox = {
+    $ref: "#/definitions/v2/SandboxMode",
+  };
+  return schema;
+}
+
+function turnStartParamsSchema(): MutableSchema {
+  const schema = objectSchema(
+    [
+      "approvalPolicy",
+      "approvalsReviewer",
+      "cwd",
+      "input",
+      "model",
+      "sandboxPolicy",
+      "threadId",
+    ],
+    ["input", "threadId"],
+  );
+  schemaRecord(schema.properties).sandboxPolicy = {
+    $ref: "#/definitions/v2/SandboxPolicy",
+  };
   return schema;
 }
 
@@ -1287,6 +1472,16 @@ function objectSchema(
     required: [...required],
     type: "object",
   };
+}
+
+function typedObjectSchema(
+  type: string,
+  propertyNames: readonly string[],
+  required: readonly string[],
+): MutableSchema {
+  const schema = objectSchema(propertyNames, required);
+  schemaRecord(schema.properties).type = { enum: [type] };
+  return schema;
 }
 
 function validateBundle(bundle: MutableSchema): { readonly provenanceSha256: string } {

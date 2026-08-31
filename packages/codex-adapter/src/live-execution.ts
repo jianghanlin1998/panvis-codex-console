@@ -3,6 +3,7 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -16,20 +17,31 @@ import { isAbsolute, join, relative } from "node:path";
 import { TextDecoder } from "node:util";
 
 import type {
+  ChatThreadId,
+  ExecutionRunId,
   NormalizedUsage,
   ProviderModelReference,
   ProviderRunReference,
   ProviderThreadReference,
+  RepositoryCommitSha,
   SubtaskId,
+  WorktreeOwnershipId,
 } from "@codex-task-console/domain";
 import {
+  ChatThreadIdSchema,
+  ExecutionRunIdSchema,
+} from "@codex-task-console/domain";
+import {
+  createWorktreeOwnershipManager,
   ExecutionInputPreflight,
   type ExecutionInputPreflightResult,
   type OperationalJitContextProfile,
+  type ResolvedActiveOwnedWorktree,
   TaskStorage,
 } from "@codex-task-console/storage";
 
 import { TESTED_CODEX_VERSION } from "./compatibility.js";
+import { checkOwnedCodexCompatibility } from "./c-lite-compatibility.js";
 import {
   CODEX_APP_SERVER_PROVIDER_ID,
   mapCodexModelReference,
@@ -51,6 +63,7 @@ const CLIENT_INFO = Object.freeze({
   version: "0.1.0",
 });
 const WORKSPACE_PREFIX = "ctc-live-codex-";
+const WRITE_RUNTIME_PREFIX = "ctc-write-codex-";
 const SAFE_CHILD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 const ACCOUNT_UPDATED_AUTH_MODES = [
   "apikey",
@@ -83,6 +96,9 @@ const TURN_SCOPED_NOTIFICATION_METHODS = new Set([
   "item/started",
   "item/completed",
   "item/agentMessage/delta",
+  "item/commandExecution/outputDelta",
+  "item/fileChange/outputDelta",
+  "item/fileChange/patchUpdated",
   "thread/tokenUsage/updated",
   "turn/completed",
 ]);
@@ -129,6 +145,20 @@ export const LIVE_CODEX_EXECUTION_FAILURE_CODES = [
 export type LiveCodexExecutionFailureCode =
   (typeof LIVE_CODEX_EXECUTION_FAILURE_CODES)[number];
 
+export const OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES = [
+  ...LIVE_CODEX_EXECUTION_FAILURE_CODES,
+  "ACTIVE_WORKTREE_REQUIRED",
+  "WORKTREE_AUTHORITY_DRIFT",
+  "DURABLE_THREAD_PERSISTENCE_FAILED",
+  "DURABLE_RUN_PERSISTENCE_FAILED",
+  "WRITE_POLICY_REQUIRED",
+] as const;
+
+export type OwnedWorktreeCodexExecutionFailureCode =
+  (typeof OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES)[number];
+
+type CodexExecutionFailureCode = OwnedWorktreeCodexExecutionFailureCode;
+
 export interface LiveCodexExecutionDiagnostics {
   readonly approvalRequestsDeclined: number;
   readonly interruptRequests: number;
@@ -156,6 +186,15 @@ interface LiveThreadPolicy {
   readonly cwd: "DISPOSABLE_OS_TEMP";
   readonly ephemeral: true;
   readonly sandbox: "readOnly";
+  readonly networkAccess: false;
+}
+
+interface OwnedWorktreeThreadPolicy {
+  readonly approvalPolicy: "never";
+  readonly cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE";
+  readonly ephemeral: true;
+  readonly sandbox: "workspaceWrite";
+  readonly writableRootCount: 1;
   readonly networkAccess: false;
 }
 
@@ -192,6 +231,43 @@ export type LiveCodexExecutionResult =
   | LiveCodexExecutionSuccess
   | LiveCodexExecutionFailure;
 
+interface OwnedWorktreeCodexExecutionResultBase {
+  readonly providerId: typeof CODEX_APP_SERVER_PROVIDER_ID;
+  readonly runtime: RuntimeSummary | null;
+  readonly authType: "chatgpt" | null;
+  readonly planType: string | null;
+  readonly preflight: PreflightSummary | null;
+  readonly chatThreadId: ChatThreadId | null;
+  readonly executionRunId: ExecutionRunId | null;
+  readonly providerThread: ProviderThreadReference | null;
+  readonly providerRun: ProviderRunReference | null;
+  readonly model: ProviderModelReference | null;
+  readonly normalizedUsage: NormalizedUsage | null;
+  readonly terminalTurnStatus: "completed" | "failed" | "interrupted" | null;
+  readonly worktreeOwnershipId: WorktreeOwnershipId | null;
+  readonly worktreeStartingHeadSha: RepositoryCommitSha | null;
+  readonly threadPolicy: OwnedWorktreeThreadPolicy | null;
+  readonly diagnostics: LiveCodexExecutionDiagnostics;
+  readonly appServerChildCleaned: boolean;
+  readonly transientRuntimeCleaned: boolean;
+}
+
+export interface OwnedWorktreeCodexExecutionSuccess
+  extends OwnedWorktreeCodexExecutionResultBase {
+  readonly success: true;
+  readonly failureCode: null;
+}
+
+export interface OwnedWorktreeCodexExecutionFailure
+  extends OwnedWorktreeCodexExecutionResultBase {
+  readonly success: false;
+  readonly failureCode: OwnedWorktreeCodexExecutionFailureCode;
+}
+
+export type OwnedWorktreeCodexExecutionResult =
+  | OwnedWorktreeCodexExecutionSuccess
+  | OwnedWorktreeCodexExecutionFailure;
+
 interface MutableDiagnostics {
   approvalRequestsDeclined: number;
   interruptRequests: number;
@@ -216,6 +292,25 @@ interface ExecutionEvidence {
   agentResponseText: string;
   appServerChildCleaned: boolean;
   disposableWorkspaceCleaned: boolean;
+}
+
+interface OwnedWorktreeExecutionEvidence {
+  runtime: RuntimeSummary | null;
+  authType: "chatgpt" | null;
+  planType: string | null;
+  preflight: PreflightSummary | null;
+  chatThreadId: ChatThreadId | null;
+  executionRunId: ExecutionRunId | null;
+  providerThread: ProviderThreadReference | null;
+  providerRun: ProviderRunReference | null;
+  model: ProviderModelReference | null;
+  normalizedUsage: NormalizedUsage | null;
+  terminalTurnStatus: "completed" | "failed" | "interrupted" | null;
+  worktreeOwnershipId: WorktreeOwnershipId | null;
+  worktreeStartingHeadSha: RepositoryCommitSha | null;
+  threadPolicy: OwnedWorktreeThreadPolicy | null;
+  appServerChildCleaned: boolean;
+  transientRuntimeCleaned: boolean;
 }
 
 interface LiveExecutionLimits {
@@ -255,10 +350,29 @@ interface LiveExecutionDependencies {
   readonly limits: LiveExecutionLimits;
 }
 
-class LiveExecutionError extends Error {
-  readonly code: LiveCodexExecutionFailureCode;
+type DurableOperation =
+  | "CREATE_THREAD"
+  | "CREATE_RUN"
+  | "BIND_THREAD"
+  | "START_RUN"
+  | "FAIL_RUN_BEFORE_START"
+  | "FINISH_RUN";
 
-  constructor(code: LiveCodexExecutionFailureCode) {
+interface OwnedWorktreeExecutionDependencies extends LiveExecutionDependencies {
+  readonly checkCompatibility: () => boolean;
+  readonly resolveOwnedWorktree: (
+    storage: TaskStorage,
+    subtaskId: SubtaskId,
+  ) => ResolvedActiveOwnedWorktree;
+  readonly generateChatThreadId: () => ChatThreadId;
+  readonly generateExecutionRunId: () => ExecutionRunId;
+  readonly beforeDurableOperation?: (operation: DurableOperation) => void;
+}
+
+class LiveExecutionError extends Error {
+  readonly code: CodexExecutionFailureCode;
+
+  constructor(code: CodexExecutionFailureCode) {
     super(code);
     this.name = "LiveExecutionError";
     this.code = code;
@@ -280,6 +394,13 @@ interface RequestHooks {
 interface TerminalEvent {
   readonly status: "completed" | "failed" | "interrupted";
 }
+
+type TurnEventPolicy =
+  | Readonly<{ readonly kind: "READ_ONLY" }>
+  | Readonly<{
+      readonly kind: "WORKSPACE_WRITE";
+      readonly worktreePath: string;
+    }>;
 
 class TurnEventTracker {
   threadId: string | null = null;
@@ -303,6 +424,7 @@ class TurnEventTracker {
   constructor(
     private readonly diagnostics: MutableDiagnostics,
     private readonly maxAgentResponseBytes: number,
+    private readonly eventPolicy: TurnEventPolicy = { kind: "READ_ONLY" },
   ) {}
 
   fail(error: LiveExecutionError): void {
@@ -334,6 +456,9 @@ class TurnEventTracker {
       method !== "item/started" &&
       method !== "item/completed" &&
       method !== "item/agentMessage/delta" &&
+      method !== "item/commandExecution/outputDelta" &&
+      method !== "item/fileChange/outputDelta" &&
+      method !== "item/fileChange/patchUpdated" &&
       method !== "thread/tokenUsage/updated" &&
       method !== "turn/completed" &&
       method !== "serverRequest/resolved" &&
@@ -395,7 +520,13 @@ class TurnEventTracker {
         );
         const item = requireRecord(record.item);
         const itemType = requireBoundedString(item.type, 64);
-        if (
+        if (itemType === "commandExecution" || itemType === "fileChange") {
+          this.diagnostics.toolActionsObserved += 1;
+          if (this.eventPolicy.kind === "READ_ONLY") {
+            throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
+          }
+          validateWriteThreadItem(item, itemType, this.eventPolicy.worktreePath);
+        } else if (
           itemType !== "userMessage" &&
           itemType !== "agentMessage" &&
           itemType !== "plan" &&
@@ -409,6 +540,30 @@ class TurnEventTracker {
           if (!this.#deltaItemIds.has(itemId)) {
             this.#appendAgentText(requireString(item.text));
           }
+        }
+        return true;
+      }
+      case "item/commandExecution/outputDelta":
+      case "item/fileChange/outputDelta":
+      case "item/fileChange/patchUpdated": {
+        this.#requireTurnStartSent();
+        this.#observeNotificationThreadId(
+          requireBoundedString(record.threadId, 512),
+        );
+        this.#observeNotificationTurnId(
+          requireBoundedString(record.turnId, 512),
+        );
+        requireBoundedString(record.itemId, 512);
+        if (this.eventPolicy.kind === "READ_ONLY") {
+          this.diagnostics.toolActionsObserved += 1;
+          throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
+        }
+        if (method === "item/fileChange/patchUpdated") {
+          if (!Array.isArray(record.changes)) {
+            throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+          }
+        } else if (typeof record.delta !== "string") {
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
         return true;
       }
@@ -921,6 +1076,436 @@ export async function executeSingleSubtaskLiveCodex(
   );
 }
 
+export async function executeSingleSubtaskOwnedWorktreeCodex(
+  storage: TaskStorage,
+  subtaskId: SubtaskId,
+): Promise<OwnedWorktreeCodexExecutionResult> {
+  return executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
+    storage,
+    subtaskId,
+    productionOwnedWorktreeDependencies(),
+  );
+}
+
+/** Internal deterministic-test hook; not exported from the package root. */
+export async function executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+  storage: TaskStorage,
+  subtaskId: SubtaskId,
+  dependencies: OwnedWorktreeExecutionDependencies,
+): Promise<OwnedWorktreeCodexExecutionResult> {
+  if (process.env.NODE_ENV !== "test") {
+    return immediateOwnedWorktreeFailure("INVALID_INPUT");
+  }
+  return executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
+    storage,
+    subtaskId,
+    dependencies,
+  );
+}
+
+async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
+  storage: TaskStorage,
+  subtaskId: SubtaskId,
+  dependencies: OwnedWorktreeExecutionDependencies,
+): Promise<OwnedWorktreeCodexExecutionResult> {
+  const diagnostics = emptyDiagnostics();
+  const evidence = emptyOwnedWorktreeEvidence();
+  let failureCode: OwnedWorktreeCodexExecutionFailureCode | null = null;
+  let preflight: ExecutionInputPreflightResult | undefined;
+  let trustedWorktree: ResolvedActiveOwnedWorktree | undefined;
+  let transientRuntime: string | undefined;
+  let client: JsonlAppServerClient | undefined;
+  let events: TurnEventTracker | undefined;
+  let turnStartSent = false;
+  let durableRunState: "NONE" | "CREATED" | "RUNNING" | "TERMINAL" = "NONE";
+
+  try {
+    if (!(storage instanceof TaskStorage) || typeof subtaskId !== "string") {
+      throw new LiveExecutionError("INVALID_INPUT");
+    }
+
+    try {
+      preflight = new ExecutionInputPreflight(
+        storage,
+      ).prepareExecutionInputForSubtask(
+        subtaskId,
+        "STANDARD_SUBTASK_EXECUTION",
+      );
+    } catch {
+      throw new LiveExecutionError("PREFLIGHT_FAILED");
+    }
+    evidence.preflight = {
+      profile: preflight.profile,
+      status: preflight.status,
+      utf8Bytes: preflight.utf8Bytes,
+    };
+    if (!preflight.allowed) {
+      throw new LiveExecutionError("PREFLIGHT_BLOCKED");
+    }
+
+    try {
+      trustedWorktree = dependencies.resolveOwnedWorktree(storage, subtaskId);
+    } catch {
+      throw new LiveExecutionError("ACTIVE_WORKTREE_REQUIRED");
+    }
+    assertActiveOwnedWorktree(trustedWorktree, subtaskId);
+    evidence.worktreeOwnershipId = trustedWorktree.ownership.id;
+    evidence.worktreeStartingHeadSha = trustedWorktree.currentHeadSha;
+
+    let runtime: ResolvedCodexRuntime;
+    try {
+      runtime = dependencies.resolveRuntime();
+    } catch {
+      throw new LiveExecutionError("ACTIVE_RUNTIME_REQUIRED");
+    }
+    assertExactActiveRuntime(runtime);
+    let compatible = false;
+    try {
+      compatible = dependencies.checkCompatibility();
+    } catch {
+      compatible = false;
+    }
+    if (!compatible) {
+      throw new LiveExecutionError("ACTIVE_RUNTIME_REQUIRED");
+    }
+    evidence.runtime = {
+      exactVersion: TESTED_CODEX_VERSION,
+      releaseVersion: runtime.releaseVersion,
+      target: runtime.target,
+    };
+
+    const chatThreadId = dependencies.generateChatThreadId();
+    const executionRunId = dependencies.generateExecutionRunId();
+    try {
+      dependencies.beforeDurableOperation?.("CREATE_THREAD");
+      storage.createChatThread({
+        id: chatThreadId,
+        subtaskId,
+        providerId: CODEX_APP_SERVER_PROVIDER_ID,
+      });
+      evidence.chatThreadId = chatThreadId;
+    } catch {
+      throw new LiveExecutionError("DURABLE_THREAD_PERSISTENCE_FAILED");
+    }
+    try {
+      dependencies.beforeDurableOperation?.("CREATE_RUN");
+      storage.createExecutionRun({ id: executionRunId, chatThreadId });
+      evidence.executionRunId = executionRunId;
+      durableRunState = "CREATED";
+    } catch {
+      throw new LiveExecutionError("DURABLE_RUN_PERSISTENCE_FAILED");
+    }
+
+    transientRuntime = dependencies.createWorkspace();
+    assertDisposableWorkspace(transientRuntime);
+    const beforeSpawn = revalidateOwnedWorktree(
+      dependencies,
+      storage,
+      subtaskId,
+      trustedWorktree,
+    );
+    const worktreePath = beforeSpawn.ownership.worktreePath;
+    const eventTracker = new TurnEventTracker(
+      diagnostics,
+      dependencies.limits.maxAgentResponseBytes,
+      { kind: "WORKSPACE_WRITE", worktreePath },
+    );
+    events = eventTracker;
+
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = dependencies.spawnAppServer(
+        runtime.canonicalExecutablePath,
+        ["app-server", "--listen", "stdio://"],
+        {
+          cwd: worktreePath,
+          env: buildLiveCodexChildEnvironment(
+            dependencies.sourceEnvironment,
+            dependencies.normalHomeDirectory,
+            transientRuntime,
+          ),
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        },
+      );
+    } catch {
+      throw new LiveExecutionError("APP_SERVER_START_FAILED");
+    }
+    client = new JsonlAppServerClient(
+      child,
+      dependencies.limits,
+      diagnostics,
+      eventTracker,
+    );
+    await client.waitForSpawn(dependencies.limits.startupTimeoutMs);
+
+    const initializeResult = await client.request(
+      1,
+      "initialize",
+      { clientInfo: CLIENT_INFO, capabilities: null },
+      dependencies.limits.requestTimeoutMs,
+    );
+    validateInitializeResult(initializeResult);
+    client.notify("initialized");
+
+    const accountResult = await client.request(
+      2,
+      "account/read",
+      { refreshToken: false },
+      dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          parseChatGptAccount(result);
+          eventTracker.establishChatGptAuth();
+        },
+      },
+    );
+    evidence.planType = parseChatGptAccount(accountResult);
+    evidence.authType = "chatgpt";
+    eventTracker.assertChatGptAuthenticated();
+
+    revalidateOwnedWorktree(
+      dependencies,
+      storage,
+      subtaskId,
+      trustedWorktree,
+    );
+    const threadResult = await client.request(
+      3,
+      "thread/start",
+      {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        cwd: worktreePath,
+        ephemeral: true,
+        sandbox: "workspace-write",
+        serviceName: CLIENT_INFO.name,
+      },
+      dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          const authorizedThread = parseOwnedWorktreeThreadStartResult(
+            result,
+            worktreePath,
+          );
+          eventTracker.observeThreadResponse(authorizedThread.threadId);
+        },
+      },
+    );
+    const thread = parseOwnedWorktreeThreadStartResult(
+      threadResult,
+      worktreePath,
+    );
+    evidence.providerThread = mapCodexThreadReference(thread.threadId);
+    evidence.model = mapCodexModelReference(thread.model);
+    evidence.threadPolicy = {
+      approvalPolicy: "never",
+      cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE",
+      ephemeral: true,
+      sandbox: "workspaceWrite",
+      writableRootCount: 1,
+      networkAccess: false,
+    };
+    try {
+      dependencies.beforeDurableOperation?.("BIND_THREAD");
+      storage.bindChatThreadProviderReference({
+        chatThreadId,
+        providerThread: evidence.providerThread,
+      });
+    } catch {
+      throw new LiveExecutionError("DURABLE_THREAD_PERSISTENCE_FAILED");
+    }
+
+    eventTracker.assertChatGptAuthenticated();
+    revalidateOwnedWorktree(
+      dependencies,
+      storage,
+      subtaskId,
+      trustedWorktree,
+    );
+    const turnResult = await client.request(
+      4,
+      "turn/start",
+      {
+        threadId: thread.threadId,
+        input: [
+          { type: "text", text: preflight.text, text_elements: [] },
+        ],
+        cwd: worktreePath,
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: [worktreePath],
+          networkAccess: false,
+        },
+      },
+      dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          eventTracker.observeTurnResponse(parseTurnStartResult(result));
+        },
+        onSent: () => {
+          diagnostics.turnStartRequests += 1;
+          turnStartSent = true;
+          eventTracker.observeTurnStartSent(thread.threadId);
+        },
+      },
+    );
+    const turnId = parseTurnStartResult(turnResult);
+    if (eventTracker.turnId !== turnId) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    evidence.providerRun = mapCodexTurnReference(thread.threadId, turnId);
+    try {
+      dependencies.beforeDurableOperation?.("START_RUN");
+      storage.startExecutionRun({
+        executionRunId,
+        providerRun: evidence.providerRun,
+        providerModel: evidence.model,
+      });
+      durableRunState = "RUNNING";
+    } catch {
+      throw new LiveExecutionError("DURABLE_RUN_PERSISTENCE_FAILED");
+    }
+
+    const terminal = await eventTracker.waitForTerminal(
+      dependencies.limits.turnTimeoutMs,
+    );
+    if (client.failure !== null) {
+      throw client.failure;
+    }
+    eventTracker.assertChatGptAuthenticated();
+    evidence.terminalTurnStatus = terminal.status;
+    evidence.normalizedUsage = eventTracker.normalizedUsage;
+    if (terminal.status === "failed") {
+      throw new LiveExecutionError("TURN_FAILED");
+    }
+    if (terminal.status === "interrupted") {
+      throw new LiveExecutionError("TURN_INTERRUPTED");
+    }
+  } catch (error: unknown) {
+    failureCode = asOwnedWorktreeFailureCode(error);
+    if (
+      turnStartSent &&
+      client !== undefined &&
+      events?.threadId !== null &&
+      events?.threadId !== undefined &&
+      events.turnId !== null &&
+      events.terminal === null &&
+      client.failure === null &&
+      client.isRunning &&
+      diagnostics.interruptRequests === 0
+    ) {
+      diagnostics.interruptRequests += 1;
+      try {
+        await client.request(
+          5,
+          "turn/interrupt",
+          { threadId: events.threadId, turnId: events.turnId },
+          dependencies.limits.interruptTimeoutMs,
+        );
+      } catch {
+        // Preserve the original sanitized failure and continue bounded shutdown.
+      }
+    }
+
+    if (evidence.executionRunId !== null && durableRunState === "RUNNING") {
+      const durableStatus =
+        events?.terminal?.status === "interrupted"
+          ? "INTERRUPTED"
+          : "FAILED";
+      try {
+        dependencies.beforeDurableOperation?.("FINISH_RUN");
+        storage.finishExecutionRun({
+          executionRunId: evidence.executionRunId,
+          status: durableStatus,
+          ...(evidence.model === null ? {} : { providerModel: evidence.model }),
+          ...(events?.normalizedUsage === null || events?.normalizedUsage === undefined
+            ? {}
+            : { normalizedUsage: events.normalizedUsage }),
+        });
+        durableRunState = "TERMINAL";
+      } catch {
+        failureCode = "DURABLE_RUN_PERSISTENCE_FAILED";
+      }
+    } else if (
+      evidence.executionRunId !== null &&
+      durableRunState === "CREATED"
+    ) {
+      try {
+        dependencies.beforeDurableOperation?.("FAIL_RUN_BEFORE_START");
+        storage.failExecutionRunBeforeStart(evidence.executionRunId);
+        durableRunState = "TERMINAL";
+      } catch {
+        failureCode = "DURABLE_RUN_PERSISTENCE_FAILED";
+      }
+    }
+  } finally {
+    if (events !== undefined) {
+      evidence.normalizedUsage ??= events.normalizedUsage;
+      evidence.terminalTurnStatus ??= events.terminal?.status ?? null;
+    }
+    if (client !== undefined) {
+      evidence.appServerChildCleaned = await client.shutdown();
+      if (failureCode === null) {
+        failureCode = client.failure?.code ?? null;
+        if (!evidence.appServerChildCleaned && failureCode === null) {
+          failureCode = "PROCESS_CLEANUP_FAILED";
+        }
+      }
+    }
+    if (transientRuntime !== undefined) {
+      try {
+        dependencies.removeWorkspace(transientRuntime);
+        evidence.transientRuntimeCleaned = !existsSync(transientRuntime);
+      } catch {
+        evidence.transientRuntimeCleaned = false;
+      }
+      if (!evidence.transientRuntimeCleaned && failureCode === null) {
+        failureCode = "WORKSPACE_CLEANUP_FAILED";
+      }
+    }
+  }
+
+  if (evidence.executionRunId !== null && durableRunState === "RUNNING") {
+    const durableStatus =
+      failureCode === null && evidence.terminalTurnStatus === "completed"
+        ? "SUCCEEDED"
+        : evidence.terminalTurnStatus === "interrupted"
+          ? "INTERRUPTED"
+          : "FAILED";
+    try {
+      dependencies.beforeDurableOperation?.("FINISH_RUN");
+      storage.finishExecutionRun({
+        executionRunId: evidence.executionRunId,
+        status: durableStatus,
+        ...(evidence.model === null ? {} : { providerModel: evidence.model }),
+        ...(evidence.normalizedUsage === null
+          ? {}
+          : { normalizedUsage: evidence.normalizedUsage }),
+      });
+      durableRunState = "TERMINAL";
+    } catch {
+      failureCode = "DURABLE_RUN_PERSISTENCE_FAILED";
+    }
+  }
+
+  const common = ownedWorktreeResultBase(evidence, diagnostics);
+  if (failureCode !== null) {
+    return Object.freeze({ ...common, success: false, failureCode });
+  }
+  if (evidence.terminalTurnStatus !== "completed") {
+    return Object.freeze({
+      ...common,
+      success: false,
+      failureCode: "TERMINAL_EVENT_REQUIRED",
+    });
+  }
+  return Object.freeze({ ...common, success: true, failureCode: null });
+}
+
 /** Internal deterministic-test hook; not exported from the package root. */
 export async function executeSingleSubtaskLiveCodexWithDependenciesForTest(
   storage: TaskStorage,
@@ -1159,7 +1744,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     }
     evidence.agentResponseText = eventTracker.responseText;
   } catch (error: unknown) {
-    failureCode = asLiveExecutionError(error).code;
+    failureCode = asReadOnlyFailureCode(error);
     if (
       turnStartSent &&
       client !== undefined &&
@@ -1191,7 +1776,10 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     if (client !== undefined) {
       evidence.appServerChildCleaned = await client.shutdown();
       if (failureCode === null) {
-        failureCode = client.failure?.code ?? null;
+        failureCode =
+          client.failure === null
+            ? null
+            : asReadOnlyFailureCode(client.failure);
         if (!evidence.appServerChildCleaned && failureCode === null) {
           failureCode = "PROCESS_CLEANUP_FAILED";
         }
@@ -1245,6 +1833,22 @@ function productionDependencies(): LiveExecutionDependencies {
     createWorkspace: createDisposableWorkspace,
     removeWorkspace,
     limits: DEFAULT_LIMITS,
+  };
+}
+
+function productionOwnedWorktreeDependencies(): OwnedWorktreeExecutionDependencies {
+  return {
+    ...productionDependencies(),
+    checkCompatibility: () => checkOwnedCodexCompatibility().compatible,
+    createWorkspace: createWriteRuntimeDirectory,
+    resolveOwnedWorktree: (storage, subtaskId) =>
+      createWorktreeOwnershipManager(
+        storage,
+      ).resolveActiveOwnedWorktreeForSubtask(subtaskId),
+    generateChatThreadId: () =>
+      ChatThreadIdSchema.parse(`thr_${randomBytes(16).toString("hex")}`),
+    generateExecutionRunId: () =>
+      ExecutionRunIdSchema.parse(`run_${randomBytes(16).toString("hex")}`),
   };
 }
 
@@ -1309,6 +1913,16 @@ function createDisposableWorkspace(): string {
   return workspace;
 }
 
+function createWriteRuntimeDirectory(): string {
+  const canonicalTemporaryRoot = realpathSync(tmpdir());
+  const runtimeDirectory = mkdtempSync(
+    join(canonicalTemporaryRoot, WRITE_RUNTIME_PREFIX),
+  );
+  chmodSync(runtimeDirectory, 0o700);
+  assertDisposableWorkspace(runtimeDirectory);
+  return runtimeDirectory;
+}
+
 function assertDisposableWorkspace(workspace: string): void {
   const canonicalTemporaryRoot = realpathSync(tmpdir());
   const canonicalWorkspace = realpathSync(workspace);
@@ -1342,6 +1956,50 @@ function assertExactActiveRuntime(runtime: ResolvedCodexRuntime): void {
   ) {
     throw new LiveExecutionError("ACTIVE_RUNTIME_REQUIRED");
   }
+}
+
+function assertActiveOwnedWorktree(
+  resolved: ResolvedActiveOwnedWorktree,
+  subtaskId: SubtaskId,
+): void {
+  if (
+    resolved.ownership.status !== "ACTIVE" ||
+    resolved.ownership.subtaskId !== subtaskId ||
+    !isAbsolute(resolved.ownership.worktreePath)
+  ) {
+    throw new LiveExecutionError("ACTIVE_WORKTREE_REQUIRED");
+  }
+}
+
+function revalidateOwnedWorktree(
+  dependencies: OwnedWorktreeExecutionDependencies,
+  storage: TaskStorage,
+  subtaskId: SubtaskId,
+  trusted: ResolvedActiveOwnedWorktree,
+): ResolvedActiveOwnedWorktree {
+  let current: ResolvedActiveOwnedWorktree;
+  try {
+    current = dependencies.resolveOwnedWorktree(storage, subtaskId);
+    assertActiveOwnedWorktree(current, subtaskId);
+  } catch {
+    throw new LiveExecutionError("WORKTREE_AUTHORITY_DRIFT");
+  }
+  const left = trusted.ownership;
+  const right = current.ownership;
+  if (
+    left.id !== right.id ||
+    left.projectId !== right.projectId ||
+    left.subtaskId !== right.subtaskId ||
+    left.worktreePath !== right.worktreePath ||
+    left.branchName !== right.branchName ||
+    left.startingCommitSha !== right.startingCommitSha ||
+    left.createdAt !== right.createdAt ||
+    left.activatedAt !== right.activatedAt ||
+    trusted.currentHeadSha !== current.currentHeadSha
+  ) {
+    throw new LiveExecutionError("WORKTREE_AUTHORITY_DRIFT");
+  }
+  return current;
 }
 
 function validateInitializeResult(result: JsonValue): void {
@@ -1428,6 +2086,92 @@ function parseThreadStartResult(
   };
 }
 
+function parseOwnedWorktreeThreadStartResult(
+  result: JsonValue,
+  worktreePath: string,
+): { readonly threadId: string; readonly model: string } {
+  const record = requireRecord(result);
+  const thread = requireRecord(record.thread);
+  const threadId = requireBoundedString(thread.id, 512);
+  if (thread.ephemeral !== true) {
+    throw new LiveExecutionError("EPHEMERAL_THREAD_REQUIRED");
+  }
+  if (record.cwd !== worktreePath || record.approvalPolicy !== "never") {
+    throw new LiveExecutionError("WRITE_POLICY_REQUIRED");
+  }
+  const sandbox = requireRecord(record.sandbox);
+  if (
+    sandbox.type !== "workspaceWrite" ||
+    sandbox.networkAccess !== false ||
+    !Array.isArray(sandbox.writableRoots) ||
+    sandbox.writableRoots.length !== 1 ||
+    sandbox.writableRoots[0] !== worktreePath
+  ) {
+    throw new LiveExecutionError("WRITE_POLICY_REQUIRED");
+  }
+  if (record.approvalsReviewer !== "user") {
+    throw new LiveExecutionError("WRITE_POLICY_REQUIRED");
+  }
+  return {
+    threadId,
+    model: requireBoundedString(record.model, 512),
+  };
+}
+
+function validateWriteThreadItem(
+  item: JsonObject,
+  itemType: "commandExecution" | "fileChange",
+  worktreePath: string,
+): void {
+  requireBoundedString(item.id, 512);
+  if (
+    item.status !== "inProgress" &&
+    item.status !== "completed" &&
+    item.status !== "failed" &&
+    item.status !== "declined"
+  ) {
+    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+  }
+  if (itemType === "commandExecution") {
+    requireString(item.command);
+    if (!Array.isArray(item.commandActions)) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    const commandCwd = requireBoundedString(item.cwd, 4_096);
+    if (!pathIsWithin(commandCwd, worktreePath)) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    return;
+  }
+  if (!Array.isArray(item.changes)) {
+    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+  }
+  for (const change of item.changes) {
+    const record = requireRecord(change);
+    requireString(record.diff);
+    requireBoundedString(record.path, 4_096);
+    const kind = requireRecord(record.kind);
+    if (
+      kind.type !== "add" &&
+      kind.type !== "delete" &&
+      kind.type !== "update"
+    ) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+  }
+}
+
+function pathIsWithin(candidate: string, root: string): boolean {
+  if (!isAbsolute(candidate)) {
+    return false;
+  }
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath === "" ||
+    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+  );
+}
+
 function parseTurnStartResult(result: JsonValue): string {
   const record = requireRecord(result);
   const turn = requireRecord(record.turn);
@@ -1462,7 +2206,7 @@ function requireRecord(value: unknown): JsonObject {
 
 function requireRecordForCode(
   value: unknown,
-  code: LiveCodexExecutionFailureCode,
+  code: CodexExecutionFailureCode,
 ): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new LiveExecutionError(code);
@@ -1488,7 +2232,7 @@ function requireBoundedString(value: unknown, maximumLength: number): string {
 function requireBoundedStringForCode(
   value: unknown,
   maximumLength: number,
-  code: LiveCodexExecutionFailureCode,
+  code: CodexExecutionFailureCode,
 ): string {
   if (
     typeof value !== "string" ||
@@ -1527,6 +2271,19 @@ function asLiveExecutionError(error: unknown): LiveExecutionError {
     : new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
 }
 
+function asReadOnlyFailureCode(error: unknown): LiveCodexExecutionFailureCode {
+  const code = asLiveExecutionError(error).code;
+  return (LIVE_CODEX_EXECUTION_FAILURE_CODES as readonly string[]).includes(code)
+    ? (code as LiveCodexExecutionFailureCode)
+    : "APP_SERVER_PROTOCOL_ERROR";
+}
+
+function asOwnedWorktreeFailureCode(
+  error: unknown,
+): OwnedWorktreeCodexExecutionFailureCode {
+  return asLiveExecutionError(error).code;
+}
+
 function emptyDiagnostics(): MutableDiagnostics {
   return {
     approvalRequestsDeclined: 0,
@@ -1554,6 +2311,27 @@ function emptyEvidence(): ExecutionEvidence {
     agentResponseText: "",
     appServerChildCleaned: true,
     disposableWorkspaceCleaned: true,
+  };
+}
+
+function emptyOwnedWorktreeEvidence(): OwnedWorktreeExecutionEvidence {
+  return {
+    runtime: null,
+    authType: null,
+    planType: null,
+    preflight: null,
+    chatThreadId: null,
+    executionRunId: null,
+    providerThread: null,
+    providerRun: null,
+    model: null,
+    normalizedUsage: null,
+    terminalTurnStatus: null,
+    worktreeOwnershipId: null,
+    worktreeStartingHeadSha: null,
+    threadPolicy: null,
+    appServerChildCleaned: true,
+    transientRuntimeCleaned: true,
   };
 }
 
@@ -1587,5 +2365,44 @@ function immediateFailure(
     success: false,
     failureCode,
     agentResponseText: null,
+  });
+}
+
+function ownedWorktreeResultBase(
+  evidence: OwnedWorktreeExecutionEvidence,
+  diagnostics: MutableDiagnostics,
+): OwnedWorktreeCodexExecutionResultBase {
+  return {
+    providerId: CODEX_APP_SERVER_PROVIDER_ID,
+    runtime: evidence.runtime,
+    authType: evidence.authType,
+    planType: evidence.planType,
+    preflight: evidence.preflight,
+    chatThreadId: evidence.chatThreadId,
+    executionRunId: evidence.executionRunId,
+    providerThread: evidence.providerThread,
+    providerRun: evidence.providerRun,
+    model: evidence.model,
+    normalizedUsage: evidence.normalizedUsage,
+    terminalTurnStatus: evidence.terminalTurnStatus,
+    worktreeOwnershipId: evidence.worktreeOwnershipId,
+    worktreeStartingHeadSha: evidence.worktreeStartingHeadSha,
+    threadPolicy: evidence.threadPolicy,
+    diagnostics: Object.freeze({ ...diagnostics }),
+    appServerChildCleaned: evidence.appServerChildCleaned,
+    transientRuntimeCleaned: evidence.transientRuntimeCleaned,
+  };
+}
+
+function immediateOwnedWorktreeFailure(
+  failureCode: OwnedWorktreeCodexExecutionFailureCode,
+): OwnedWorktreeCodexExecutionFailure {
+  return Object.freeze({
+    ...ownedWorktreeResultBase(
+      emptyOwnedWorktreeEvidence(),
+      emptyDiagnostics(),
+    ),
+    success: false,
+    failureCode,
   });
 }

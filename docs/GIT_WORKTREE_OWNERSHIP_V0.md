@@ -1,6 +1,6 @@
 # Git Worktree Ownership & Provisioning V0
 
-Status: HARDENED. Comprehensive Hardening passed. Fresh Independent QA on `b551278ad89a474c952afd4befef81fbee5337d0` failed on CTC-WORKTREE-FQA-001; the finding is repaired and Focused Fresh Re-QA remains pending. This contract establishes worktree ownership only; it does not authorize write-enabled Codex execution.
+Status: ACCEPTED. Comprehensive Hardening passed. Fresh Independent QA on `b551278ad89a474c952afd4befef81fbee5337d0` failed on CTC-WORKTREE-FQA-001; the bounded repair at `2db4e28b9929c75afcf17bde07df550de8f0de66` passed Focused Fresh Re-QA with no new findings, so CTC-WORKTREE-FQA-001 is closed. This contract establishes worktree ownership only; it does not itself authorize write-enabled Codex execution.
 
 ## Authority and identity
 
@@ -67,4 +67,4 @@ V0 invokes the ambient `git` executable selected by the Console process PATH. Gi
 
 ## Next maturity gate
 
-The next task is a new-chat Focused Fresh Re-QA for CTC-WORKTREE-FQA-001, followed by explicit acceptance. Write-Enabled Execution Authority Binding V0 (roadmap Step 5B) remains out of scope until this ownership foundation is accepted.
+The ownership foundation is accepted at evidence SHA `2db4e28b9929c75afcf17bde07df550de8f0de66`. Write-Enabled Execution Authority Binding V0 is a separate implemented contract whose Comprehensive Hardening and Fresh Independent QA remain pending.

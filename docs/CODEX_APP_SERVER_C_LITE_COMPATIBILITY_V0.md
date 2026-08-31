@@ -45,11 +45,15 @@ absolute, and network references fail closed.
 Compatibility is semantic and limited to the methods declared in
 `protocol.ts`: the supported client requests and `initialized` notification;
 the consumed thread, goal, turn, item, delta, usage, completion, and
-request-resolution notifications; and command-execution and file-change
-approval requests. Validation also covers the currently consumed required
-request parameters and initialization, thread, turn, text-input, token-usage,
-and approval shapes. Method checks are bound to the correct directional message
-root and its associated params definition; response, input, usage, and approval
+request-resolution notifications; command-execution and file-change output
+notifications; and command-execution and file-change approval requests.
+Validation also covers the currently consumed required request parameters and
+initialization, thread, turn, text-input, token-usage, approval, write-tool item,
+and sandbox shapes. The write contract specifically requires the stable
+`workspace-write` thread sandbox mode and the `workspaceWrite` turn policy with
+boolean `networkAccess` and `writableRoots` targeting absolute paths. Method
+checks are bound to the correct directional message root and its associated
+params definition; response, input, usage, tool-item, sandbox, and approval
 checks are bound to their named definitions and relationships. Unrelated
 additive schema surface does not fail C-lite or expand Console support.
 
@@ -79,5 +83,7 @@ handshake; create or resume a thread; start, interrupt, or stream a turn; handle
 live approvals; access credentials; call a model/provider; implement transport,
 persistence, orchestration, worktrees, UI, or another provider.
 
-Live Codex App Server execution remains blocked until C-lite completes
-comprehensive hardening, independent QA, and explicit acceptance.
+C-lite remains the fail-closed compatibility gate for both the accepted
+read-only execution path and the implemented write-enabled owned-worktree path.
+The write-enabled path remains unaccepted until its own Comprehensive Hardening,
+Fresh Independent QA, and explicit acceptance complete.
