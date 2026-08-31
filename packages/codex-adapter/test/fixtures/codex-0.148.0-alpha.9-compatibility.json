@@ -103,6 +103,8 @@
       "serviceName"
     ],
     "workspaceWritePolicyProperties": [
+      "excludeSlashTmp",
+      "excludeTmpdirEnvVar",
       "networkAccess",
       "type",
       "writableRoots"

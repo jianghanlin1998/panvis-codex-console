@@ -28,6 +28,7 @@ import {
   SubtaskDependencySchema,
   SubtaskIdSchema,
   SubtaskSchema,
+  WorktreeOwnershipIdSchema,
   buildAllowedContextSet,
   deriveContextScope,
   evaluateSubtaskDependencyReadiness,
@@ -66,6 +67,7 @@ import type {
   SubtaskId,
   SubtaskImplementationCheckpoint,
   SubtaskImplementationCheckpointId,
+  WorktreeOwnershipId,
 } from "@codex-task-console/domain";
 import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
@@ -131,6 +133,26 @@ export interface FinishExecutionRunInput {
   readonly status: "SUCCEEDED" | "FAILED" | "INTERRUPTED";
   readonly providerModel?: ProviderModelReference;
   readonly normalizedUsage?: NormalizedUsage;
+}
+
+export interface ReservePrimaryExecutionAttemptInput {
+  readonly subtaskId: SubtaskId;
+  readonly worktreeOwnershipId: WorktreeOwnershipId;
+  readonly chatThreadId: ChatThreadId;
+  readonly executionRunId: ExecutionRunId;
+  readonly providerId: ExecutionProviderId;
+}
+
+export interface ReservedPrimaryExecutionAttempt {
+  readonly chatThread: ChatThread;
+  readonly executionRun: ExecutionRun;
+}
+
+export type FinalizePrimaryExecutionAttemptInput = FinishExecutionRunInput;
+
+export interface FinalizedPrimaryExecutionAttempt {
+  readonly chatThread: ChatThread;
+  readonly executionRun: ExecutionRun;
 }
 
 type ProjectContextScope = Extract<
@@ -426,6 +448,31 @@ const parseFinishExecutionRunInput = (
     ...(normalizedUsage === undefined
       ? {}
       : { normalizedUsage: normalizedUsage.data }),
+  };
+};
+
+const parseReservePrimaryExecutionAttemptInput = (
+  input: ReservePrimaryExecutionAttemptInput,
+): ReservePrimaryExecutionAttemptInput => {
+  const record = parseStrictInputRecord(input, "Primary execution attempt reservation", [
+    "subtaskId",
+    "worktreeOwnershipId",
+    "chatThreadId",
+    "executionRunId",
+    "providerId",
+  ]);
+  const ownershipId = WorktreeOwnershipIdSchema.safeParse(
+    record.worktreeOwnershipId,
+  );
+  if (!ownershipId.success) {
+    throw invalidInput("Primary execution attempt reservation");
+  }
+  return {
+    subtaskId: parseCanonicalSubtaskId(record.subtaskId as SubtaskId),
+    worktreeOwnershipId: ownershipId.data,
+    chatThreadId: parseChatThreadId(record.chatThreadId as ChatThreadId),
+    executionRunId: parseExecutionRunId(record.executionRunId as ExecutionRunId),
+    providerId: parseExecutionProviderId(record.providerId as ExecutionProviderId),
   };
 };
 
@@ -1422,6 +1469,110 @@ export class TaskStorage {
     );
   }
 
+  reservePrimaryExecutionAttempt(
+    input: ReservePrimaryExecutionAttemptInput,
+  ): ReservedPrimaryExecutionAttempt {
+    const reservation = parseReservePrimaryExecutionAttemptInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        if (this.#getSubtask(reservation.subtaskId) === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The parent Subtask does not exist.",
+          );
+        }
+        const activeOwnership = this.#sqlite
+          .prepare(
+            `SELECT id
+               FROM worktree_ownerships
+              WHERE id = ? AND subtask_id = ? AND status = 'ACTIVE'`,
+          )
+          .get(
+            reservation.worktreeOwnershipId,
+            reservation.subtaskId,
+          ) as { readonly id: string } | undefined;
+        if (activeOwnership?.id !== reservation.worktreeOwnershipId) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The primary execution attempt requires exact ACTIVE worktree authority.",
+          );
+        }
+        const activeAttempt = this.#sqlite
+          .prepare(
+            `SELECT er.id
+               FROM execution_runs er
+               JOIN chat_threads ct ON ct.id = er.chat_thread_id
+              WHERE ct.subtask_id = ?
+                AND er.status IN ('CREATED', 'RUNNING')
+              LIMIT 1`,
+          )
+          .get(reservation.subtaskId) as { readonly id: string } | undefined;
+        if (activeAttempt !== undefined) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Subtask already has an active primary execution attempt.",
+          );
+        }
+        if (
+          this.#getChatThread(reservation.chatThreadId) !== null ||
+          this.#getExecutionRun(reservation.executionRunId) !== null
+        ) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The primary execution attempt identity already exists.",
+          );
+        }
+
+        const timestamp = this.#timestamp();
+        this.#database
+          .insert(chatThreadsTable)
+          .values({
+            id: reservation.chatThreadId,
+            subtaskId: reservation.subtaskId,
+            providerId: reservation.providerId,
+            providerThreadId: null,
+            status: "OPEN",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            closedAt: null,
+          })
+          .run();
+        this.#database
+          .insert(executionRunsTable)
+          .values({
+            id: reservation.executionRunId,
+            chatThreadId: reservation.chatThreadId,
+            status: "CREATED",
+            providerThreadId: null,
+            providerRunId: null,
+            providerModelId: null,
+            usagePresent: 0,
+            inputTokens: null,
+            cachedInputTokens: null,
+            outputTokens: null,
+            reasoningTokens: null,
+            totalTokens: null,
+            runtimeSeconds: null,
+            toolCallCount: null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            startedAt: null,
+            endedAt: null,
+          })
+          .run();
+        const chatThread = this.#getChatThread(reservation.chatThreadId);
+        const executionRun = this.#getExecutionRun(reservation.executionRunId);
+        if (chatThread === null || executionRun === null) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The primary execution attempt was not persisted.",
+          );
+        }
+        return Object.freeze({ chatThread, executionRun });
+      }),
+    );
+  }
+
   createChatThread(input: CreateChatThreadInput): ChatThread {
     const threadInput = parseCreateChatThreadInput(input);
     return this.#operation(() =>
@@ -1947,6 +2098,62 @@ export class TaskStorage {
           );
         }
         return stored;
+      }),
+    );
+  }
+
+  finalizePrimaryExecutionAttempt(
+    input: FinalizePrimaryExecutionAttemptInput,
+  ): FinalizedPrimaryExecutionAttempt {
+    const finalization = parseFinishExecutionRunInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const executionRun = this.#getExecutionRun(
+          finalization.executionRunId,
+        );
+        if (executionRun === null) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The ExecutionRun does not exist.",
+          );
+        }
+        const chatThread = this.#getChatThread(executionRun.chatThreadId);
+        if (chatThread === null) {
+          throw malformedStoredData();
+        }
+        const runCount = this.#sqlite
+          .prepare(
+            "SELECT count(*) AS count FROM execution_runs WHERE chat_thread_id = ?",
+          )
+          .get(chatThread.id) as { readonly count: number };
+        if (chatThread.status !== "OPEN" || runCount.count !== 1) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The primary execution attempt is not an open one-attempt thread.",
+          );
+        }
+
+        const finalizedRun =
+          executionRun.status === "CREATED"
+            ? (() => {
+                if (
+                  finalization.status !== "FAILED" ||
+                  finalization.providerModel !== undefined ||
+                  finalization.normalizedUsage !== undefined
+                ) {
+                  throw new TaskStorageError(
+                    "CONFLICT",
+                    "A created primary execution attempt can only fail before start.",
+                  );
+                }
+                return this.failExecutionRunBeforeStart(executionRun.id);
+              })()
+            : this.finishExecutionRun(finalization);
+        const finalizedThread = this.closeChatThread(chatThread.id);
+        return Object.freeze({
+          chatThread: finalizedThread,
+          executionRun: finalizedRun,
+        });
       }),
     );
   }

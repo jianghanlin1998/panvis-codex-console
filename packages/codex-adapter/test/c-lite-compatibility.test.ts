@@ -667,6 +667,28 @@ describe("association-correct semantic validation", () => {
     expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
   });
 
+  it.each(["excludeSlashTmp", "excludeTmpdirEnvVar"])(
+    "rejects a workspaceWrite policy without required temp control %s",
+    (property) => {
+      const bundle = buildCompatibilityBundle();
+      const variant = schemaArrayAt(bundle, [
+        "definitions",
+        "v2",
+        "SandboxPolicy",
+        "oneOf",
+      ]).find((candidate) =>
+        stringArray(
+          schemaRecord(schemaRecord(candidate.properties).type).enum,
+        ).includes("workspaceWrite"),
+      );
+      if (variant === undefined) {
+        throw new Error("Expected the workspaceWrite fixture variant.");
+      }
+      delete schemaRecord(variant.properties)[property];
+      expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+    },
+  );
+
   it("rejects a malformed consumed commandExecution item shape", () => {
     const bundle = buildCompatibilityBundle();
     const variant = schemaArrayAt(bundle, [
@@ -1138,6 +1160,8 @@ function buildCompatibilityBundle(): MutableSchema {
         },
         {
           properties: {
+            excludeSlashTmp: { type: "boolean" },
+            excludeTmpdirEnvVar: { type: "boolean" },
             networkAccess: { type: "boolean" },
             type: { enum: ["workspaceWrite"] },
             writableRoots: {

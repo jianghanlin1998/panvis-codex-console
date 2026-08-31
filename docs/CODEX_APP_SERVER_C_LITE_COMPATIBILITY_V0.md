@@ -51,7 +51,8 @@ Validation also covers the currently consumed required request parameters and
 initialization, thread, turn, text-input, token-usage, approval, write-tool item,
 and sandbox shapes. The write contract specifically requires the stable
 `workspace-write` thread sandbox mode and the `workspaceWrite` turn policy with
-boolean `networkAccess` and `writableRoots` targeting absolute paths. Method
+boolean `networkAccess`, boolean `excludeSlashTmp`, boolean
+`excludeTmpdirEnvVar`, and `writableRoots` targeting absolute paths. Method
 checks are bound to the correct directional message root and its associated
 params definition; response, input, usage, tool-item, sandbox, and approval
 checks are bound to their named definitions and relationships. Unrelated
@@ -84,6 +85,9 @@ live approvals; access credentials; call a model/provider; implement transport,
 persistence, orchestration, worktrees, UI, or another provider.
 
 C-lite remains the fail-closed compatibility gate for both the accepted
-read-only execution path and the implemented write-enabled owned-worktree path.
-The write-enabled path remains unaccepted until its own Comprehensive Hardening,
-Fresh Independent QA, and explicit acceptance complete.
+read-only execution path and the hardened write-enabled owned-worktree path.
+The write entrypoint additionally starts the exact tested runtime with its
+strict external-tool feature-disable policy; deterministic launch-argument and
+exact-runtime no-model sentinel probes bind that policy to this pinned release.
+The write-enabled path remains unaccepted until Fresh Independent QA and
+explicit acceptance complete.

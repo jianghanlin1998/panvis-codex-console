@@ -186,24 +186,40 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-WORKTREE-HARD-003: CLOSED
 - CTC-WORKTREE-HARD-004: CLOSED
 - Real target WorktreeOwnership feature writes before acceptance: NO
-- Write-Enabled Execution Authority Binding V0: IMPLEMENTED
+- Write-Enabled Execution Authority Binding V0: HARDENED
 - Write-enabled deterministic baseline: PASS
 - ACTIVE owned worktree binding: PASS
 - workspaceWrite exact-root binding: PASS
 - Write-enabled network access: false
 - Write-enabled approval escalation: NONE / fail-closed
 - Durable ChatThread/ExecutionRun integration baseline: PASS
+- Atomic one-primary-execution reservation across processes: PASS
+- Atomic ExecutionRun terminalization / ChatThread closure: PASS
+- Worktree release / execution exclusion: PASS
+- Hardlink-free no-follow V1 precondition and final success gate: PASS
+- Exact write temp policy: private TMPDIR allowed / arbitrary `/tmp` denied
+- External write-tool feature-disable startup sentinel: PASS
+- Provider tool lifecycle and filesystem-aware path matrix: PASS
+- CTC-WRITE-HARD-001: CLOSED
+- CTC-WRITE-HARD-002: CLOSED
+- CTC-WRITE-HARD-003: CLOSED
+- CTC-WRITE-HARD-004: CLOSED
+- CTC-WRITE-HARD-005: CLOSED
+- CTC-WRITE-HARD-006: CLOSED
+- CTC-WRITE-HARD-007: CLOSED
+- CTC-WRITE-HARD-008: CLOSED
 - Live Execution V0 remains ACCEPTED and read-only
 - Durable Persistence V0 remains ACCEPTED
 - Real target write-enabled execution: NO
 - Provider/model write-enabled turns: 0
-- Write-Enabled Execution Comprehensive Hardening: PENDING
-- Write-Enabled Execution Fresh Independent QA: NOT READY
+- Write-Enabled Execution Comprehensive Hardening: PASS
+- Write-Enabled Execution Post-Hardening Repair: PASS
+- Write-Enabled Execution Fresh Independent QA: READY / NOT RUN
 - Step 5B ACCEPTED: NO
 - Roadmap Step 5 overall: PARTIAL
 
 ## Next safe task
-**Next safe task:** new-chat Write-Enabled Execution Authority Binding V0 Comprehensive Hardening.
+**Next safe task:** new-chat Write-Enabled Execution Authority Binding V0 Fresh Independent QA.
 
 Hanlin manual QA: NOT REQUIRED
 

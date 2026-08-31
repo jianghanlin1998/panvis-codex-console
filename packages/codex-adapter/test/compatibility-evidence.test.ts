@@ -148,6 +148,8 @@ describe("Codex 0.148 stable-surface evidence", () => {
         "threadId",
       ],
       workspaceWritePolicyProperties: [
+        "excludeSlashTmp",
+        "excludeTmpdirEnvVar",
         "networkAccess",
         "type",
         "writableRoots",

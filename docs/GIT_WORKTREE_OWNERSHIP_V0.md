@@ -44,7 +44,7 @@ A path string, branch string, deserialized record, or equal-shaped object is dat
 
 ## Release and recovery
 
-Release requires an exact `ACTIVE` worktree with no tracked, untracked, or unmerged changes. It captures the exact current HEAD, durably transitions to `RELEASING`, revalidates the clean worktree, uses normal non-force `git worktree remove`, verifies that the checkout is absent and unregistered, and verifies that the retained branch still points to `releaseHeadSha` before finalizing `RELEASED`. The branch and commits are preserved. Dirty release fails before the durable transition; a post-transition failure preserves `RELEASING`.
+Release requires an exact `ACTIVE` worktree with no tracked, untracked, or unmerged changes and no `CREATED` or `RUNNING` primary execution for the Subtask. The `ACTIVE -> RELEASING` transaction checks that execution exclusion atomically with the lifecycle transition, while execution reservation requires the same ownership to remain `ACTIVE`; whichever transition wins makes the other fail closed. Release captures the exact current HEAD, durably transitions to `RELEASING`, revalidates the clean worktree, uses normal non-force `git worktree remove`, verifies that the checkout is absent and unregistered, and verifies that the retained branch still points to `releaseHeadSha` before finalizing `RELEASED`. The branch and commits are preserved. Dirty or active-execution release fails before the durable transition; a post-transition failure preserves `RELEASING`.
 
 Reconciliation is deliberately bounded because SQLite and Git cannot share one atomic transaction:
 
@@ -67,4 +67,4 @@ V0 invokes the ambient `git` executable selected by the Console process PATH. Gi
 
 ## Next maturity gate
 
-The ownership foundation is accepted at evidence SHA `2db4e28b9929c75afcf17bde07df550de8f0de66`. Write-Enabled Execution Authority Binding V0 is a separate implemented contract whose Comprehensive Hardening and Fresh Independent QA remain pending.
+The ownership foundation is accepted at evidence SHA `2db4e28b9929c75afcf17bde07df550de8f0de66`. Write-Enabled Execution Authority Binding V0 is a separate hardened contract whose Fresh Independent QA and explicit acceptance remain pending.

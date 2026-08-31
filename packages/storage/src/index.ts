@@ -26,8 +26,12 @@ export type {
   CreateChatThreadInput,
   CreateExecutionRunInput,
   FinishExecutionRunInput,
+  FinalizePrimaryExecutionAttemptInput,
+  FinalizedPrimaryExecutionAttempt,
   JitContextStorageSourceSnapshot,
   OpenTaskDatabaseOptions,
+  ReservePrimaryExecutionAttemptInput,
+  ReservedPrimaryExecutionAttempt,
   StartExecutionRunInput,
 } from "./task-storage.js";
 

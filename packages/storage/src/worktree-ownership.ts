@@ -57,6 +57,7 @@ export type WorktreeOwnershipErrorCode =
   | "OWNERSHIP_COLLISION"
   | "OWNERSHIP_NOT_ACTIVE"
   | "OWNERSHIP_DRIFT"
+  | "ACTIVE_EXECUTION_EXISTS"
   | "WORKTREE_DIRTY"
   | "GIT_OPERATION_FAILED"
   | "RECOVERY_REQUIRED"
@@ -966,11 +967,27 @@ const transitionOwnership = (
           )
           .run(now, id);
         break;
-      case "ACTIVE->RELEASING":
+      case "ACTIVE->RELEASING": {
         if (releaseHeadSha === null) {
           throw ownershipError(
             "STORAGE_UNAVAILABLE",
             "Release evidence is required before worktree removal.",
+          );
+        }
+        const activeExecution = access.sqlite
+          .prepare(
+            `SELECT er.id
+               FROM execution_runs er
+               JOIN chat_threads ct ON ct.id = er.chat_thread_id
+              WHERE ct.subtask_id = ?
+                AND er.status IN ('CREATED', 'RUNNING')
+              LIMIT 1`,
+          )
+          .get(current.subtaskId) as { readonly id: string } | undefined;
+        if (activeExecution !== undefined) {
+          throw ownershipError(
+            "ACTIVE_EXECUTION_EXISTS",
+            "The owned worktree has an active primary execution attempt.",
           );
         }
         result = access.sqlite
@@ -979,6 +996,7 @@ const transitionOwnership = (
           )
           .run(releaseHeadSha, now, now, id);
         break;
+      }
       case "RELEASING->RELEASED":
         result = access.sqlite
           .prepare(

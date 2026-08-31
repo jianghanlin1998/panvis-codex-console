@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -17,19 +18,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BigTaskSchema,
   ChatThreadIdSchema,
+  ExecutionProviderIdSchema,
   ExecutionRunIdSchema,
   ProjectSchema,
   SubtaskCreateInputSchema,
   SubtaskIdSchema,
+  WorktreeOwnershipIdSchema,
 } from "@codex-task-console/domain";
 import {
   openTaskDatabase,
   type TaskStorage,
+  WorktreeOwnershipError,
 } from "@codex-task-console/storage";
 import { createWorktreeOwnershipManagerForTesting } from "../../storage/src/worktree-ownership.js";
 import {
   executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest,
 } from "../src/live-execution.js";
+import { validateOwnedWorktreeHardlinkSafety } from "../src/worktree-filesystem-safety.js";
 import { TESTED_CODEX_VERSION } from "../src/index.js";
 
 type TestDependencies = Parameters<
@@ -37,11 +42,16 @@ type TestDependencies = Parameters<
 >[2];
 type Scenario =
   | "approval"
+  | "hardlink-during-turn"
+  | "head-drift-during-turn"
   | "interrupted"
+  | "malformed-response-after-tools"
   | "malformed-tool"
   | "success"
   | "turn-failed"
+  | "turn-started-before-response"
   | "turn-start-failed"
+  | "tools-before-response"
   | "wait-for-interrupt";
 
 const SUBTASK_ID = SubtaskIdSchema.parse("st_write_execution");
@@ -51,7 +61,8 @@ const CHAT_THREAD_ID = ChatThreadIdSchema.parse(
 const EXECUTION_RUN_ID = ExecutionRunIdSchema.parse(
   "run_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 );
-const OWNERSHIP_ID = `wt_${"c".repeat(32)}`;
+const OWNERSHIP_ID = WorktreeOwnershipIdSchema.parse(`wt_${"c".repeat(32)}`);
+const PROVIDER_ID = ExecutionProviderIdSchema.parse("openai-codex-app-server");
 const FIXED_TIME = "2026-08-31T01:00:00.000Z";
 const MOCK_WRITE_FIXTURE_PATH = fileURLToPath(
   new URL("../../../fixtures/mock-write-app-server.ts", import.meta.url),
@@ -85,6 +96,7 @@ interface Harness {
   readonly children: ReturnType<typeof spawn>[];
   readonly dependencies: TestDependencies;
   readonly launches: Array<{
+    readonly arguments_: readonly string[];
     readonly cwd: string;
     readonly env: NodeJS.ProcessEnv;
   }>;
@@ -150,6 +162,37 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
       expect(result.model?.providerModelId).toBe("fixture-write-model");
       expect(harness.launches).toHaveLength(1);
       expect(harness.launches[0]?.cwd).toBe(fixture.worktreePath);
+      expect(harness.launches[0]?.arguments_).toEqual([
+        "app-server",
+        "--listen",
+        "stdio://",
+        "--strict-config",
+        "--config",
+        "orchestrator.mcp.enabled=false",
+        "--config",
+        'web_search="disabled"',
+        ...[
+          "apps",
+          "browser_use",
+          "browser_use_external",
+          "browser_use_full_cdp_access",
+          "computer_use",
+          "hooks",
+          "image_generation",
+          "in_app_browser",
+          "in_app_updates",
+          "multi_agent",
+          "multi_agent_v2",
+          "plugin_sharing",
+          "plugins",
+          "recommended_plugins",
+          "remote_control",
+          "remote_plugin",
+          "skill_mcp_dependency_install",
+          "tool_suggest",
+          "workspace_dependencies",
+        ].flatMap((feature) => ["--disable", feature]),
+      ]);
       expect(harness.launches[0]?.env.TMPDIR).not.toBe(fixture.worktreePath);
       expect(harness.transientDirectories.every((path) => !existsSync(path))).toBe(true);
       expect(readFileSync(join(fixture.worktreePath!, "owned-output.txt"), "utf8")).toBe(
@@ -161,7 +204,7 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
       );
 
       expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)).toMatchObject({
-        status: "OPEN",
+        status: "CLOSED",
         providerThread: { providerThreadId: "thread-write-mock-77" },
       });
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)).toMatchObject({
@@ -230,10 +273,146 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
     }
   });
 
+  it("blocks a pre-existing external hardlink before provider write authority", async () => {
+    const fixture = createFixture(true);
+    try {
+      const sentinel = join(fixture.directory, "external-sentinel.txt");
+      writeFileSync(sentinel, "original\n", { encoding: "utf8" });
+      linkSync(sentinel, join(fixture.worktreePath!, "external-alias.txt"));
+      const harness = makeHarness(fixture, "success");
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "WORKTREE_FILESYSTEM_UNSAFE",
+        chatThreadId: null,
+        executionRunId: null,
+        diagnostics: { turnStartRequests: 0 },
+      });
+      expect(harness.launches).toHaveLength(0);
+      expect(readFileSync(sentinel, "utf8")).toBe("original\n");
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("blocks multiple hardlinks entirely inside the worktree", async () => {
+    const fixture = createFixture(true);
+    try {
+      linkSync(
+        join(fixture.worktreePath!, "tracked.txt"),
+        join(fixture.worktreePath!, "tracked-alias.txt"),
+      );
+      const harness = makeHarness(fixture, "success");
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result.failureCode).toBe("WORKTREE_FILESYSTEM_UNSAFE");
+      expect(harness.launches).toHaveLength(0);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("rechecks hardlink safety immediately before turn/start", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "success", {
+        beforeWorktreeAuthorityGate: (gate) => {
+          if (gate === "FINAL_PRE_TURN_HARDLINK_SCAN") {
+            linkSync(
+              join(fixture.worktreePath!, "tracked.txt"),
+              join(fixture.worktreePath!, "late-alias.txt"),
+            );
+          }
+        },
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "WORKTREE_FILESYSTEM_UNSAFE",
+        diagnostics: { turnStartRequests: 0 },
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("fails durable success when a hardlink appears during the provider turn", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "hardlink-during-turn");
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "WORKTREE_FILESYSTEM_UNSAFE",
+        terminalTurnStatus: "completed",
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("fails durable success when an external hardlink appears after provider terminal", async () => {
+    const fixture = createFixture(true);
+    try {
+      const sentinel = join(fixture.directory, "post-terminal-sentinel.txt");
+      writeFileSync(sentinel, "post-terminal\n", { encoding: "utf8" });
+      const harness = makeHarness(fixture, "success", {
+        beforeWorktreeAuthorityGate: (gate) => {
+          if (gate === "POST_TURN_SUCCESS_GATE") {
+            linkSync(
+              sentinel,
+              join(fixture.worktreePath!, "post-terminal-alias.txt"),
+            );
+          }
+        },
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result.failureCode).toBe("WORKTREE_FILESYSTEM_UNSAFE");
+      expect(readFileSync(sentinel, "utf8")).toBe("post-terminal\n");
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
   it.each([
     [2, 0],
     [3, 0],
     [4, 0],
+    [5, 1],
   ] as const)(
     "fails closed when ownership revalidation %s drifts before turn authority",
     async (failResolveCall, expectedTurns) => {
@@ -312,6 +491,130 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
     }
   });
 
+  it("preserves fast provider writes and terminal evidence when RUNNING bind fails", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "success", {
+        failDurableOperation: "START_RUN",
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "DURABLE_RUN_PERSISTENCE_FAILED",
+        terminalTurnStatus: "completed",
+        diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
+      });
+      expect(readFileSync(join(fixture.worktreePath!, "owned-output.txt"), "utf8")).toBe(
+        "owned worktree write\n",
+      );
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it.each(["turn-started-before-response", "tools-before-response"] as const)(
+    "accepts correlated %s ordering without retry",
+    async (scenario) => {
+      const fixture = createFixture(true);
+      try {
+        const harness = makeHarness(fixture, scenario);
+        const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+        expect(result).toMatchObject({
+          success: true,
+          diagnostics: { turnStartRequests: 1, interruptRequests: 0 },
+        });
+      } finally {
+        cleanupFixture(fixture);
+      }
+    },
+  );
+
+  it("rejects a malformed turn/start response after correlated tool activity", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "malformed-response-after-tools");
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_PROTOCOL_ERROR",
+        diagnostics: { turnStartRequests: 1 },
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("denies durable success after HEAD changes during the turn", async () => {
+      const fixture = createFixture(true);
+      try {
+        const harness = makeHarness(fixture, "head-drift-during-turn");
+        const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+        expect(result).toMatchObject({
+          success: false,
+          failureCode: "WORKTREE_AUTHORITY_DRIFT",
+          terminalTurnStatus: "completed",
+        });
+        expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+          "FAILED",
+        );
+      } finally {
+        cleanupFixture(fixture);
+      }
+  });
+
+  it("denies durable success when the worktree disappears after the turn", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "success", {
+        beforeWorktreeAuthorityGate: (gate) => {
+          if (gate === "POST_TURN_SUCCESS_GATE") {
+            rmSync(fixture.worktreePath!, { force: true, recursive: true });
+          }
+        },
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "WORKTREE_AUTHORITY_DRIFT",
+        terminalTurnStatus: "completed",
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
   it.each([
     ["turn-failed", "FAILED", "TURN_FAILED"],
     ["interrupted", "INTERRUPTED", "TURN_INTERRUPTED"],
@@ -329,6 +632,9 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         expect(result.failureCode).toBe(failureCode);
         expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
           durableStatus,
+        );
+        expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+          "CLOSED",
         );
       } finally {
         cleanupFixture(fixture);
@@ -361,6 +667,9 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
           "FAILED",
         );
+        expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+          "CLOSED",
+        );
       } finally {
         cleanupFixture(fixture);
       }
@@ -371,7 +680,7 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
     const fixture = createFixture(true);
     try {
       const harness = makeHarness(fixture, "success", {
-        failDurableOperation: "FINISH_RUN",
+        failDurableOperation: "FINALIZE_ATTEMPT",
       });
       const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
         fixture.storage,
@@ -386,6 +695,63 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
         "RUNNING",
       );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "OPEN",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("prioritizes a post-turn hardlink violation over transient cleanup failure", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "hardlink-during-turn", {
+        removeWorkspaceThrows: true,
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "WORKTREE_FILESYSTEM_UNSAFE",
+        transientRuntimeCleaned: false,
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      for (const path of harness.transientDirectories) {
+        rmSync(path, { force: true, recursive: true });
+      }
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("prioritizes terminal persistence failure over cleanup failure", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "success", {
+        failDurableOperation: "FINALIZE_ATTEMPT",
+        removeWorkspaceThrows: true,
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result.failureCode).toBe("DURABLE_RUN_PERSISTENCE_FAILED");
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "RUNNING",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "OPEN",
+      );
+      for (const path of harness.transientDirectories) {
+        rmSync(path, { force: true, recursive: true });
+      }
     } finally {
       cleanupFixture(fixture);
     }
@@ -439,8 +805,89 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         status: "FAILED",
         providerRun: null,
       });
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
     } finally {
       cleanupFixture(fixture);
+    }
+  });
+
+  it("denies release when an execution reservation wins", () => {
+    const fixture = createFixture(true);
+    try {
+      fixture.storage.reservePrimaryExecutionAttempt({
+        subtaskId: SUBTASK_ID,
+        worktreeOwnershipId: OWNERSHIP_ID,
+        chatThreadId: CHAT_THREAD_ID,
+        executionRunId: EXECUTION_RUN_ID,
+        providerId: PROVIDER_ID,
+      });
+      expect(() =>
+        fixture.manager.releaseOwnedWorktreeForSubtask(SUBTASK_ID),
+      ).toThrow(WorktreeOwnershipError);
+      try {
+        fixture.manager.releaseOwnedWorktreeForSubtask(SUBTASK_ID);
+      } catch (error: unknown) {
+        expect((error as WorktreeOwnershipError).code).toBe(
+          "ACTIVE_EXECUTION_EXISTS",
+        );
+      }
+      expect(
+        fixture.manager.resolveActiveOwnedWorktreeForSubtask(SUBTASK_ID)
+          .ownership.status,
+      ).toBe("ACTIVE");
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("prevents execution reservation when release wins", () => {
+    const fixture = createFixture(true);
+    try {
+      expect(
+        fixture.manager.releaseOwnedWorktreeForSubtask(SUBTASK_ID).status,
+      ).toBe("RELEASED");
+      expect(() =>
+        fixture.storage.reservePrimaryExecutionAttempt({
+          subtaskId: SUBTASK_ID,
+          worktreeOwnershipId: OWNERSHIP_ID,
+          chatThreadId: CHAT_THREAD_ID,
+          executionRunId: EXECUTION_RUN_ID,
+          providerId: PROVIDER_ID,
+        }),
+      ).toThrow();
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)).toBeNull();
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("preserves release exclusion after database reopen", () => {
+    const fixture = createFixture(true);
+    fixture.storage.reservePrimaryExecutionAttempt({
+      subtaskId: SUBTASK_ID,
+      worktreeOwnershipId: OWNERSHIP_ID,
+      chatThreadId: CHAT_THREAD_ID,
+      executionRunId: EXECUTION_RUN_ID,
+      providerId: PROVIDER_ID,
+    });
+    fixture.storage.close();
+    const reopened = openTaskDatabase({
+      databasePath: fixture.databasePath,
+      clock: fixedClock,
+    });
+    const manager = createWorktreeOwnershipManagerForTesting(reopened, {
+      worktreeRoot: join(fixture.directory, "owned-worktrees"),
+      idGenerator: () => `wt_${"d".repeat(32)}`,
+    });
+    try {
+      expect(() => manager.releaseOwnedWorktreeForSubtask(SUBTASK_ID)).toThrow(
+        WorktreeOwnershipError,
+      );
+    } finally {
+      reopened.close();
+      rmSync(fixture.directory, { force: true, recursive: true });
     }
   });
 });
@@ -484,6 +931,9 @@ function makeHarness(
     >[0];
     readonly failResolveCall?: number;
     readonly removeWorkspaceThrows?: boolean;
+    readonly beforeWorktreeAuthorityGate?: NonNullable<
+      TestDependencies["beforeWorktreeAuthorityGate"]
+    >;
   } = {},
 ): Harness {
   const children: ReturnType<typeof spawn>[] = [];
@@ -510,13 +960,21 @@ function makeHarness(
     },
     generateChatThreadId: () => CHAT_THREAD_ID,
     generateExecutionRunId: () => EXECUTION_RUN_ID,
+    validateWorktreeFilesystem: validateOwnedWorktreeHardlinkSafety,
     beforeDurableOperation: (operation) => {
       if (operation === options.failDurableOperation) {
         throw new Error("synthetic durable failure");
       }
     },
-    spawnAppServer: (_executable, _arguments, spawnOptions) => {
-      launches.push({ cwd: spawnOptions.cwd, env: { ...spawnOptions.env } });
+    ...(options.beforeWorktreeAuthorityGate === undefined
+      ? {}
+      : { beforeWorktreeAuthorityGate: options.beforeWorktreeAuthorityGate }),
+    spawnAppServer: (_executable, arguments_, spawnOptions) => {
+      launches.push({
+        arguments_: [...arguments_],
+        cwd: spawnOptions.cwd,
+        env: { ...spawnOptions.env },
+      });
       const child = spawn(
         process.execPath,
         [MOCK_WRITE_FIXTURE_PATH, `--scenario=${scenario}`],

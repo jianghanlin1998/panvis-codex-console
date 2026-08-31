@@ -1,15 +1,21 @@
-import { writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { linkSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 type JsonRecord = Record<string, unknown>;
 type RequestId = number | string;
 type Scenario =
   | "approval"
+  | "hardlink-during-turn"
+  | "head-drift-during-turn"
   | "interrupted"
+  | "malformed-response-after-tools"
   | "malformed-tool"
   | "success"
   | "turn-failed"
+  | "turn-started-before-response"
   | "turn-start-failed"
+  | "tools-before-response"
   | "wait-for-interrupt";
 
 const THREAD_ID = "thread-write-mock-77";
@@ -104,11 +110,43 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       sendError(id);
       return;
     }
-    send({ id, result: { turn: fixtureTurn("inProgress") } });
-    send({
+    const startedNotification = {
       method: "turn/started",
       params: { threadId: THREAD_ID, turn: fixtureTurn("inProgress") },
+    };
+    if (
+      scenario === "turn-started-before-response" ||
+      scenario === "tools-before-response" ||
+      scenario === "malformed-response-after-tools"
+    ) {
+      send(startedNotification);
+    }
+    if (
+      scenario === "tools-before-response" ||
+      scenario === "malformed-response-after-tools"
+    ) {
+      emitAllowedToolItems();
+    }
+    send({
+      id,
+      result: {
+        turn: fixtureTurn(
+          scenario === "malformed-response-after-tools"
+            ? "completed"
+            : "inProgress",
+        ),
+      },
     });
+    if (
+      scenario !== "turn-started-before-response" &&
+      scenario !== "tools-before-response" &&
+      scenario !== "malformed-response-after-tools"
+    ) {
+      send(startedNotification);
+    }
+    if (scenario === "malformed-response-after-tools") {
+      return;
+    }
     if (scenario === "wait-for-interrupt") {
       return;
     }
@@ -129,10 +167,21 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       sendItem({ type: "commandExecution", id: "write-command-1" });
       return;
     }
-    emitAllowedToolItems();
+    if (scenario !== "tools-before-response") {
+      emitAllowedToolItems();
+    }
     writeFileSync("owned-output.txt", "owned worktree write\n", {
       encoding: "utf8",
     });
+    if (scenario === "hardlink-during-turn") {
+      linkSync("owned-output.txt", "owned-output-alias.txt");
+    }
+    if (scenario === "head-drift-during-turn") {
+      execFileSync("git", ["commit", "--allow-empty", "--message", "synthetic drift"], {
+        cwd: process.cwd(),
+        stdio: "ignore",
+      });
+    }
     emitUsage();
     const status =
       scenario === "turn-failed"
@@ -189,6 +238,8 @@ function validTurnStart(params: JsonRecord): boolean {
     params.approvalsReviewer === "user" &&
     sandbox.type === "workspaceWrite" &&
     sandbox.networkAccess === false &&
+    sandbox.excludeSlashTmp === true &&
+    sandbox.excludeTmpdirEnvVar === false &&
     Array.isArray(sandbox.writableRoots) &&
     sandbox.writableRoots.length === 1 &&
     sandbox.writableRoots[0] === process.cwd() &&
@@ -201,7 +252,7 @@ function validTurnStart(params: JsonRecord): boolean {
 }
 
 function emitAllowedToolItems(): void {
-  sendItem({
+  sendItemLifecycle({
     type: "commandExecution",
     id: "write-command-1",
     command: "printf synthetic",
@@ -209,7 +260,7 @@ function emitAllowedToolItems(): void {
     cwd: process.cwd(),
     status: "completed",
   });
-  sendItem({
+  sendItemLifecycle({
     type: "fileChange",
     id: "write-file-1",
     changes: [
@@ -234,6 +285,19 @@ function emitAllowedToolItems(): void {
       },
     },
   });
+}
+
+function sendItemLifecycle(item: JsonRecord): void {
+  send({
+    method: "item/started",
+    params: {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      startedAtMs: 0,
+      item: { ...item, status: "inProgress" },
+    },
+  });
+  sendItem(item);
 }
 
 function sendItem(item: JsonRecord): void {
@@ -287,11 +351,16 @@ function readScenario(): Scenario {
     ?.slice("--scenario=".length);
   const allowed: readonly Scenario[] = [
     "approval",
+    "hardlink-during-turn",
+    "head-drift-during-turn",
     "interrupted",
+    "malformed-response-after-tools",
     "malformed-tool",
     "success",
     "turn-failed",
+    "turn-started-before-response",
     "turn-start-failed",
+    "tools-before-response",
     "wait-for-interrupt",
   ];
   if (!allowed.includes(value as Scenario)) {

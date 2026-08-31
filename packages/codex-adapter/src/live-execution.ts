@@ -13,7 +13,7 @@ import {
   rmSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 
 import type {
@@ -55,6 +55,7 @@ import type {
   ResolvedCodexRuntime,
 } from "./runtime-ownership.js";
 import type { JsonObject, JsonValue, TokenUsageBreakdown } from "./protocol.js";
+import { validateOwnedWorktreeHardlinkSafety } from "./worktree-filesystem-safety.js";
 
 const EXPECTED_RELEASE_VERSION = TESTED_CODEX_VERSION.replace("codex-cli ", "");
 const CLIENT_INFO = Object.freeze({
@@ -65,6 +66,27 @@ const CLIENT_INFO = Object.freeze({
 const WORKSPACE_PREFIX = "ctc-live-codex-";
 const WRITE_RUNTIME_PREFIX = "ctc-write-codex-";
 const SAFE_CHILD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+const WRITE_DISABLED_FEATURES = Object.freeze([
+  "apps",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "computer_use",
+  "hooks",
+  "image_generation",
+  "in_app_browser",
+  "in_app_updates",
+  "multi_agent",
+  "multi_agent_v2",
+  "plugin_sharing",
+  "plugins",
+  "recommended_plugins",
+  "remote_control",
+  "remote_plugin",
+  "skill_mcp_dependency_install",
+  "tool_suggest",
+  "workspace_dependencies",
+] as const);
 const ACCOUNT_UPDATED_AUTH_MODES = [
   "apikey",
   "chatgpt",
@@ -102,6 +124,7 @@ const TURN_SCOPED_NOTIFICATION_METHODS = new Set([
   "thread/tokenUsage/updated",
   "turn/completed",
 ]);
+const MAX_WRITE_TOOL_ITEMS = 512;
 
 const DEFAULT_LIMITS = Object.freeze({
   startupTimeoutMs: 10_000,
@@ -151,7 +174,9 @@ export const OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES = [
   "WORKTREE_AUTHORITY_DRIFT",
   "DURABLE_THREAD_PERSISTENCE_FAILED",
   "DURABLE_RUN_PERSISTENCE_FAILED",
+  "PRIMARY_EXECUTION_CONFLICT",
   "WRITE_POLICY_REQUIRED",
+  "WORKTREE_FILESYSTEM_UNSAFE",
 ] as const;
 
 export type OwnedWorktreeCodexExecutionFailureCode =
@@ -351,12 +376,16 @@ interface LiveExecutionDependencies {
 }
 
 type DurableOperation =
-  | "CREATE_THREAD"
-  | "CREATE_RUN"
+  | "RESERVE_ATTEMPT"
   | "BIND_THREAD"
   | "START_RUN"
-  | "FAIL_RUN_BEFORE_START"
-  | "FINISH_RUN";
+  | "FINALIZE_ATTEMPT";
+
+type WorktreeAuthorityGate =
+  | "INITIAL_HARDLINK_SCAN"
+  | "PRE_SPAWN_REVALIDATION"
+  | "FINAL_PRE_TURN_HARDLINK_SCAN"
+  | "POST_TURN_SUCCESS_GATE";
 
 interface OwnedWorktreeExecutionDependencies extends LiveExecutionDependencies {
   readonly checkCompatibility: () => boolean;
@@ -366,7 +395,9 @@ interface OwnedWorktreeExecutionDependencies extends LiveExecutionDependencies {
   ) => ResolvedActiveOwnedWorktree;
   readonly generateChatThreadId: () => ChatThreadId;
   readonly generateExecutionRunId: () => ExecutionRunId;
+  readonly validateWorktreeFilesystem: (worktreePath: string) => void;
   readonly beforeDurableOperation?: (operation: DurableOperation) => void;
+  readonly beforeWorktreeAuthorityGate?: (gate: WorktreeAuthorityGate) => void;
 }
 
 class LiveExecutionError extends Error {
@@ -395,6 +426,11 @@ interface TerminalEvent {
   readonly status: "completed" | "failed" | "interrupted";
 }
 
+interface WriteToolItemState {
+  readonly type: "commandExecution" | "fileChange";
+  state: "STARTED" | "COMPLETED";
+}
+
 type TurnEventPolicy =
   | Readonly<{ readonly kind: "READ_ONLY" }>
   | Readonly<{
@@ -410,6 +446,7 @@ class TurnEventTracker {
   responseText = "";
   #chatGptAuthenticated = false;
   readonly #deltaItemIds = new Set<string>();
+  readonly #writeToolItems = new Map<string, WriteToolItemState>();
   #failure: LiveExecutionError | null = null;
   #observedThreadId: string | null = null;
   #observedTurnId: string | null = null;
@@ -521,11 +558,16 @@ class TurnEventTracker {
         const item = requireRecord(record.item);
         const itemType = requireBoundedString(item.type, 64);
         if (itemType === "commandExecution" || itemType === "fileChange") {
-          this.diagnostics.toolActionsObserved += 1;
           if (this.eventPolicy.kind === "READ_ONLY") {
+            this.diagnostics.toolActionsObserved += 1;
             throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
           }
-          validateWriteThreadItem(item, itemType, this.eventPolicy.worktreePath);
+          this.#observeWriteToolItem(
+            method,
+            item,
+            itemType,
+            this.eventPolicy.worktreePath,
+          );
         } else if (
           itemType !== "userMessage" &&
           itemType !== "agentMessage" &&
@@ -534,6 +576,20 @@ class TurnEventTracker {
         ) {
           this.diagnostics.toolActionsObserved += 1;
           throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
+        }
+        if (
+          method === "item/started" &&
+          "status" in item &&
+          item.status !== "inProgress"
+        ) {
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+        }
+        if (
+          method === "item/completed" &&
+          "status" in item &&
+          item.status === "inProgress"
+        ) {
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
         if (method === "item/completed" && itemType === "agentMessage") {
           const itemId = requireBoundedString(item.id, 512);
@@ -553,15 +609,18 @@ class TurnEventTracker {
         this.#observeNotificationTurnId(
           requireBoundedString(record.turnId, 512),
         );
-        requireBoundedString(record.itemId, 512);
+        const itemId = requireBoundedString(record.itemId, 512);
         if (this.eventPolicy.kind === "READ_ONLY") {
           this.diagnostics.toolActionsObserved += 1;
           throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
         }
+        const expectedType =
+          method === "item/commandExecution/outputDelta"
+            ? "commandExecution"
+            : "fileChange";
+        this.#assertActiveWriteToolItem(itemId, expectedType);
         if (method === "item/fileChange/patchUpdated") {
-          if (!Array.isArray(record.changes)) {
-            throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
-          }
+          validateFileChanges(record.changes, this.eventPolicy.worktreePath);
         } else if (typeof record.delta !== "string") {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
@@ -599,7 +658,10 @@ class TurnEventTracker {
           !this.#turnStartSent ||
           this.threadId === null ||
           this.turnId === null ||
-          this.terminal !== null
+          this.terminal !== null ||
+          [...this.#writeToolItems.values()].some(
+            (item) => item.state !== "COMPLETED",
+          )
         ) {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
@@ -729,6 +791,53 @@ class TurnEventTracker {
 
   #requireTurnStartSent(): void {
     if (!this.#turnStartSent) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+  }
+
+  #observeWriteToolItem(
+    method: "item/started" | "item/completed",
+    item: JsonObject,
+    itemType: "commandExecution" | "fileChange",
+    worktreePath: string,
+  ): void {
+    const itemId = requireBoundedString(item.id, 512);
+    const existing = this.#writeToolItems.get(itemId);
+    if (method === "item/started") {
+      if (
+        existing !== undefined ||
+        this.#writeToolItems.size >= MAX_WRITE_TOOL_ITEMS ||
+        item.status !== "inProgress"
+      ) {
+        throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      }
+      validateWriteThreadItem(item, itemType, worktreePath, "STARTED");
+      this.#writeToolItems.set(itemId, { type: itemType, state: "STARTED" });
+      this.diagnostics.toolActionsObserved += 1;
+      return;
+    }
+    if (
+      existing === undefined ||
+      existing.type !== itemType ||
+      existing.state !== "STARTED" ||
+      item.status === "inProgress"
+    ) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    validateWriteThreadItem(item, itemType, worktreePath, "COMPLETED");
+    existing.state = "COMPLETED";
+  }
+
+  #assertActiveWriteToolItem(
+    itemId: string,
+    expectedType: WriteToolItemState["type"],
+  ): void {
+    const item = this.#writeToolItems.get(itemId);
+    if (
+      item === undefined ||
+      item.type !== expectedType ||
+      item.state !== "STARTED"
+    ) {
       throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     }
   }
@@ -1151,6 +1260,11 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     assertActiveOwnedWorktree(trustedWorktree, subtaskId);
     evidence.worktreeOwnershipId = trustedWorktree.ownership.id;
     evidence.worktreeStartingHeadSha = trustedWorktree.currentHeadSha;
+    dependencies.beforeWorktreeAuthorityGate?.("INITIAL_HARDLINK_SCAN");
+    validateWorktreeFilesystem(
+      dependencies,
+      trustedWorktree.ownership.worktreePath,
+    );
 
     let runtime: ResolvedCodexRuntime;
     try {
@@ -1177,27 +1291,32 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     const chatThreadId = dependencies.generateChatThreadId();
     const executionRunId = dependencies.generateExecutionRunId();
     try {
-      dependencies.beforeDurableOperation?.("CREATE_THREAD");
-      storage.createChatThread({
-        id: chatThreadId,
+      dependencies.beforeDurableOperation?.("RESERVE_ATTEMPT");
+      storage.reservePrimaryExecutionAttempt({
         subtaskId,
+        worktreeOwnershipId: trustedWorktree.ownership.id,
+        chatThreadId,
+        executionRunId,
         providerId: CODEX_APP_SERVER_PROVIDER_ID,
       });
       evidence.chatThreadId = chatThreadId;
-    } catch {
-      throw new LiveExecutionError("DURABLE_THREAD_PERSISTENCE_FAILED");
-    }
-    try {
-      dependencies.beforeDurableOperation?.("CREATE_RUN");
-      storage.createExecutionRun({ id: executionRunId, chatThreadId });
       evidence.executionRunId = executionRunId;
       durableRunState = "CREATED";
-    } catch {
+    } catch (error: unknown) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "CONFLICT"
+      ) {
+        throw new LiveExecutionError("PRIMARY_EXECUTION_CONFLICT");
+      }
       throw new LiveExecutionError("DURABLE_RUN_PERSISTENCE_FAILED");
     }
 
     transientRuntime = dependencies.createWorkspace();
     assertDisposableWorkspace(transientRuntime);
+    dependencies.beforeWorktreeAuthorityGate?.("PRE_SPAWN_REVALIDATION");
     const beforeSpawn = revalidateOwnedWorktree(
       dependencies,
       storage,
@@ -1216,7 +1335,7 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     try {
       child = dependencies.spawnAppServer(
         runtime.canonicalExecutablePath,
-        ["app-server", "--listen", "stdio://"],
+        ownedWriteAppServerArguments(),
         {
           cwd: worktreePath,
           env: buildLiveCodexChildEnvironment(
@@ -1318,11 +1437,18 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     }
 
     eventTracker.assertChatGptAuthenticated();
-    revalidateOwnedWorktree(
+    dependencies.beforeWorktreeAuthorityGate?.(
+      "FINAL_PRE_TURN_HARDLINK_SCAN",
+    );
+    const finalPreTurn = revalidateOwnedWorktree(
       dependencies,
       storage,
       subtaskId,
       trustedWorktree,
+    );
+    validateWorktreeFilesystem(
+      dependencies,
+      finalPreTurn.ownership.worktreePath,
     );
     const turnResult = await client.request(
       4,
@@ -1339,6 +1465,8 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
           type: "workspaceWrite",
           writableRoots: [worktreePath],
           networkAccess: false,
+          excludeSlashTmp: true,
+          excludeTmpdirEnvVar: false,
         },
       },
       dependencies.limits.requestTimeoutMs,
@@ -1411,37 +1539,6 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
       }
     }
 
-    if (evidence.executionRunId !== null && durableRunState === "RUNNING") {
-      const durableStatus =
-        events?.terminal?.status === "interrupted"
-          ? "INTERRUPTED"
-          : "FAILED";
-      try {
-        dependencies.beforeDurableOperation?.("FINISH_RUN");
-        storage.finishExecutionRun({
-          executionRunId: evidence.executionRunId,
-          status: durableStatus,
-          ...(evidence.model === null ? {} : { providerModel: evidence.model }),
-          ...(events?.normalizedUsage === null || events?.normalizedUsage === undefined
-            ? {}
-            : { normalizedUsage: events.normalizedUsage }),
-        });
-        durableRunState = "TERMINAL";
-      } catch {
-        failureCode = "DURABLE_RUN_PERSISTENCE_FAILED";
-      }
-    } else if (
-      evidence.executionRunId !== null &&
-      durableRunState === "CREATED"
-    ) {
-      try {
-        dependencies.beforeDurableOperation?.("FAIL_RUN_BEFORE_START");
-        storage.failExecutionRunBeforeStart(evidence.executionRunId);
-        durableRunState = "TERMINAL";
-      } catch {
-        failureCode = "DURABLE_RUN_PERSISTENCE_FAILED";
-      }
-    }
   } finally {
     if (events !== undefined) {
       evidence.normalizedUsage ??= events.normalizedUsage;
@@ -1469,20 +1566,59 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     }
   }
 
-  if (evidence.executionRunId !== null && durableRunState === "RUNNING") {
+  if (
+    evidence.executionRunId !== null &&
+    durableRunState === "RUNNING" &&
+    evidence.terminalTurnStatus === "completed" &&
+    trustedWorktree !== undefined
+  ) {
+    try {
+      dependencies.beforeWorktreeAuthorityGate?.("POST_TURN_SUCCESS_GATE");
+      const postTurn = revalidateOwnedWorktree(
+        dependencies,
+        storage,
+        subtaskId,
+        trustedWorktree,
+      );
+      validateWorktreeFilesystem(
+        dependencies,
+        postTurn.ownership.worktreePath,
+      );
+    } catch (error: unknown) {
+      const authorityFailure = asOwnedWorktreeFailureCode(error);
+      if (
+        authorityFailure === "WORKTREE_AUTHORITY_DRIFT" ||
+        authorityFailure === "WORKTREE_FILESYSTEM_UNSAFE"
+      ) {
+        failureCode = authorityFailure;
+      } else {
+        failureCode = "WORKTREE_AUTHORITY_DRIFT";
+      }
+    }
+  }
+
+  if (
+    evidence.executionRunId !== null &&
+    (durableRunState === "CREATED" || durableRunState === "RUNNING")
+  ) {
     const durableStatus =
-      failureCode === null && evidence.terminalTurnStatus === "completed"
+      durableRunState === "RUNNING" &&
+      failureCode === null &&
+      evidence.terminalTurnStatus === "completed"
         ? "SUCCEEDED"
-        : evidence.terminalTurnStatus === "interrupted"
+        : durableRunState === "RUNNING" &&
+            evidence.terminalTurnStatus === "interrupted"
           ? "INTERRUPTED"
           : "FAILED";
     try {
-      dependencies.beforeDurableOperation?.("FINISH_RUN");
-      storage.finishExecutionRun({
+      dependencies.beforeDurableOperation?.("FINALIZE_ATTEMPT");
+      storage.finalizePrimaryExecutionAttempt({
         executionRunId: evidence.executionRunId,
         status: durableStatus,
-        ...(evidence.model === null ? {} : { providerModel: evidence.model }),
-        ...(evidence.normalizedUsage === null
+        ...(durableRunState !== "RUNNING" || evidence.model === null
+          ? {}
+          : { providerModel: evidence.model }),
+        ...(durableRunState !== "RUNNING" || evidence.normalizedUsage === null
           ? {}
           : { normalizedUsage: evidence.normalizedUsage }),
       });
@@ -1849,7 +1985,33 @@ function productionOwnedWorktreeDependencies(): OwnedWorktreeExecutionDependenci
       ChatThreadIdSchema.parse(`thr_${randomBytes(16).toString("hex")}`),
     generateExecutionRunId: () =>
       ExecutionRunIdSchema.parse(`run_${randomBytes(16).toString("hex")}`),
+    validateWorktreeFilesystem: validateOwnedWorktreeHardlinkSafety,
   };
+}
+
+function ownedWriteAppServerArguments(): readonly string[] {
+  return Object.freeze([
+    "app-server",
+    "--listen",
+    "stdio://",
+    "--strict-config",
+    "--config",
+    "orchestrator.mcp.enabled=false",
+    "--config",
+    'web_search="disabled"',
+    ...WRITE_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+  ]);
+}
+
+function validateWorktreeFilesystem(
+  dependencies: OwnedWorktreeExecutionDependencies,
+  worktreePath: string,
+): void {
+  try {
+    dependencies.validateWorktreeFilesystem(worktreePath);
+  } catch {
+    throw new LiveExecutionError("WORKTREE_FILESYSTEM_UNSAFE");
+  }
 }
 
 function buildLiveCodexChildEnvironment(
@@ -2122,34 +2284,82 @@ function validateWriteThreadItem(
   item: JsonObject,
   itemType: "commandExecution" | "fileChange",
   worktreePath: string,
+  phase: "STARTED" | "COMPLETED",
 ): void {
   requireBoundedString(item.id, 512);
   if (
-    item.status !== "inProgress" &&
-    item.status !== "completed" &&
-    item.status !== "failed" &&
-    item.status !== "declined"
+    (phase === "STARTED" && item.status !== "inProgress") ||
+    (phase === "COMPLETED" &&
+      item.status !== "completed" &&
+      item.status !== "failed" &&
+      item.status !== "declined")
   ) {
     throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
   }
   if (itemType === "commandExecution") {
     requireString(item.command);
-    if (!Array.isArray(item.commandActions)) {
-      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
-    }
+    validateCommandActions(item.commandActions);
     const commandCwd = requireBoundedString(item.cwd, 4_096);
-    if (!pathIsWithin(commandCwd, worktreePath)) {
+    if (!commandCwdIsWithin(commandCwd, worktreePath)) {
       throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     }
     return;
   }
-  if (!Array.isArray(item.changes)) {
+  validateFileChanges(item.changes, worktreePath);
+}
+
+function validateCommandActions(value: unknown): void {
+  if (!Array.isArray(value) || value.length > 512) {
     throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
   }
-  for (const change of item.changes) {
+  for (const action of value) {
+    const record = requireRecord(action);
+    const type = requireBoundedString(record.type, 64);
+    requireString(record.command);
+    switch (type) {
+      case "read":
+        requireBoundedString(record.name, 512);
+        requireBoundedString(record.path, 4_096);
+        break;
+      case "listFiles":
+        if (
+          record.path !== undefined &&
+          record.path !== null &&
+          typeof record.path !== "string"
+        ) {
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+        }
+        break;
+      case "search":
+        for (const optional of [record.path, record.query]) {
+          if (
+            optional !== undefined &&
+            optional !== null &&
+            typeof optional !== "string"
+          ) {
+            throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+          }
+        }
+        break;
+      case "unknown":
+        break;
+      default:
+        throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+  }
+}
+
+function validateFileChanges(value: unknown, worktreePath: string): void {
+  if (!Array.isArray(value) || value.length > 512) {
+    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+  }
+  for (const change of value) {
     const record = requireRecord(change);
     requireString(record.diff);
-    requireBoundedString(record.path, 4_096);
+    const changePath = requireBoundedString(record.path, 4_096);
+    if (!fileChangePathIsWithin(changePath, worktreePath)) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
     const kind = requireRecord(record.kind);
     if (
       kind.type !== "add" &&
@@ -2158,18 +2368,95 @@ function validateWriteThreadItem(
     ) {
       throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     }
+    if (
+      kind.type === "update" &&
+      kind.move_path !== undefined &&
+      kind.move_path !== null &&
+      !fileChangePathIsWithin(
+        requireBoundedString(kind.move_path, 4_096),
+        worktreePath,
+      )
+    ) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
   }
 }
 
-function pathIsWithin(candidate: string, root: string): boolean {
-  if (!isAbsolute(candidate)) {
+function commandCwdIsWithin(candidate: string, root: string): boolean {
+  if (!isAbsolute(candidate) || !isAbsolute(root)) {
     return false;
   }
+  try {
+    const rootPath = realpathSync.native(root);
+    const candidateStat = lstatSync(candidate);
+    if (candidateStat.isSymbolicLink() || !candidateStat.isDirectory()) {
+      return false;
+    }
+    const candidatePath = realpathSync.native(candidate);
+    return pathIsLexicallyWithin(candidatePath, rootPath);
+  } catch {
+    return false;
+  }
+}
+
+function fileChangePathIsWithin(candidate: string, root: string): boolean {
+  if (
+    isAbsolute(candidate) ||
+    candidate.includes("\0") ||
+    candidate.split(sep).some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    return false;
+  }
+  try {
+    const rootPath = realpathSync.native(root);
+    const target = resolve(rootPath, candidate);
+    if (!pathIsLexicallyWithin(target, rootPath) || target === rootPath) {
+      return false;
+    }
+    let ancestor = target;
+    try {
+      const targetStat = lstatSync(target);
+      if (targetStat.isSymbolicLink() || targetStat.isDirectory()) {
+        return false;
+      }
+      ancestor = dirname(target);
+    } catch {
+      ancestor = dirname(target);
+      while (ancestor !== rootPath) {
+        try {
+          const ancestorStat = lstatSync(ancestor);
+          if (ancestorStat.isSymbolicLink() || !ancestorStat.isDirectory()) {
+            return false;
+          }
+          break;
+        } catch {
+          const parent = dirname(ancestor);
+          if (parent === ancestor) {
+            return false;
+          }
+          ancestor = parent;
+        }
+      }
+    }
+    return pathIsLexicallyWithin(realpathSync.native(ancestor), rootPath);
+  } catch {
+    return false;
+  }
+}
+
+function pathIsLexicallyWithin(candidate: string, root: string): boolean {
   const relativePath = relative(root, candidate);
-  return (
-    relativePath === "" ||
-    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
-  );
+  return relativePath === "" ||
+    (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath));
+}
+
+/** Internal deterministic-test hooks; not exported from the package root. */
+export function commandCwdIsWithinForTest(candidate: string, root: string): boolean {
+  return process.env.NODE_ENV === "test" && commandCwdIsWithin(candidate, root);
+}
+
+export function fileChangePathIsWithinForTest(candidate: string, root: string): boolean {
+  return process.env.NODE_ENV === "test" && fileChangePathIsWithin(candidate, root);
 }
 
 function parseTurnStartResult(result: JsonValue): string {
@@ -2294,6 +2581,30 @@ function emptyDiagnostics(): MutableDiagnostics {
     turnStartRequests: 0,
     unknownNotificationsIgnored: 0,
   };
+}
+
+/** Internal deterministic-test hook; not exported from the package root. */
+export function validateWriteTurnNotificationSequenceForTest(
+  worktreePath: string,
+  notifications: readonly Readonly<{
+    readonly method: string;
+    readonly params: unknown;
+  }>[],
+): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new LiveExecutionError("INVALID_INPUT");
+  }
+  const tracker = new TurnEventTracker(emptyDiagnostics(), 1_024, {
+    kind: "WORKSPACE_WRITE",
+    worktreePath,
+  });
+  tracker.establishChatGptAuth();
+  tracker.observeThreadResponse("thread-test");
+  tracker.observeTurnStartSent("thread-test");
+  tracker.observeTurnResponse("turn-test");
+  for (const notification of notifications) {
+    tracker.handleNotification(notification.method, notification.params);
+  }
 }
 
 function emptyEvidence(): ExecutionEvidence {

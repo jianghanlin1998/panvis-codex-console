@@ -1239,7 +1239,13 @@ function validateWriteSandboxContract(context: SchemaValidationContext): void {
     !schemaHasObjectContract(
       workspaceWrite,
       ["type"],
-      ["networkAccess", "type", "writableRoots"],
+      [
+        "excludeSlashTmp",
+        "excludeTmpdirEnvVar",
+        "networkAccess",
+        "type",
+        "writableRoots",
+      ],
       context,
     )
   ) {
@@ -1258,6 +1264,22 @@ function validateWriteSandboxContract(context: SchemaValidationContext): void {
     )
   ) {
     throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+
+  for (const property of ["excludeSlashTmp", "excludeTmpdirEnvVar"]) {
+    const locations = objectPropertyLocations(
+      workspaceWrite,
+      property,
+      context,
+      { activePaths: new Set() },
+    );
+    if (
+      !locations.some((location) =>
+        schemaTypeAllows(location.node, "boolean"),
+      )
+    ) {
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+    }
   }
 
   const writableRoots = objectPropertyLocations(
