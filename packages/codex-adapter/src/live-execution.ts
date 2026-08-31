@@ -397,6 +397,7 @@ interface OwnedWorktreeExecutionDependencies extends LiveExecutionDependencies {
   readonly generateExecutionRunId: () => ExecutionRunId;
   readonly validateWorktreeFilesystem: (worktreePath: string) => void;
   readonly beforeDurableOperation?: (operation: DurableOperation) => void;
+  readonly afterDurableOperation?: (operation: DurableOperation) => void;
   readonly beforeWorktreeAuthorityGate?: (gate: WorktreeAuthorityGate) => void;
 }
 
@@ -1450,6 +1451,7 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
       dependencies,
       finalPreTurn.ownership.worktreePath,
     );
+    revalidateStandardSubtaskExecutionEligibility(storage, subtaskId);
     const turnResult = await client.request(
       4,
       "turn/start",
@@ -1494,6 +1496,7 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
         providerModel: evidence.model,
       });
       durableRunState = "RUNNING";
+      dependencies.afterDurableOperation?.("START_RUN");
     } catch {
       throw new LiveExecutionError("DURABLE_RUN_PERSISTENCE_FAILED");
     }
@@ -1584,11 +1587,13 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
         dependencies,
         postTurn.ownership.worktreePath,
       );
+      revalidateStandardSubtaskExecutionEligibility(storage, subtaskId);
     } catch (error: unknown) {
       const authorityFailure = asOwnedWorktreeFailureCode(error);
       if (
         authorityFailure === "WORKTREE_AUTHORITY_DRIFT" ||
-        authorityFailure === "WORKTREE_FILESYSTEM_UNSAFE"
+        authorityFailure === "WORKTREE_FILESYSTEM_UNSAFE" ||
+        authorityFailure === "PRIMARY_EXECUTION_CONFLICT"
       ) {
         failureCode = authorityFailure;
       } else {
@@ -1599,7 +1604,8 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
 
   if (
     evidence.executionRunId !== null &&
-    (durableRunState === "CREATED" || durableRunState === "RUNNING")
+    (durableRunState === "CREATED" || durableRunState === "RUNNING") &&
+    !(durableRunState === "CREATED" && turnStartSent)
   ) {
     const durableStatus =
       durableRunState === "RUNNING" &&
@@ -2162,6 +2168,30 @@ function revalidateOwnedWorktree(
     throw new LiveExecutionError("WORKTREE_AUTHORITY_DRIFT");
   }
   return current;
+}
+
+function revalidateStandardSubtaskExecutionEligibility(
+  storage: TaskStorage,
+  subtaskId: SubtaskId,
+): void {
+  let eligible = false;
+  try {
+    eligible = storage.runInTransaction((snapshot) => {
+      const subtask = snapshot.getSubtaskById(subtaskId);
+      const readiness =
+        snapshot.evaluateStoredSubtaskDependencyReadiness(subtaskId);
+      return (
+        subtask?.status === "IN_PROGRESS" &&
+        readiness.valid &&
+        readiness.ready
+      );
+    });
+  } catch {
+    eligible = false;
+  }
+  if (!eligible) {
+    throw new LiveExecutionError("PRIMARY_EXECUTION_CONFLICT");
+  }
 }
 
 function validateInitializeResult(result: JsonValue): void {

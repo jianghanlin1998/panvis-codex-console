@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-08-31
+Last reconciled: 2026-09-01
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -214,12 +214,21 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Provider/model write-enabled turns: 0
 - Write-Enabled Execution Comprehensive Hardening: PASS
 - Write-Enabled Execution Post-Hardening Repair: PASS
-- Write-Enabled Execution Fresh Independent QA: READY / NOT RUN
+- Write-enabled implementation SHA: `a0f1cea`; hardening SHA: `a7931b3`; post-FQA repair: the commit containing this file
+- Write-Enabled Execution Fresh Independent QA on `a7931b31f85e66b282a4288ff7ecfd3bef3b6564`: FAIL — historical result
+- CTC-WRITE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
+- CTC-WRITE-FQA-002: REPAIRED — pending Focused Fresh Re-QA
+- CTC-WRITE-FQA-003: REPAIRED — pending Focused Fresh Re-QA
+- CTC-WRITE-HARD-001 through CTC-WRITE-HARD-008: remain CLOSED
+- Focused Fresh Re-QA for CTC-WRITE-FQA-001/002/003: PENDING
+- Provider/model turns for post-FQA repair: 0
+- Real target Step 5B writes for post-FQA repair: 0
 - Step 5B ACCEPTED: NO
 - Roadmap Step 5 overall: PARTIAL
+- Step 6: NOT STARTED
 
 ## Next safe task
-**Next safe task:** new-chat Write-Enabled Execution Authority Binding V0 Fresh Independent QA.
+**Next safe task:** new-chat Focused Fresh Re-QA for CTC-WRITE-FQA-001/002/003.
 
 Hanlin manual QA: NOT REQUIRED
 

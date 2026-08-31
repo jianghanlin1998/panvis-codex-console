@@ -58,6 +58,8 @@ params definition; response, input, usage, tool-item, sandbox, and approval
 checks are bound to their named definitions and relationships. Unrelated
 additive schema surface does not fail C-lite or expand Console support.
 
+The write-tool contract is also bound to the exact generated `.9` file-change graph consumed by Step 5B path safety. Both `ThreadItem`'s `fileChange.changes` array and `FileChangePatchUpdatedNotification.changes` must target `definitions.v2.FileUpdateChange`. That named definition must require string `diff` and `path` fields and target `definitions.v2.PatchChangeKind` through `kind`. The patch-kind union must retain the `add`, `delete`, and `update` variants, and the consumed optional update `move_path` field must remain typed as string-or-null. A shape-compatible decoy, unrelated `path`, redirected array item, missing required `path`, wrong type, or misbound kind fails with the existing sanitized protocol-shape incompatibility category.
+
 Generated-tree depth, directory entries, regular-file count and bytes, parsed
 JSON depth and container count, consumed-graph operations, reference cycles,
 and schema-branch expansion are bounded. Generated roots, directories, or files

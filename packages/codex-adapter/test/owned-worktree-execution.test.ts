@@ -12,16 +12,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BigTaskSchema,
+  BigTaskIdSchema,
   ChatThreadIdSchema,
   ExecutionProviderIdSchema,
   ExecutionRunIdSchema,
   ProjectSchema,
   SubtaskCreateInputSchema,
+  SubtaskDependencySchema,
   SubtaskIdSchema,
   WorktreeOwnershipIdSchema,
 } from "@codex-task-console/domain";
@@ -50,11 +53,16 @@ type Scenario =
   | "success"
   | "turn-failed"
   | "turn-started-before-response"
+  | "turn-start-transport-failed"
   | "turn-start-failed"
   | "tools-before-response"
+  | "wait-for-authority-mutation"
   | "wait-for-interrupt";
 
 const SUBTASK_ID = SubtaskIdSchema.parse("st_write_execution");
+const UPSTREAM_SUBTASK_ID = SubtaskIdSchema.parse("st_write_upstream");
+const SECOND_SUBTASK_ID = SubtaskIdSchema.parse("st_write_independent");
+const BIG_TASK_ID = BigTaskIdSchema.parse("bt_write_execution");
 const CHAT_THREAD_ID = ChatThreadIdSchema.parse(
   "thr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 );
@@ -62,6 +70,7 @@ const EXECUTION_RUN_ID = ExecutionRunIdSchema.parse(
   "run_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 );
 const OWNERSHIP_ID = WorktreeOwnershipIdSchema.parse(`wt_${"c".repeat(32)}`);
+const SECOND_OWNERSHIP_ID = WorktreeOwnershipIdSchema.parse(`wt_${"d".repeat(32)}`);
 const PROVIDER_ID = ExecutionProviderIdSchema.parse("openai-codex-app-server");
 const FIXED_TIME = "2026-08-31T01:00:00.000Z";
 const MOCK_WRITE_FIXTURE_PATH = fileURLToPath(
@@ -249,6 +258,200 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
   it("exposes only storage and Subtask authority and fixes the standard profile internally", async () => {
     const module = await import("../src/index.js");
     expect(module.executeSingleSubtaskOwnedWorktreeCodex).toHaveLength(2);
+  });
+
+  it.each(["DONE", "DROPPED", "ARCHIVED"] as const)(
+    "blocks a %s Subtask before reservation or turn/start",
+    async (status) => {
+      const fixture = createFixture(true);
+      try {
+        setStoredSubtaskStatus(fixture.databasePath, SUBTASK_ID, status);
+        const harness = makeHarness(fixture, "success");
+        const result =
+          await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+            fixture.storage,
+            SUBTASK_ID,
+            harness.dependencies,
+          );
+        expect(result).toMatchObject({
+          success: false,
+          failureCode: "PRIMARY_EXECUTION_CONFLICT",
+          chatThreadId: null,
+          executionRunId: null,
+          diagnostics: { turnStartRequests: 0 },
+        });
+        expect(harness.launches).toHaveLength(0);
+        expect(fixture.storage.listChatThreadsForSubtask(SUBTASK_ID)).toEqual([]);
+      } finally {
+        cleanupFixture(fixture);
+      }
+    },
+  );
+
+  it("blocks a HARDENED dependency gate before reservation", async () => {
+    const fixture = createFixture(true);
+    try {
+      seedBlockingDependency(fixture, "HARDENED", "NOT_STARTED");
+      const harness = makeHarness(fixture, "success");
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "PRIMARY_EXECUTION_CONFLICT",
+        chatThreadId: null,
+        executionRunId: null,
+        diagnostics: { turnStartRequests: 0 },
+      });
+      expect(harness.launches).toHaveLength(0);
+      expect(fixture.storage.listChatThreadsForSubtask(SUBTASK_ID)).toEqual([]);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("fails and closes the reserved attempt when the Subtask becomes DONE before turn/start", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "success", {
+        beforeWorktreeAuthorityGate: (gate) => {
+          if (gate === "FINAL_PRE_TURN_HARDLINK_SCAN") {
+            setStoredSubtaskStatus(fixture.databasePath, SUBTASK_ID, "DONE");
+          }
+        },
+      });
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "PRIMARY_EXECUTION_CONFLICT",
+        diagnostics: { turnStartRequests: 0 },
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("fails and closes the reserved attempt when readiness becomes blocked before turn/start", async () => {
+    const fixture = createFixture(true);
+    try {
+      seedBlockingDependency(fixture, "HARDENED", "HARDENED");
+      const harness = makeHarness(fixture, "success", {
+        beforeWorktreeAuthorityGate: (gate) => {
+          if (gate === "FINAL_PRE_TURN_HARDLINK_SCAN") {
+            setStoredSubtaskMaturity(
+              fixture.databasePath,
+              UPSTREAM_SUBTASK_ID,
+              "NOT_STARTED",
+            );
+          }
+        },
+      });
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "PRIMARY_EXECUTION_CONFLICT",
+        diagnostics: { turnStartRequests: 0 },
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("does not durably succeed when the Subtask becomes DONE during the provider turn", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "wait-for-authority-mutation", {
+        afterDurableOperation: (operation) => {
+          if (operation === "START_RUN") {
+            setStoredSubtaskStatus(fixture.databasePath, SUBTASK_ID, "DONE");
+          }
+        },
+      });
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "PRIMARY_EXECUTION_CONFLICT",
+        terminalTurnStatus: "completed",
+      });
+      expect(readFileSync(join(fixture.worktreePath!, "owned-output.txt"), "utf8")).toBe(
+        "owned worktree write\n",
+      );
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("does not durably succeed when an ACCEPTED dependency gate becomes blocked during the provider turn", async () => {
+    const fixture = createFixture(true);
+    try {
+      seedBlockingDependency(fixture, "ACCEPTED", "ACCEPTED");
+      const harness = makeHarness(fixture, "wait-for-authority-mutation", {
+        afterDurableOperation: (operation) => {
+          if (operation === "START_RUN") {
+            setStoredSubtaskMaturity(
+              fixture.databasePath,
+              UPSTREAM_SUBTASK_ID,
+              "HARDENED",
+            );
+          }
+        },
+      });
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "PRIMARY_EXECUTION_CONFLICT",
+        terminalTurnStatus: "completed",
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
   });
 
   it("blocks before durable or provider work when no ACTIVE ownership exists", async () => {
@@ -482,8 +685,12 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
       });
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)).toMatchObject({
-        status: "FAILED",
+        status: "CREATED",
         providerRun: null,
+      });
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)).toMatchObject({
+        status: "OPEN",
+        providerThread: { providerThreadId: "thread-write-mock-77" },
       });
       expect(harness.children).toHaveLength(1);
     } finally {
@@ -491,7 +698,7 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
     }
   });
 
-  it("preserves fast provider writes and terminal evidence when RUNNING bind fails", async () => {
+  it("preserves CREATED and OPEN residue after provider writes and terminal evidence when RUNNING bind fails", async () => {
     const fixture = createFixture(true);
     try {
       const harness = makeHarness(fixture, "success", {
@@ -506,16 +713,126 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         success: false,
         failureCode: "DURABLE_RUN_PERSISTENCE_FAILED",
         terminalTurnStatus: "completed",
-        diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
+        diagnostics: { turnStartRequests: 1 },
       });
+      expect(result.diagnostics.interruptRequests).toBeLessThanOrEqual(1);
       expect(readFileSync(join(fixture.worktreePath!, "owned-output.txt"), "utf8")).toBe(
         "owned worktree write\n",
       );
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)).toMatchObject({
+        status: "CREATED",
+        providerRun: null,
+        startedAt: null,
+      });
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)).toMatchObject({
+        status: "OPEN",
+        providerThread: { providerThreadId: "thread-write-mock-77" },
+      });
+
+      seedIndependentSubtask(fixture.storage);
+      const independentManager = createWorktreeOwnershipManagerForTesting(
+        fixture.storage,
+        {
+          worktreeRoot: join(fixture.directory, "owned-worktrees"),
+          idGenerator: () => SECOND_OWNERSHIP_ID,
+        },
+      );
+      independentManager.provisionOwnedWorktreeForSubtask(SECOND_SUBTASK_ID);
+      fixture.storage.close();
+      const reopened = openTaskDatabase({
+        databasePath: fixture.databasePath,
+        clock: fixedClock,
+      });
+      try {
+        expect(reopened.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+          "CREATED",
+        );
+        expect(reopened.getChatThreadById(CHAT_THREAD_ID)?.status).toBe("OPEN");
+        expect(() =>
+          reopened.reservePrimaryExecutionAttempt({
+            subtaskId: SUBTASK_ID,
+            worktreeOwnershipId: OWNERSHIP_ID,
+            chatThreadId: ChatThreadIdSchema.parse(
+              "thr_unresolved_reopen_block_aaaaaaaa",
+            ),
+            executionRunId: ExecutionRunIdSchema.parse(
+              "run_unresolved_reopen_block_aaaaaaa",
+            ),
+            providerId: PROVIDER_ID,
+          }),
+        ).toThrow();
+        expect(
+          reopened.reservePrimaryExecutionAttempt({
+            subtaskId: SECOND_SUBTASK_ID,
+            worktreeOwnershipId: SECOND_OWNERSHIP_ID,
+            chatThreadId: ChatThreadIdSchema.parse(
+              "thr_independent_reservation_aaaaaaaa",
+            ),
+            executionRunId: ExecutionRunIdSchema.parse(
+              "run_independent_reservation_aaaaaaa",
+            ),
+            providerId: PROVIDER_ID,
+          }).executionRun.status,
+        ).toBe("CREATED");
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("preserves CREATED and OPEN residue when tool activity precedes the RUNNING bind", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "tools-before-response", {
+        failDurableOperation: "START_RUN",
+      });
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "DURABLE_RUN_PERSISTENCE_FAILED",
+        diagnostics: { turnStartRequests: 1 },
+      });
+      expect(result.diagnostics.toolActionsObserved).toBeGreaterThan(0);
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
-        "FAILED",
+        "CREATED",
       );
       expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
-        "CLOSED",
+        "OPEN",
+      );
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("preserves CREATED and OPEN residue when turn/start transport fails after send", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "turn-start-transport-failed");
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        providerRun: null,
+        diagnostics: { turnStartRequests: 1 },
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)).toMatchObject({
+        status: "CREATED",
+        providerRun: null,
+        startedAt: null,
+      });
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "OPEN",
       );
     } finally {
       cleanupFixture(fixture);
@@ -558,7 +875,10 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         diagnostics: { turnStartRequests: 1 },
       });
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
-        "FAILED",
+        "CREATED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "OPEN",
       );
     } finally {
       cleanupFixture(fixture);
@@ -787,7 +1107,7 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
     }
   });
 
-  it("does not fabricate RUNNING state when turn/start fails", async () => {
+  it("does not fabricate RUNNING state or pre-start failure after turn/start is sent", async () => {
     const fixture = createFixture(true);
     try {
       const harness = makeHarness(fixture, "turn-start-failed");
@@ -802,11 +1122,11 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         diagnostics: { turnStartRequests: 1 },
       });
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)).toMatchObject({
-        status: "FAILED",
+        status: "CREATED",
         providerRun: null,
       });
       expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
-        "CLOSED",
+        "OPEN",
       );
     } finally {
       cleanupFixture(fixture);
@@ -929,6 +1249,9 @@ function makeHarness(
     readonly failDurableOperation?: Parameters<
       NonNullable<TestDependencies["beforeDurableOperation"]>
     >[0];
+    readonly afterDurableOperation?: NonNullable<
+      TestDependencies["afterDurableOperation"]
+    >;
     readonly failResolveCall?: number;
     readonly removeWorkspaceThrows?: boolean;
     readonly beforeWorktreeAuthorityGate?: NonNullable<
@@ -964,6 +1287,15 @@ function makeHarness(
     beforeDurableOperation: (operation) => {
       if (operation === options.failDurableOperation) {
         throw new Error("synthetic durable failure");
+      }
+    },
+    afterDurableOperation: (operation) => {
+      options.afterDurableOperation?.(operation);
+      if (
+        operation === "START_RUN" &&
+        scenario === "wait-for-authority-mutation"
+      ) {
+        children[0]?.kill("SIGUSR1");
       }
     },
     ...(options.beforeWorktreeAuthorityGate === undefined
@@ -1013,7 +1345,7 @@ function seedHierarchy(storage: TaskStorage, sourcePath: string): void {
       slug: "write-execution-fixture",
       repository: { kind: "PATH", path: sourcePath },
       defaultBranch: "main",
-      maxActiveCodingSubtasks: 1,
+      maxActiveCodingSubtasks: 2,
     }),
   );
   storage.createBigTask(
@@ -1049,6 +1381,101 @@ function seedHierarchy(storage: TaskStorage, sourcePath: string): void {
       promptSeed: "Create the approved synthetic output in the owned worktree.",
     }),
   );
+}
+
+function seedBlockingDependency(
+  fixture: Fixture,
+  requiredGate: "HARDENED" | "ACCEPTED",
+  upstreamMaturity: "NOT_STARTED" | "HARDENED" | "ACCEPTED",
+): void {
+  fixture.storage.createSubtask(
+    SubtaskCreateInputSchema.parse({
+      recordType: "SUBTASK",
+      id: UPSTREAM_SUBTASK_ID,
+      bigTaskId: BIG_TASK_ID,
+      title: "Write execution dependency",
+      goal: "Provide deterministic dependency evidence",
+      scopeIn: ["Stored readiness"],
+      scopeOut: ["Provider calls"],
+      acceptanceCriteria: ["Gate is evaluated from storage"],
+      untouchedAreas: ["Real repositories"],
+      status: "DONE",
+      maturity: "NOT_STARTED",
+      startPolicy: "MANUAL",
+      delegationPolicy: "NONE",
+      recommendedReasoningLevel: "HIGH",
+      promptSeed: "Synthetic readiness dependency.",
+    }),
+  );
+  setStoredSubtaskMaturity(
+    fixture.databasePath,
+    UPSTREAM_SUBTASK_ID,
+    upstreamMaturity,
+  );
+  fixture.storage.replaceDependenciesForBigTask(BIG_TASK_ID, [
+    SubtaskDependencySchema.parse({
+      upstreamSubtaskId: UPSTREAM_SUBTASK_ID,
+      downstreamSubtaskId: SUBTASK_ID,
+      dependencyType: "BLOCKING",
+      requiredGate,
+      reason: `Synthetic ${requiredGate} execution gate.`,
+    }),
+  ]);
+}
+
+function seedIndependentSubtask(storage: TaskStorage): void {
+  storage.createSubtask(
+    SubtaskCreateInputSchema.parse({
+      recordType: "SUBTASK",
+      id: SECOND_SUBTASK_ID,
+      bigTaskId: BIG_TASK_ID,
+      title: "Independent write execution",
+      goal: "Prove execution residue is scoped to one Subtask",
+      scopeIn: ["Independent reservation"],
+      scopeOut: ["Provider calls"],
+      acceptanceCriteria: ["Independent reservation remains available"],
+      untouchedAreas: ["Primary attempt"],
+      status: "IN_PROGRESS",
+      maturity: "NOT_STARTED",
+      startPolicy: "MANUAL",
+      delegationPolicy: "NONE",
+      recommendedReasoningLevel: "HIGH",
+      promptSeed: "Reserve only this independent synthetic Subtask.",
+    }),
+  );
+}
+
+function setStoredSubtaskStatus(
+  databasePath: string,
+  subtaskId: ReturnType<typeof SubtaskIdSchema.parse>,
+  status: "DONE" | "DROPPED" | "ARCHIVED",
+): void {
+  updateStoredSubtask(databasePath, "status", status, subtaskId);
+}
+
+function setStoredSubtaskMaturity(
+  databasePath: string,
+  subtaskId: ReturnType<typeof SubtaskIdSchema.parse>,
+  maturity: "NOT_STARTED" | "HARDENED" | "ACCEPTED",
+): void {
+  updateStoredSubtask(databasePath, "maturity", maturity, subtaskId);
+}
+
+function updateStoredSubtask(
+  databasePath: string,
+  column: "maturity" | "status",
+  value: string,
+  subtaskId: ReturnType<typeof SubtaskIdSchema.parse>,
+): void {
+  const sqlite = new DatabaseSync(databasePath);
+  try {
+    const result = sqlite
+      .prepare(`UPDATE subtasks SET ${column} = ? WHERE id = ?`)
+      .run(value, subtaskId);
+    expect(result.changes).toBe(1);
+  } finally {
+    sqlite.close();
+  }
 }
 
 function sourceEvidence(sourcePath: string): object {

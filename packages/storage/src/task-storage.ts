@@ -1475,10 +1475,26 @@ export class TaskStorage {
     const reservation = parseReservePrimaryExecutionAttemptInput(input);
     return this.#operation(() =>
       this.#atomic(() => {
-        if (this.#getSubtask(reservation.subtaskId) === null) {
+        const subtask = this.#getSubtask(reservation.subtaskId);
+        if (subtask === null) {
           throw new TaskStorageError(
             "PARENT_NOT_FOUND",
             "The parent Subtask does not exist.",
+          );
+        }
+        if (subtask.status !== "IN_PROGRESS") {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The primary execution attempt requires an execution-eligible Subtask.",
+          );
+        }
+        const readiness = this.evaluateStoredSubtaskDependencyReadiness(
+          reservation.subtaskId,
+        );
+        if (!readiness.valid || !readiness.ready) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The primary execution attempt requires ready stored dependencies.",
           );
         }
         const activeOwnership = this.#sqlite

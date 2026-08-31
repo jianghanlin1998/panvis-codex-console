@@ -14,8 +14,10 @@ type Scenario =
   | "success"
   | "turn-failed"
   | "turn-started-before-response"
+  | "turn-start-transport-failed"
   | "turn-start-failed"
   | "tools-before-response"
+  | "wait-for-authority-mutation"
   | "wait-for-interrupt";
 
 const THREAD_ID = "thread-write-mock-77";
@@ -110,6 +112,9 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       sendError(id);
       return;
     }
+    if (scenario === "turn-start-transport-failed") {
+      process.exit(23);
+    }
     const startedNotification = {
       method: "turn/started",
       params: { threadId: THREAD_ID, turn: fixtureTurn("inProgress") },
@@ -126,6 +131,9 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       scenario === "malformed-response-after-tools"
     ) {
       emitAllowedToolItems();
+    }
+    if (scenario === "wait-for-authority-mutation") {
+      process.once("SIGUSR1", completeSyntheticSuccessfulTurn);
     }
     send({
       id,
@@ -145,6 +153,9 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       send(startedNotification);
     }
     if (scenario === "malformed-response-after-tools") {
+      return;
+    }
+    if (scenario === "wait-for-authority-mutation") {
       return;
     }
     if (scenario === "wait-for-interrupt") {
@@ -359,14 +370,28 @@ function readScenario(): Scenario {
     "success",
     "turn-failed",
     "turn-started-before-response",
+    "turn-start-transport-failed",
     "turn-start-failed",
     "tools-before-response",
+    "wait-for-authority-mutation",
     "wait-for-interrupt",
   ];
   if (!allowed.includes(value as Scenario)) {
     process.exit(2);
   }
   return value as Scenario;
+}
+
+function completeSyntheticSuccessfulTurn(): void {
+  emitAllowedToolItems();
+  writeFileSync("owned-output.txt", "owned worktree write\n", {
+    encoding: "utf8",
+  });
+  emitUsage();
+  send({
+    method: "turn/completed",
+    params: { threadId: THREAD_ID, turn: fixtureTurn("completed") },
+  });
 }
 
 function recordOf(value: unknown): JsonRecord {

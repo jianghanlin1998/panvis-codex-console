@@ -1188,6 +1188,7 @@ function validateWriteToolItemContract(context: SchemaValidationContext): void {
   ) {
     throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
   }
+  validateFileChangeContract(context, fileItems[0]);
   for (const notification of [
     ["definitions", "v2", "ItemStartedNotification"],
     ["definitions", "v2", "ItemCompletedNotification"],
@@ -1198,6 +1199,112 @@ function validateWriteToolItemContract(context: SchemaValidationContext): void {
       "item",
       ["definitions", "v2", "ThreadItem"],
     );
+  }
+}
+
+function validateFileChangeContract(
+  context: SchemaValidationContext,
+  fileChangeItem: SchemaLocation,
+): void {
+  const fileUpdatePath = ["definitions", "v2", "FileUpdateChange"] as const;
+  const fileUpdate = requireLocation(context, fileUpdatePath);
+  if (
+    !schemaHasObjectContract(
+      fileUpdate,
+      ["diff", "kind", "path"],
+      ["diff", "kind", "path"],
+      context,
+    )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+  for (const property of ["diff", "path"] as const) {
+    const locations = objectPropertyLocations(
+      fileUpdate,
+      property,
+      context,
+      { activePaths: new Set() },
+    );
+    if (
+      locations.length === 0 ||
+      !locations.some((location) =>
+        schemaAllowsOnlyTypes(location.node, ["string"]),
+      )
+    ) {
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+    }
+  }
+
+  assertPropertyTargets(
+    context,
+    fileUpdatePath,
+    "kind",
+    ["definitions", "v2", "PatchChangeKind"],
+  );
+  assertArrayPropertyItemsTarget(
+    context,
+    fileChangeItem,
+    "changes",
+    fileUpdatePath,
+  );
+  assertArrayPropertyItemsTarget(
+    context,
+    requireLocation(context, [
+      "definitions",
+      "v2",
+      "FileChangePatchUpdatedNotification",
+    ]),
+    "changes",
+    fileUpdatePath,
+  );
+
+  const kindVariants = schemaAlternatives(
+    requireLocation(context, ["definitions", "v2", "PatchChangeKind"]),
+    context,
+  );
+  const variantsByType = new Map<string, SchemaLocation>();
+  for (const type of ["add", "delete", "update"] as const) {
+    const matching = kindVariants.filter((variant) =>
+      schemaAllowsExactlyObjectPropertyLiteral(
+        variant,
+        "type",
+        type,
+        context,
+        { activePaths: new Set() },
+      ),
+    );
+    if (
+      matching.length !== 1 ||
+      matching[0] === undefined ||
+      !schemaHasObjectContract(
+        matching[0],
+        ["type"],
+        type === "update" ? ["move_path", "type"] : ["type"],
+        context,
+      )
+    ) {
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+    }
+    variantsByType.set(type, matching[0]);
+  }
+
+  const updateVariant = variantsByType.get("update");
+  if (updateVariant === undefined) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+  const moveLocations = objectPropertyLocations(
+    updateVariant,
+    "move_path",
+    context,
+    { activePaths: new Set() },
+  );
+  if (
+    moveLocations.length === 0 ||
+    !moveLocations.some((location) =>
+      schemaAllowsOnlyTypes(location.node, ["null", "string"]),
+    )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
   }
 }
 
@@ -1432,6 +1539,38 @@ function assertPropertyTargets(
         { activePaths: new Set() },
       ),
     )
+  ) {
+    throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+  }
+}
+
+function assertArrayPropertyItemsTarget(
+  context: SchemaValidationContext,
+  source: SchemaLocation,
+  property: string,
+  targetPath: readonly string[],
+): void {
+  const target = requireLocation(context, targetPath);
+  const locations = objectPropertyLocations(
+    source,
+    property,
+    context,
+    { activePaths: new Set() },
+  );
+  if (
+    !locations.some((location) => {
+      const items = schemaRecord(location.node.items);
+      return (
+        location.node.type === "array" &&
+        items !== undefined &&
+        schemaTargetsLocation(
+          { node: items, path: [...location.path, "items"] },
+          target,
+          context,
+          { activePaths: new Set() },
+        )
+      );
+    })
   ) {
     throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
   }
@@ -1917,6 +2056,27 @@ function schemaTypeAllows(node: SchemaObject, expected: string): boolean {
     throw new CLiteCompatibilityFailure("SCHEMA_OUTPUT_MALFORMED");
   }
   return types.includes(expected);
+}
+
+function schemaAllowsOnlyTypes(
+  node: SchemaObject,
+  expected: readonly string[],
+): boolean {
+  const knownTypes = [
+    "array",
+    "boolean",
+    "integer",
+    "null",
+    "number",
+    "object",
+    "string",
+  ] as const;
+  return (
+    expected.every((type) => schemaTypeAllows(node, type)) &&
+    knownTypes
+      .filter((type) => !expected.includes(type))
+      .every((type) => !schemaTypeAllows(node, type))
+  );
 }
 
 function objectPropertyLocations(

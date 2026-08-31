@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BigTaskSchema,
+  BigTaskIdSchema,
   ChatThreadIdSchema,
   ExecutionProviderIdSchema,
   ExecutionRunIdSchema,
@@ -22,6 +23,7 @@ import {
   ProviderRunReferenceSchema,
   ProviderThreadReferenceSchema,
   SubtaskCreateInputSchema,
+  SubtaskDependencySchema,
   SubtaskIdSchema,
   WorktreeOwnershipIdSchema,
 } from "@codex-task-console/domain";
@@ -38,6 +40,62 @@ afterEach(() => {
 });
 
 describe("atomic primary execution authority", () => {
+  it.each(["DONE", "DROPPED", "ARCHIVED"] as const)(
+    "rejects reservation while the Subtask is %s without partial history",
+    (status) => {
+      const fixture = createFixture();
+      try {
+        updateSubtask(fixture.databasePath, fixture.subtaskId, "status", status);
+        expect(() => reserve(fixture.storage, "a")).toThrowError(
+          expect.objectContaining({ code: "CONFLICT" }),
+        );
+        expect(
+          fixture.storage.listChatThreadsForSubtask(fixture.subtaskId),
+        ).toEqual([]);
+      } finally {
+        fixture.storage.close();
+      }
+    },
+  );
+
+  it.each([
+    ["HARDENED", "NOT_STARTED"],
+    ["ACCEPTED", "HARDENED"],
+  ] as const)(
+    "rejects reservation when a %s dependency gate is blocked by %s maturity",
+    (requiredGate, upstreamMaturity) => {
+      const fixture = createFixture(true);
+      try {
+        updateSubtask(
+          fixture.databasePath,
+          fixture.secondSubtaskId!,
+          "maturity",
+          upstreamMaturity,
+        );
+        fixture.storage.replaceDependenciesForBigTask(
+          BigTaskIdSchema.parse("bt_primary"),
+          [
+            SubtaskDependencySchema.parse({
+              upstreamSubtaskId: fixture.secondSubtaskId!,
+              downstreamSubtaskId: fixture.subtaskId,
+              dependencyType: "BLOCKING",
+              requiredGate,
+              reason: `Synthetic ${requiredGate} reservation gate.`,
+            }),
+          ],
+        );
+        expect(() => reserve(fixture.storage, "a")).toThrowError(
+          expect.objectContaining({ code: "CONFLICT" }),
+        );
+        expect(
+          fixture.storage.listChatThreadsForSubtask(fixture.subtaskId),
+        ).toEqual([]);
+      } finally {
+        fixture.storage.close();
+      }
+    },
+  );
+
   it("allows exactly one reservation for one Subtask in one process", () => {
     const fixture = createFixture();
     try {
@@ -358,6 +416,23 @@ function insertOwnership(
     sqlite.close();
   }
   return id;
+}
+
+function updateSubtask(
+  databasePath: string,
+  subtaskId: ReturnType<typeof SubtaskIdSchema.parse>,
+  column: "maturity" | "status",
+  value: string,
+): void {
+  const sqlite = new DatabaseSync(databasePath);
+  try {
+    const result = sqlite
+      .prepare(`UPDATE subtasks SET ${column} = ? WHERE id = ?`)
+      .run(value, subtaskId);
+    expect(result.changes).toBe(1);
+  } finally {
+    sqlite.close();
+  }
 }
 
 async function waitForFiles(paths: readonly string[]): Promise<void> {

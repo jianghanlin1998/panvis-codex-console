@@ -710,6 +710,111 @@ describe("association-correct semantic validation", () => {
     expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
   });
 
+  it("rejects FileUpdateChange when path is not required", () => {
+    const bundle = buildCompatibilityBundle();
+    removeRequiredField(
+      bundle,
+      ["definitions", "v2", "FileUpdateChange"],
+      "path",
+    );
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects FileUpdateChange when path is absent", () => {
+    const bundle = buildCompatibilityBundle();
+    delete schemaRecordAt(bundle, [
+      "definitions",
+      "v2",
+      "FileUpdateChange",
+      "properties",
+    ]).path;
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects FileUpdateChange when path has the wrong type", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, [
+      "definitions",
+      "v2",
+      "FileUpdateChange",
+      "properties",
+    ]).path = { type: "number" };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("does not accept an unrelated path definition when FileUpdateChange loses path", () => {
+    const bundle = buildCompatibilityBundle();
+    delete schemaRecordAt(bundle, [
+      "definitions",
+      "v2",
+      "FileUpdateChange",
+      "properties",
+    ]).path;
+    schemaRecordAt(bundle, ["definitions", "v2"]).PathDecoy = objectSchema(
+      ["path"],
+      ["path"],
+    );
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a fileChange ThreadItem redirected to a shape-compatible change decoy", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2"]).FileUpdateChangeDecoy =
+      structuredClone(
+        schemaRecordAt(bundle, ["definitions", "v2", "FileUpdateChange"]),
+      );
+    schemaRecord(
+      schemaRecord(fileChangeItemVariant(bundle).properties).changes,
+    ).items = { $ref: "#/definitions/v2/FileUpdateChangeDecoy" };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects patchUpdated changes redirected away from FileUpdateChange", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2"]).FileUpdateChangeDecoy =
+      structuredClone(
+        schemaRecordAt(bundle, ["definitions", "v2", "FileUpdateChange"]),
+      );
+    schemaRecordAt(bundle, [
+      "definitions",
+      "v2",
+      "FileChangePatchUpdatedNotification",
+      "properties",
+      "changes",
+    ]).items = { $ref: "#/definitions/v2/FileUpdateChangeDecoy" };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects FileUpdateChange kind redirected away from PatchChangeKind", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2"]).PatchChangeKindDecoy =
+      structuredClone(
+        schemaRecordAt(bundle, ["definitions", "v2", "PatchChangeKind"]),
+      );
+    schemaRecordAt(bundle, [
+      "definitions",
+      "v2",
+      "FileUpdateChange",
+      "properties",
+    ]).kind = { $ref: "#/definitions/v2/PatchChangeKindDecoy" };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects removal of the consumed update move_path field", () => {
+    const bundle = buildCompatibilityBundle();
+    delete schemaRecord(patchChangeKindVariant(bundle, "update").properties)
+      .move_path;
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a consumed update move_path field with the wrong type", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecord(patchChangeKindVariant(bundle, "update").properties).move_path = {
+      type: "number",
+    };
+    expectBundleFailure(bundle, "PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
   it("rejects a duplicate-method decoy outside the authoritative message root", () => {
     const bundle = buildCompatibilityBundle();
     const actual = methodVariant(bundle, "ClientRequest", "thread/start");
@@ -1132,10 +1237,17 @@ function buildCompatibilityBundle(): MutableSchema {
       ["delta", "itemId", "threadId", "turnId"],
       ["delta", "itemId", "threadId", "turnId"],
     ),
-    FileChangePatchUpdatedNotification: objectSchema(
-      ["changes", "itemId", "threadId", "turnId"],
-      ["changes", "itemId", "threadId", "turnId"],
-    ),
+    FileChangePatchUpdatedNotification:
+      fileChangePatchUpdatedNotificationSchema(),
+    FileUpdateChange: {
+      properties: {
+        diff: { type: "string" },
+        kind: { $ref: "#/definitions/v2/PatchChangeKind" },
+        path: { type: "string" },
+      },
+      required: ["diff", "kind", "path"],
+      type: "object",
+    },
     ItemCompletedNotification: referencedObjectSchema(
       "item",
       "#/definitions/v2/ThreadItem",
@@ -1168,6 +1280,20 @@ function buildCompatibilityBundle(): MutableSchema {
               items: { $ref: "#/definitions/v2/AbsolutePathBuf" },
               type: "array",
             },
+          },
+          required: ["type"],
+          type: "object",
+        },
+      ],
+    },
+    PatchChangeKind: {
+      oneOf: [
+        typedObjectSchema("add", ["type"], ["type"]),
+        typedObjectSchema("delete", ["type"], ["type"]),
+        {
+          properties: {
+            move_path: { type: ["string", "null"] },
+            type: { enum: ["update"], type: "string" },
           },
           required: ["type"],
           type: "object",
@@ -1209,11 +1335,7 @@ function buildCompatibilityBundle(): MutableSchema {
           ["command", "commandActions", "cwd", "id", "status", "type"],
           ["command", "commandActions", "cwd", "id", "status", "type"],
         ),
-        typedObjectSchema(
-          "fileChange",
-          ["changes", "id", "status", "type"],
-          ["changes", "id", "status", "type"],
-        ),
+        fileChangeThreadItemSchema(),
       ],
     },
     TokenUsageBreakdown: objectSchema(
@@ -1458,6 +1580,31 @@ function referencedObjectSchema(property: string, reference: string): MutableSch
   };
 }
 
+function fileChangePatchUpdatedNotificationSchema(): MutableSchema {
+  const schema = objectSchema(
+    ["changes", "itemId", "threadId", "turnId"],
+    ["changes", "itemId", "threadId", "turnId"],
+  );
+  schemaRecord(schema.properties).changes = {
+    items: { $ref: "#/definitions/v2/FileUpdateChange" },
+    type: "array",
+  };
+  return schema;
+}
+
+function fileChangeThreadItemSchema(): MutableSchema {
+  const schema = typedObjectSchema(
+    "fileChange",
+    ["changes", "id", "status", "type"],
+    ["changes", "id", "status", "type"],
+  );
+  schemaRecord(schema.properties).changes = {
+    items: { $ref: "#/definitions/v2/FileUpdateChange" },
+    type: "array",
+  };
+  return schema;
+}
+
 function requestSchema(method: string, paramsReference: string): MutableSchema {
   return {
     properties: {
@@ -1596,6 +1743,43 @@ function textInputVariant(bundle: MutableSchema): MutableSchema {
   );
   if (variant === undefined) {
     throw new Error("Missing text input fixture.");
+  }
+  return variant;
+}
+
+function fileChangeItemVariant(bundle: MutableSchema): MutableSchema {
+  const variant = schemaArrayAt(bundle, [
+    "definitions",
+    "v2",
+    "ThreadItem",
+    "oneOf",
+  ]).find((candidate) =>
+    stringArray(schemaRecord(schemaRecord(candidate.properties).type).enum).includes(
+      "fileChange",
+    ),
+  );
+  if (variant === undefined) {
+    throw new Error("Missing fileChange fixture variant.");
+  }
+  return variant;
+}
+
+function patchChangeKindVariant(
+  bundle: MutableSchema,
+  type: "add" | "delete" | "update",
+): MutableSchema {
+  const variant = schemaArrayAt(bundle, [
+    "definitions",
+    "v2",
+    "PatchChangeKind",
+    "oneOf",
+  ]).find((candidate) =>
+    stringArray(schemaRecord(schemaRecord(candidate.properties).type).enum).includes(
+      type,
+    ),
+  );
+  if (variant === undefined) {
+    throw new Error(`Missing PatchChangeKind fixture variant: ${type}`);
   }
   return variant;
 }
