@@ -1,6 +1,6 @@
 # Local Control Service & Operator Harness V0
 
-Status: IMPLEMENTED. Comprehensive Hardening is pending; this boundary is not yet accepted.
+Status: HARDENED. Comprehensive Hardening passed; Fresh Independent QA is pending and this boundary is not yet accepted.
 
 ## Purpose and composition
 
@@ -26,7 +26,7 @@ The one production state root is:
   worktrees/
 ```
 
-The application, state, and operator directories must be canonical absolute, owner-owned, mode `0700`, non-symlink directories. Unsafe existing state fails closed; the daemon does not repair permissions or replace authority files. The SQLite path is derived internally and cannot be supplied by HTTP or a production CLI option. Tests inject only disposable roots and never use the real Application Support state.
+The application, state, and operator directories must be canonical absolute, owner-owned, mode `0700`, non-symlink directories. `console.sqlite3` must be an owner-owned, mode `0600`, single-link regular file at the exact canonical path. The daemon creates that file without following links, verifies its filesystem identity before and after SQLite open/migration and listener creation, and applies the same fail-closed regular-file checks to existing `-journal`, `-wal`, and `-shm` sidecars. The current SQLite configuration uses delete-journal mode; its transient journal inherits the private database mode. Unsafe existing state fails closed; the daemon does not repair permissions or replace authority files. The SQLite path is derived internally and cannot be supplied by HTTP or a production CLI option. Tests inject only disposable roots and never use the real Application Support state.
 
 ## Daemon and session boundary
 
@@ -36,7 +36,7 @@ An exclusive owner-private lock prevents two production daemons from becoming au
 
 Each start creates a 256-bit cryptographically random lowercase hexadecimal session token. The owner-private `operator/current-session.json` descriptor is mode `0600` and contains schema version, daemon instance ID, PID, port, canonical start timestamp, and token. The token is not accepted on a command line, URL, route, or query; it is not logged, returned in HTTP errors, or stored in TaskStorage.
 
-All operational requests require `Authorization: Bearer <token>` and the exact `Host: 127.0.0.1:<actual-port>`. An absent `Origin` is allowed for the CLI; a present Origin must be exactly `http://127.0.0.1:<actual-port>`. Mutating requests additionally require `X-CTC-Request: 1` and exact `Content-Type: application/json`. No permissive CORS header or wildcard origin is emitted, and OPTIONS does not grant authority.
+All operational requests require `Authorization: Bearer <token>` and the exact `Host: 127.0.0.1:<actual-port>`. An absent `Origin` is allowed for the CLI; a present Origin must be exactly `http://127.0.0.1:<actual-port>`. Duplicate header names are rejected before authority checks so Node header joining or selection cannot create ambiguity. Mutating requests additionally require one `X-CTC-Request: 1`, exact `Content-Type: application/json`, and one exact decimal `Content-Length`; transfer encoding is rejected. No permissive CORS header or wildcard origin is emitted, and OPTIONS does not grant authority.
 
 ## Narrow HTTP API
 
@@ -45,14 +45,14 @@ All responses are bounded JSON. Errors have a stable `{ "error": { "code": "..."
 | Method and route | Exact caller input | Trusted producer | Result |
 | --- | --- | --- | --- |
 | `GET /v0/ping` | none | daemon | schema-version readiness |
-| `GET /v0/subtasks/<canonical-id>` | path Subtask ID only | `TaskStorage` and `WorktreeOwnership` read APIs | board status, maturity, dependency readiness, verified/bounded worktree status, and at most eight recent threads with at most eight recent runs each |
+| `GET /v0/subtasks/<canonical-id>` | canonical path Subtask ID only; encoded separators and noncanonical encodings fail closed | `TaskStorage` and `WorktreeOwnership` read APIs | board status, maturity, dependency readiness, verified/bounded worktree status, and at most eight recent threads with at most eight recent runs each |
 | `POST /v0/worktrees/provision` | `{ "subtaskId": "st_..." }` only | accepted `WorktreeOwnership.provisionOwnedWorktreeForSubtask` | sanitized ownership ID/status and commit evidence; no path or branch |
 | `POST /v0/executions/run` | `{ "subtaskId": "st_..." }` only | accepted `executeSingleSubtaskOwnedWorktreeCodex` | minimized sanitized Step 5B result; failures remain explicit and are not retried |
 | `POST /v0/worktrees/release` | `{ "subtaskId": "st_..." }` only | accepted non-force `WorktreeOwnership.releaseOwnedWorktreeForSubtask` | sanitized terminal ownership evidence |
 
 Provision does not run a provider. Run does not auto-provision. Release offers no force, cleanup, reset, prune, or branch-deletion option. Callers cannot supply repository/worktree paths, roots, branches, SHAs, ownership IDs, cwd, sandbox, writable roots, network, runtime, model, approval policy, profile, retry, or provider request data.
 
-The built-in Node HTTP boundary caps request bodies at 16 KiB, responses at 64 KiB, routes at 256 characters, headers at 8 KiB/32 fields, and active requests at 16. It also sets finite request, header, and keep-alive timeouts. JSON mutation bodies must be one strict object with the one allowed field; malformed JSON, duplicate/unknown fields, arrays, and noncanonical IDs are rejected.
+The built-in Node HTTP boundary caps request bodies at 16 KiB, responses at 64 KiB, routes at 256 characters, headers at 8 KiB/32 fields, and active requests at 16. Header byte/count limits are enforced explicitly instead of relying on Node's truncating `maxHeadersCount` behavior, and parser-level malformed requests receive the same bounded JSON error surface. It also sets finite request, header, and keep-alive timeouts. JSON mutation bodies must have exact length and be one strict object with the one allowed field; malformed JSON/UTF-8 identifiers, duplicate or escaped-duplicate keys, unknown fields, arrays, primitives, and noncanonical IDs are rejected. Inspection counts durable threads separately but fetches only the eight returned threads and eight returned runs per thread from SQLite.
 
 ## Operator CLI
 
@@ -66,14 +66,14 @@ pnpm ctc:operator -- run <subtask-id>
 pnpm ctc:operator -- release <subtask-id>
 ```
 
-It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces a bounded timeout and 64 KiB response limit, validates JSON content type and shape, rejects token reflection, prints one scriptable JSON object, and exits nonzero for transport, HTTP, or Step 5B result failure.
+It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and 64 KiB response limit, and handles resets/aborted responses without hanging. It validates one JSON content type and the exact route-specific result shape. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
 
 ## Lifecycle, privacy, and limitations
 
-Graceful SIGINT/SIGTERM handling stops new work, lets already-started trusted operations finish within a bounded shutdown wait, closes TaskStorage only after in-flight operations finish, then removes only the daemon's own descriptor and lock. It never kills, resets, releases, or repairs an owned worktree during shutdown.
+Graceful SIGINT/SIGTERM handling stops new work, lets already-started trusted operations finish within a bounded shutdown wait, closes TaskStorage only after in-flight operations finish, then removes only the daemon's own descriptor and lock. A timeout retains fail-closed evidence, and phased cleanup state makes a later stop retry coherent without re-removing already-cleaned evidence. It never kills, resets, releases, or repairs an owned worktree during shutdown.
 
 Unexpected process crashes can leave lock/session evidence or accepted Step 5B durable residue. V0 intentionally fails closed on stale authority files and provides no automatic stale-process recovery, provider-thread recovery, crash repair, or supervisor. This is a deterministic local-single-user V1 guard, not protection against a malicious same-user host actor.
 
 There is no generic shell, command, SQL, filesystem-write, provider-request, or raw App Server endpoint. There is no task authoring, generic CRUD, streaming/WebSocket/SSE, orchestration, planner/reviewer/dispatcher, queue, scheduling, retry, maturity automation, browser UI, or real backend dogfood in this slice. Tests use synthetic disposable repositories only and make zero provider/model turns.
 
-The next maturity gate is a new-chat Local Control Service & Operator Harness V0 Comprehensive Hardening task. Fresh Independent QA and real dogfood are not ready.
+The next maturity gate is a new-chat Fresh Independent QA for Local Control Service & Operator Harness V0. Real backend dogfood and Roadmap Step 7 remain not started and unauthorized.

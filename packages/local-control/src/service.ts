@@ -165,10 +165,9 @@ const summarizeRun = (run: ExecutionRun): RunSummary =>
   });
 
 const summarizeThread = (
-  storage: TaskStorage,
   thread: ChatThread,
+  runs: readonly ExecutionRun[],
 ): ThreadSummary => {
-  const runs = storage.listExecutionRunsForChatThread(thread.id);
   return Object.freeze({
     id: thread.id,
     status: thread.status,
@@ -176,7 +175,7 @@ const summarizeThread = (
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     runs: Object.freeze(
-      runs.slice(-MAX_RECENT_RUNS_PER_THREAD).map(summarizeRun),
+      runs.map(summarizeRun),
     ),
   });
 };
@@ -258,8 +257,11 @@ class ProductionLocalControlService implements LocalControlService {
           activeAuthorityVerified = false;
         }
       }
-      const threads = this.#storage.listChatThreadsForSubtask(subtask.id);
-      const recentThreads = threads.slice(-MAX_RECENT_THREADS);
+      const executionHistory =
+        this.#storage.readBoundedDurableExecutionHistoryForSubtask(subtask.id, {
+          maxChatThreads: MAX_RECENT_THREADS,
+          maxExecutionRunsPerThread: MAX_RECENT_RUNS_PER_THREAD,
+        });
       return Object.freeze({
         subtask: Object.freeze({
           id: subtask.id,
@@ -281,10 +283,12 @@ class ProductionLocalControlService implements LocalControlService {
                 activeAuthorityVerified,
               }),
         durableExecution: Object.freeze({
-          chatThreadCount: threads.length,
-          returnedChatThreadCount: recentThreads.length,
+          chatThreadCount: executionHistory.chatThreadCount,
+          returnedChatThreadCount: executionHistory.recentChatThreads.length,
           recentChatThreads: Object.freeze(
-            recentThreads.map((thread) => summarizeThread(this.#storage, thread)),
+            executionHistory.recentChatThreads.map(({ chatThread, executionRuns }) =>
+              summarizeThread(chatThread, executionRuns),
+            ),
           ),
         }),
       });

@@ -9,17 +9,20 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 
 import {
   BigTaskIdSchema,
   ChatThreadIdSchema,
   ExecutionProviderIdSchema,
+  ExecutionRunIdSchema,
   ProjectIdSchema,
   SubtaskIdSchema,
 } from "@codex-task-console/domain";
 import type { SubtaskId } from "@codex-task-console/domain";
 import {
   CODEX_APP_SERVER_PROVIDER_ID,
+  executeSingleSubtaskOwnedWorktreeCodex,
 } from "@codex-task-console/codex-adapter";
 import type {
   OwnedWorktreeCodexExecutionResult,
@@ -244,5 +247,181 @@ describe("trusted service composition with synthetic durable state", () => {
       code: "SUBTASK_NOT_FOUND",
       httpStatus: 404,
     } satisfies Partial<LocalControlServiceError>);
+  });
+
+  it("queries high-cardinality durable history with bounded SQL reads", async () => {
+    const fixture = createFixture();
+    const manager = createWorktreeOwnershipManagerForTesting(fixture.storage, {
+      worktreeRoot: fixture.worktreeRoot,
+      idGenerator: () => "wt_33333333333333333333333333333333",
+    });
+    const service = createLocalControlServiceForTesting(
+      fixture.storage,
+      manager,
+      async () => failedExecution(),
+    );
+    const listThreads = vi.spyOn(fixture.storage, "listChatThreadsForSubtask");
+    const listRuns = vi.spyOn(
+      fixture.storage,
+      "listExecutionRunsForChatThread",
+    );
+    for (let threadIndex = 0; threadIndex < 24; threadIndex += 1) {
+      const chatThreadId = ChatThreadIdSchema.parse(
+        `thr_bounded_${String(threadIndex).padStart(2, "0")}`,
+      );
+      fixture.storage.createChatThread({
+        id: chatThreadId,
+        subtaskId: fixture.subtaskId,
+        providerId: ExecutionProviderIdSchema.parse("synthetic-provider"),
+      });
+      for (let runIndex = 0; runIndex < 24; runIndex += 1) {
+        fixture.storage.createExecutionRun({
+          id: ExecutionRunIdSchema.parse(
+            `run_bounded_${String(threadIndex).padStart(2, "0")}_${String(
+              runIndex,
+            ).padStart(2, "0")}`,
+          ),
+          chatThreadId,
+        });
+      }
+    }
+
+    const result = await service.inspectSubtask(fixture.subtaskId);
+    expect(result.durableExecution.chatThreadCount).toBe(24);
+    expect(result.durableExecution.recentChatThreads).toHaveLength(8);
+    expect(
+      result.durableExecution.recentChatThreads.map(({ id }) => id),
+    ).toEqual(
+      Array.from(
+        { length: 8 },
+        (_, index) => `thr_bounded_${String(index + 16).padStart(2, "0")}`,
+      ),
+    );
+    for (const thread of result.durableExecution.recentChatThreads) {
+      expect(thread.runs).toHaveLength(8);
+      expect(thread.runs[0]?.id).toMatch(/_16$/u);
+      expect(thread.runs[7]?.id).toMatch(/_23$/u);
+    }
+    expect(listThreads).not.toHaveBeenCalled();
+    expect(listRuns).not.toHaveBeenCalled();
+    for (const options of [
+      { maxChatThreads: 0, maxExecutionRunsPerThread: 8 },
+      { maxChatThreads: 8, maxExecutionRunsPerThread: 65 },
+      { maxChatThreads: 1.5, maxExecutionRunsPerThread: 8 },
+      {
+        maxChatThreads: 8,
+        maxExecutionRunsPerThread: 8,
+        unbounded: true,
+      },
+    ]) {
+      expect(() =>
+        fixture.storage.readBoundedDurableExecutionHistoryForSubtask(
+          fixture.subtaskId,
+          options,
+        ),
+      ).toThrowError();
+    }
+  });
+
+  it("uses the accepted Step 5B pre-provider gate and preserves worktree concurrency authority", async () => {
+    const fixture = createFixture();
+    const manager = createWorktreeOwnershipManagerForTesting(fixture.storage, {
+      worktreeRoot: fixture.worktreeRoot,
+      idGenerator: () => "wt_44444444444444444444444444444444",
+    });
+    const service = createLocalControlServiceForTesting(
+      fixture.storage,
+      manager,
+      executeSingleSubtaskOwnedWorktreeCodex,
+    );
+    const preProvider = await service.runOwnedWorktreeExecution(
+      fixture.subtaskId,
+    );
+    expect(preProvider.execution).toMatchObject({
+      success: false,
+      failureCode: "ACTIVE_WORKTREE_REQUIRED",
+      chatThreadId: null,
+      executionRunId: null,
+      providerThreadId: null,
+      providerRunId: null,
+    });
+
+    const provisions = await Promise.allSettled([
+      service.provisionOwnedWorktree(fixture.subtaskId),
+      service.provisionOwnedWorktree(fixture.subtaskId),
+    ]);
+    expect(provisions.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(provisions.filter(({ status }) => status === "rejected")).toHaveLength(1);
+    expect(
+      manager.listWorktreeOwnershipHistoryForSubtask(fixture.subtaskId),
+    ).toHaveLength(1);
+    await expect(service.releaseOwnedWorktree(fixture.subtaskId)).resolves.toMatchObject({
+      worktree: { status: "RELEASED" },
+    });
+    await expect(
+      service.releaseOwnedWorktree(fixture.subtaskId),
+    ).rejects.toMatchObject({ code: "OPERATION_CONFLICT", httpStatus: 409 });
+  });
+
+  it("sanitizes malformed durable history and raw repository failures", async () => {
+    const fixture = createFixture();
+    const manager = createWorktreeOwnershipManagerForTesting(fixture.storage, {
+      worktreeRoot: fixture.worktreeRoot,
+      idGenerator: () => "wt_55555555555555555555555555555555",
+    });
+    const service = createLocalControlServiceForTesting(
+      fixture.storage,
+      manager,
+      async () => failedExecution(),
+    );
+    const threadId = ChatThreadIdSchema.parse("thr_sanitization_target");
+    fixture.storage.createChatThread({
+      id: threadId,
+      subtaskId: fixture.subtaskId,
+      providerId: ExecutionProviderIdSchema.parse("synthetic-provider"),
+    });
+    const sqlite = new DatabaseSync(join(fixture.root, "console.sqlite3"));
+    sqlite.exec("PRAGMA ignore_check_constraints = ON");
+    sqlite
+      .prepare("UPDATE chat_threads SET provider_id = ? WHERE id = ?")
+      .run("/private/provider-secret", threadId);
+    sqlite.close();
+
+    let durableError: unknown;
+    try {
+      await service.inspectSubtask(fixture.subtaskId);
+    } catch (error) {
+      durableError = error;
+    }
+    expect(durableError).toMatchObject({
+      code: "LOCAL_OPERATION_FAILED",
+      httpStatus: 500,
+    });
+    expect(String(durableError)).not.toMatch(
+      /provider-secret|console\.sqlite3|private prompt/u,
+    );
+
+    const freshFixture = createFixture();
+    const failingManager = createWorktreeOwnershipManagerForTesting(
+      freshFixture.storage,
+      {
+        worktreeRoot: freshFixture.worktreeRoot,
+        idGenerator: () => "wt_66666666666666666666666666666666",
+      },
+    );
+    rmSync(freshFixture.repository, { force: true, recursive: true });
+    const failingService = createLocalControlServiceForTesting(
+      freshFixture.storage,
+      failingManager,
+      async () => failedExecution(),
+    );
+    let repositoryError: unknown;
+    try {
+      await failingService.provisionOwnedWorktree(freshFixture.subtaskId);
+    } catch (error) {
+      repositoryError = error;
+    }
+    expect(repositoryError).toMatchObject({ httpStatus: 409 });
+    expect(String(repositoryError)).not.toContain(freshFixture.repository);
   });
 });

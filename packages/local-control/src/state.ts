@@ -11,6 +11,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -64,6 +65,11 @@ export interface OwnedAuthorityFile {
   readonly identity: FileIdentity;
 }
 
+export interface CanonicalDatabaseAuthority {
+  readonly path: string;
+  readonly identity: FileIdentity;
+}
+
 const currentUid = (): number => {
   const getuid = process.getuid;
   if (getuid === undefined) {
@@ -81,6 +87,19 @@ const identitiesMatch = (
 
 const fileIdentity = (stats: { readonly dev: bigint; readonly ino: bigint }): FileIdentity =>
   Object.freeze({ device: stats.dev, inode: stats.ino });
+
+const assertPrivateRegularFile = (stats: BigIntStats): FileIdentity => {
+  if (
+    !stats.isFile() ||
+    stats.isSymbolicLink() ||
+    stats.nlink !== 1n ||
+    stats.uid !== BigInt(currentUid()) ||
+    modeBits(Number(stats.mode)) !== PRIVATE_FILE_MODE
+  ) {
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+  return fileIdentity(stats);
+};
 
 const safeLstat = (path: string) => {
   try {
@@ -180,6 +199,133 @@ export const ensureProductionStateDirectories = (
   ensurePrivateDirectory(paths.root);
   ensurePrivateDirectory(paths.stateDirectory);
   ensurePrivateDirectory(paths.operatorDirectory);
+};
+
+const DATABASE_SIDECAR_SUFFIXES = ["-journal", "-wal", "-shm"] as const;
+
+const verifyOptionalPrivateRegularFile = (path: string): void => {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    const identity = assertPrivateRegularFile(opened);
+    const linked = safeLstat(path);
+    assertPrivateRegularFile(linked);
+    if (!identitiesMatch(identity, fileIdentity(linked))) {
+      throw new LocalStateError("UNSAFE_LOCAL_STATE");
+    }
+  } catch (error) {
+    try {
+      closeSync(descriptor);
+    } catch {
+      // The sanitized verification error remains primary.
+    }
+    throw error;
+  }
+  try {
+    closeSync(descriptor);
+  } catch {
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+};
+
+const assertCanonicalDatabasePaths = (paths: LocalControlPaths): void => {
+  if (
+    paths.stateDirectory !== join(paths.root, "state") ||
+    paths.databasePath !== join(paths.stateDirectory, "console.sqlite3")
+  ) {
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+};
+
+export const prepareCanonicalDatabaseAuthority = (
+  paths: LocalControlPaths,
+): CanonicalDatabaseAuthority => {
+  assertCanonicalDatabasePaths(paths);
+  verifyPrivateDirectory(paths.root);
+  verifyPrivateDirectory(paths.stateDirectory);
+  for (const suffix of DATABASE_SIDECAR_SUFFIXES) {
+    verifyOptionalPrivateRegularFile(`${paths.databasePath}${suffix}`);
+  }
+
+  let descriptor: number;
+  try {
+    descriptor = openSync(
+      paths.databasePath,
+      constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_RDWR |
+        constants.O_NOFOLLOW,
+      PRIVATE_FILE_MODE,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw new LocalStateError("UNSAFE_LOCAL_STATE");
+    }
+    try {
+      descriptor = openSync(
+        paths.databasePath,
+        constants.O_RDWR | constants.O_NOFOLLOW,
+      );
+    } catch {
+      throw new LocalStateError("UNSAFE_LOCAL_STATE");
+    }
+  }
+
+  let authority: CanonicalDatabaseAuthority | undefined;
+  try {
+    const opened = fstatSync(descriptor, { bigint: true });
+    const identity = assertPrivateRegularFile(opened);
+    const linked = safeLstat(paths.databasePath);
+    assertPrivateRegularFile(linked);
+    if (!identitiesMatch(identity, fileIdentity(linked))) {
+      throw new LocalStateError("UNSAFE_LOCAL_STATE");
+    }
+    authority = Object.freeze({ path: paths.databasePath, identity });
+  } catch (error) {
+    try {
+      closeSync(descriptor);
+    } catch {
+      // The sanitized database-authority error remains primary.
+    }
+    throw error;
+  }
+  try {
+    closeSync(descriptor);
+  } catch {
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+  if (authority === undefined) {
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+  return authority;
+};
+
+export const verifyCanonicalDatabaseAuthority = (
+  paths: LocalControlPaths,
+  authority: CanonicalDatabaseAuthority,
+): void => {
+  assertCanonicalDatabasePaths(paths);
+  if (authority.path !== paths.databasePath) {
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+  verifyPrivateDirectory(paths.root);
+  verifyPrivateDirectory(paths.stateDirectory);
+  const linked = safeLstat(paths.databasePath);
+  assertPrivateRegularFile(linked);
+  if (!identitiesMatch(authority.identity, fileIdentity(linked))) {
+    throw new LocalStateError("UNSAFE_LOCAL_STATE");
+  }
+  for (const suffix of DATABASE_SIDECAR_SUFFIXES) {
+    verifyOptionalPrivateRegularFile(`${paths.databasePath}${suffix}`);
+  }
 };
 
 export const verifyOperatorStateDirectories = (

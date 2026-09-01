@@ -76,6 +76,54 @@ const writeError = (
   code: string,
 ): void => writeJson(response, status, { error: { code } });
 
+const CLIENT_ERROR_BODY = Buffer.from(
+  JSON.stringify({ error: { code: "INVALID_REQUEST" } }),
+  "utf-8",
+);
+
+const rejectAmbiguousHeaders = (request: IncomingMessage): void => {
+  const { rawHeaders } = request;
+  if (
+    rawHeaders.length % 2 !== 0 ||
+    rawHeaders.length / 2 > LOCAL_CONTROL_MAX_HEADER_COUNT
+  ) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  let rawHeaderBytes = 2;
+  const names = new Set<string>();
+  for (let index = 0; index < rawHeaders.length; index += 2) {
+    const rawName = rawHeaders[index];
+    const rawValue = rawHeaders[index + 1];
+    const name = rawName?.toLowerCase();
+    if (
+      rawName === undefined ||
+      name === undefined ||
+      rawValue === undefined ||
+      names.has(name)
+    ) {
+      throw new HttpBoundaryError("INVALID_REQUEST", 400);
+    }
+    names.add(name);
+    rawHeaderBytes +=
+      Buffer.byteLength(rawName, "latin1") +
+      2 +
+      Buffer.byteLength(rawValue, "latin1") +
+      2;
+  }
+  if (rawHeaderBytes > LOCAL_CONTROL_MAX_HEADER_BYTES) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  if (request.headers["transfer-encoding"] !== undefined) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  if (
+    request.method === "GET" &&
+    request.headers["content-length"] !== undefined
+  ) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+};
+
 const safeTokenMatches = (provided: string, expected: string): boolean => {
   const providedDigest = createHash("sha256").update(provided, "utf-8").digest();
   const expectedDigest = createHash("sha256").update(expected, "utf-8").digest();
@@ -110,10 +158,13 @@ const requireBoundary = (
 const readBoundedBody = async (request: IncomingMessage): Promise<string> => {
   const declaredLength = request.headers["content-length"];
   if (
-    typeof declaredLength === "string" &&
-    (/^(?:0|[1-9][0-9]*)$/.test(declaredLength) === false ||
-      Number(declaredLength) > LOCAL_CONTROL_BODY_LIMIT_BYTES)
+    typeof declaredLength !== "string" ||
+    /^(?:0|[1-9][0-9]*)$/.test(declaredLength) === false
   ) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  const expectedBytes = Number(declaredLength);
+  if (expectedBytes > LOCAL_CONTROL_BODY_LIMIT_BYTES) {
     throw new HttpBoundaryError("REQUEST_TOO_LARGE", 413);
   }
   const chunks: Buffer[] = [];
@@ -126,6 +177,9 @@ const readBoundedBody = async (request: IncomingMessage): Promise<string> => {
       throw new HttpBoundaryError("REQUEST_TOO_LARGE", 413);
     }
     chunks.push(buffer);
+  }
+  if (bytes !== expectedBytes) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
   }
   return Buffer.concat(chunks, bytes).toString("utf-8");
 };
@@ -279,6 +333,9 @@ const requireMutationHeaders = (request: IncomingMessage): void => {
   if (request.headers["content-type"] !== "application/json") {
     throw new HttpBoundaryError("CONTENT_TYPE_REQUIRED", 415);
   }
+  if (request.headers["content-length"] === undefined) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
 };
 
 const routeRequest = async (
@@ -297,6 +354,13 @@ const routeRequest = async (
       try {
         decoded = decodeURIComponent(match[1] ?? "");
       } catch {
+        throw new HttpBoundaryError("INVALID_REQUEST", 400);
+      }
+      if (
+        decoded.includes("/") ||
+        decoded.includes("\\") ||
+        encodeURIComponent(decoded) !== match[1]
+      ) {
         throw new HttpBoundaryError("INVALID_REQUEST", 400);
       }
       return service.inspectSubtask(parseCanonicalSubtaskId(decoded));
@@ -376,6 +440,7 @@ export const createLocalControlHttpServer = (
           if (authority.length === 0) {
             throw new HttpBoundaryError("DAEMON_NOT_READY", 503);
           }
+          rejectAmbiguousHeaders(request);
           requireBoundary(request, authority, sessionToken);
           writeJson(response, 200, await routeRequest(request, service));
         } catch (error) {
@@ -395,10 +460,19 @@ export const createLocalControlHttpServer = (
       })();
     },
   );
-  server.maxHeadersCount = LOCAL_CONTROL_MAX_HEADER_COUNT;
+  server.maxHeadersCount = 0;
   server.requestTimeout = LOCAL_CONTROL_REQUEST_TIMEOUT_MILLISECONDS;
   server.headersTimeout = LOCAL_CONTROL_HEADERS_TIMEOUT_MILLISECONDS;
   server.keepAliveTimeout = LOCAL_CONTROL_KEEP_ALIVE_TIMEOUT_MILLISECONDS;
+  server.on("clientError", (_error, socket) => {
+    if (!socket.writable || socket.writableEnded) {
+      socket.destroy();
+      return;
+    }
+    socket.end(
+      `HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: ${CLIENT_ERROR_BODY.byteLength}\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n${CLIENT_ERROR_BODY.toString("utf-8")}`,
+    );
+  });
 
   return Object.freeze({
     server,

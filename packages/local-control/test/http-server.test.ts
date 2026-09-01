@@ -145,6 +145,14 @@ const call = async (
       : { authorization: `Bearer ${TOKEN}` }),
     ...options.headers,
   };
+  if (
+    options.body !== undefined &&
+    headers["content-length"] === undefined
+  ) {
+    headers["content-length"] = String(
+      Buffer.byteLength(options.body, "utf-8"),
+    );
+  }
   return new Promise((resolve, reject) => {
     const outbound = request(
       {

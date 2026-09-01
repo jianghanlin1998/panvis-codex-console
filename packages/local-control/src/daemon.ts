@@ -14,8 +14,10 @@ import {
   LocalStateError,
   acquireDaemonLock,
   ensureProductionStateDirectories,
+  prepareCanonicalDatabaseAuthority,
   productionLocalControlPaths,
   removeOwnedAuthorityFile,
+  verifyCanonicalDatabaseAuthority,
   writeSessionDescriptor,
 } from "./state.js";
 import type {
@@ -66,6 +68,8 @@ interface DaemonDependencies {
   readonly createService: (storage: TaskStorage) => LocalControlService;
   readonly readinessWriter: (line: string) => void;
   readonly shutdownTimeoutMilliseconds: number;
+  readonly listenServer?: typeof listen;
+  readonly removeAuthorityFile?: typeof removeOwnedAuthorityFile;
 }
 
 const productionDependencies = (): DaemonDependencies => ({
@@ -226,16 +230,21 @@ const startWithDependencies = async (
     if (pathExists(dependencies.paths.sessionPath)) {
       throw new LocalDaemonError("SESSION_UNAVAILABLE");
     }
+    const databaseAuthority = prepareCanonicalDatabaseAuthority(
+      dependencies.paths,
+    );
     try {
       storage = dependencies.openStorage(dependencies.paths.databasePath);
     } catch {
       throw new LocalDaemonError("DATABASE_UNAVAILABLE");
     }
+    verifyCanonicalDatabaseAuthority(dependencies.paths, databaseAuthority);
     http = createLocalControlHttpServer(
       dependencies.createService(storage),
       dependencies.sessionToken,
     );
-    const port = await listen(http.server);
+    const port = await (dependencies.listenServer ?? listen)(http.server);
+    verifyCanonicalDatabaseAuthority(dependencies.paths, databaseAuthority);
     http.setAuthority(`${LOCAL_CONTROL_HOST}:${port}`);
     try {
       session = writeSessionDescriptor(dependencies.paths, {
@@ -263,8 +272,13 @@ const startWithDependencies = async (
     const ownedHttp = http;
     const ownedSession = session;
     const ownedLock = lock;
+    const removeAuthorityFile =
+      dependencies.removeAuthorityFile ?? removeOwnedAuthorityFile;
     let stopped = false;
     let stopPromise: Promise<void> | undefined;
+    let storageClosed = false;
+    let sessionRemoved = false;
+    let lockRemoved = false;
     const stop = async (): Promise<void> => {
       if (stopped) {
         return;
@@ -283,9 +297,18 @@ const startWithDependencies = async (
           dependencies.shutdownTimeoutMilliseconds,
         );
         try {
-          ownedStorage.close();
-          removeOwnedAuthorityFile(ownedSession);
-          removeOwnedAuthorityFile(ownedLock);
+          if (!storageClosed) {
+            ownedStorage.close();
+            storageClosed = true;
+          }
+          if (!sessionRemoved) {
+            removeAuthorityFile(ownedSession);
+            sessionRemoved = true;
+          }
+          if (!lockRemoved) {
+            removeAuthorityFile(ownedLock);
+            lockRemoved = true;
+          }
         } catch {
           throw new LocalDaemonError("SHUTDOWN_FAILED");
         }

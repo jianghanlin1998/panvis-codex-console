@@ -225,25 +225,33 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real target Step 5B writes for post-FQA repair: 0
 - Step 5B ACCEPTED: YES
 - Roadmap Step 5: ACCEPTED / COMPLETE
-- Local Control Service & Operator Harness V0: IMPLEMENTED
+- Local Control Service & Operator Harness V0: HARDENED
 - Canonical local state boundary: PASS
 - Loopback-only daemon baseline: PASS
 - Local session/auth baseline: PASS
 - Host/Origin/CSRF baseline: PASS
 - Narrow inspect/provision/run/release API: PASS
 - Thin operator CLI baseline: PASS
+- Comprehensive Hardening: PASS
+- CTC-LOCAL-HARD-001: CLOSED — canonical database and SQLite sidecars require private no-follow single-link filesystem authority
+- CTC-LOCAL-HARD-002: CLOSED — raw HTTP duplicate/framing/header-bound/encoded-route ambiguity fails closed with bounded JSON errors
+- CTC-LOCAL-HARD-003: CLOSED — operator validates parsed token reflection and exact route-specific response shapes
+- CTC-LOCAL-HARD-004: CLOSED — operator uses an absolute deadline and handles malformed/reset/aborted responses coherently
+- CTC-LOCAL-HARD-005: CLOSED — inspection uses bounded SQLite queries for eight recent threads and runs
+- CTC-LOCAL-HARD-006: CLOSED — phased shutdown cleanup remains retryable after partial authority cleanup
 - Generic shell/RPC: NONE
 - Browser UI: NOT IMPLEMENTED
 - Orchestration: NOT IMPLEMENTED
 - Real backend dogfood: NOT RUN
 - Provider/model turns for Step 6: 0
-- Comprehensive Hardening: PENDING
-- Fresh Independent QA: NOT READY
+- Real target writes for Step 6 hardening: 0
+- Fresh Independent QA: PENDING / READY
 - Step 6 ACCEPTED: NO
-- Roadmap Step 6: IMPLEMENTED / acceptance pending
+- Roadmap Step 6: HARDENED / Fresh Independent QA pending
+- Step 7: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** new-chat Local Control Service & Operator Harness V0 Comprehensive Hardening.
+**Next safe task:** new-chat Fresh Independent QA for Local Control Service & Operator Harness V0.
 
 Hanlin manual QA: NOT REQUIRED
 

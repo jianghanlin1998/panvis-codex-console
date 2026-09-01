@@ -1,6 +1,16 @@
 import { request } from "node:http";
+import type { ClientRequest } from "node:http";
 
-import { SubtaskIdSchema } from "@codex-task-console/domain";
+import {
+  ChatThreadIdSchema,
+  ChatThreadStatusSchema,
+  ExecutionProviderIdSchema,
+  ExecutionRunIdSchema,
+  ExecutionRunStatusSchema,
+  NormalizedUsageSchema,
+  SubtaskIdSchema,
+  WorktreeOwnershipIdSchema,
+} from "@codex-task-console/domain";
 import type { SubtaskId } from "@codex-task-console/domain";
 
 import {
@@ -59,6 +69,290 @@ export class LocalOperatorError extends Error {
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const hasExactKeys = (
+  value: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): boolean => {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+};
+
+const schemaMatchesExactly = (
+  schema: { safeParse(value: unknown): { success: boolean; data?: unknown } },
+  value: unknown,
+): boolean => {
+  const result = schema.safeParse(value);
+  return result.success && result.data === value;
+};
+
+const isCanonicalTimestamp = (value: unknown): value is string =>
+  typeof value === "string" &&
+  !Number.isNaN(Date.parse(value)) &&
+  new Date(value).toISOString() === value;
+
+const isNullableBoundedString = (value: unknown): boolean =>
+  value === null ||
+  (typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 512 &&
+    value.trim() === value);
+
+const isRunSummary = (value: unknown): boolean => {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "id",
+      "status",
+      "providerRunId",
+      "providerModelId",
+      "normalizedUsage",
+      "createdAt",
+      "updatedAt",
+    ])
+  ) {
+    return false;
+  }
+  return (
+    schemaMatchesExactly(ExecutionRunIdSchema, value.id) &&
+    ExecutionRunStatusSchema.safeParse(value.status).success &&
+    isNullableBoundedString(value.providerRunId) &&
+    isNullableBoundedString(value.providerModelId) &&
+    (value.normalizedUsage === null ||
+      NormalizedUsageSchema.safeParse(value.normalizedUsage).success) &&
+    isCanonicalTimestamp(value.createdAt) &&
+    isCanonicalTimestamp(value.updatedAt)
+  );
+};
+
+const isThreadSummary = (value: unknown): boolean => {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      "id",
+      "status",
+      "providerId",
+      "createdAt",
+      "updatedAt",
+      "runs",
+    ]) ||
+    !Array.isArray(value.runs) ||
+    value.runs.length > 8
+  ) {
+    return false;
+  }
+  return (
+    schemaMatchesExactly(ChatThreadIdSchema, value.id) &&
+    ChatThreadStatusSchema.safeParse(value.status).success &&
+    schemaMatchesExactly(ExecutionProviderIdSchema, value.providerId) &&
+    isCanonicalTimestamp(value.createdAt) &&
+    isCanonicalTimestamp(value.updatedAt) &&
+    value.runs.every(isRunSummary)
+  );
+};
+
+const isInspectionResponse = (
+  value: Readonly<Record<string, unknown>>,
+  subtaskId: SubtaskId,
+): boolean => {
+  if (
+    !hasExactKeys(value, [
+      "subtask",
+      "dependencyReadiness",
+      "worktree",
+      "durableExecution",
+    ]) ||
+    !isRecord(value.subtask) ||
+    !hasExactKeys(value.subtask, ["id", "status", "maturity"]) ||
+    value.subtask.id !== subtaskId ||
+    typeof value.subtask.status !== "string" ||
+    typeof value.subtask.maturity !== "string" ||
+    !isRecord(value.dependencyReadiness) ||
+    !hasExactKeys(value.dependencyReadiness, [
+      "valid",
+      "ready",
+      "blockerCount",
+      "errorCodes",
+    ]) ||
+    typeof value.dependencyReadiness.valid !== "boolean" ||
+    typeof value.dependencyReadiness.ready !== "boolean" ||
+    !Number.isSafeInteger(value.dependencyReadiness.blockerCount) ||
+    (value.dependencyReadiness.blockerCount as number) < 0 ||
+    !Array.isArray(value.dependencyReadiness.errorCodes) ||
+    !value.dependencyReadiness.errorCodes.every(
+      (code) => typeof code === "string" && /^[A-Z][A-Z0-9_]*$/u.test(code),
+    )
+  ) {
+    return false;
+  }
+  if (value.worktree !== null) {
+    if (
+      !isRecord(value.worktree) ||
+      !hasExactKeys(value.worktree, [
+        "id",
+        "status",
+        "activeAuthorityVerified",
+      ]) ||
+      !schemaMatchesExactly(WorktreeOwnershipIdSchema, value.worktree.id) ||
+      !["PROVISIONING", "ACTIVE", "RELEASING", "RELEASED", "FAILED"].includes(
+        value.worktree.status as string,
+      ) ||
+      typeof value.worktree.activeAuthorityVerified !== "boolean"
+    ) {
+      return false;
+    }
+  }
+  if (
+    !isRecord(value.durableExecution) ||
+    !hasExactKeys(value.durableExecution, [
+      "chatThreadCount",
+      "returnedChatThreadCount",
+      "recentChatThreads",
+    ]) ||
+    !Number.isSafeInteger(value.durableExecution.chatThreadCount) ||
+    !Number.isSafeInteger(value.durableExecution.returnedChatThreadCount) ||
+    (value.durableExecution.chatThreadCount as number) < 0 ||
+    (value.durableExecution.returnedChatThreadCount as number) < 0 ||
+    !Array.isArray(value.durableExecution.recentChatThreads) ||
+    value.durableExecution.recentChatThreads.length > 8 ||
+    value.durableExecution.returnedChatThreadCount !==
+      value.durableExecution.recentChatThreads.length ||
+    (value.durableExecution.chatThreadCount as number) <
+      (value.durableExecution.returnedChatThreadCount as number)
+  ) {
+    return false;
+  }
+  return value.durableExecution.recentChatThreads.every(isThreadSummary);
+};
+
+const isWorktreeResponse = (
+  value: Readonly<Record<string, unknown>>,
+  expectedStatus: "ACTIVE" | "RELEASED",
+): boolean => {
+  if (
+    !hasExactKeys(value, ["worktree"]) ||
+    !isRecord(value.worktree) ||
+    !hasExactKeys(value.worktree, [
+      "id",
+      "status",
+      "startingCommitSha",
+      "releaseHeadSha",
+    ])
+  ) {
+    return false;
+  }
+  return (
+    schemaMatchesExactly(WorktreeOwnershipIdSchema, value.worktree.id) &&
+    value.worktree.status === expectedStatus &&
+    typeof value.worktree.startingCommitSha === "string" &&
+    /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
+      value.worktree.startingCommitSha,
+    ) &&
+    (expectedStatus === "ACTIVE"
+      ? value.worktree.releaseHeadSha === null
+      : typeof value.worktree.releaseHeadSha === "string" &&
+        /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
+          value.worktree.releaseHeadSha,
+        ))
+  );
+};
+
+const isExecutionResponse = (
+  value: Readonly<Record<string, unknown>>,
+): boolean => {
+  if (
+    !hasExactKeys(value, ["execution"]) ||
+    !isRecord(value.execution) ||
+    !hasExactKeys(value.execution, [
+      "success",
+      "failureCode",
+      "chatThreadId",
+      "executionRunId",
+      "worktreeOwnershipId",
+      "providerId",
+      "providerThreadId",
+      "providerRunId",
+      "providerModelId",
+      "normalizedUsage",
+      "terminalTurnStatus",
+      "appServerChildCleaned",
+      "transientRuntimeCleaned",
+    ]) ||
+    typeof value.execution.success !== "boolean" ||
+    value.execution.providerId !== "codex-app-server" ||
+    !isNullableBoundedString(value.execution.providerThreadId) ||
+    !isNullableBoundedString(value.execution.providerRunId) ||
+    !isNullableBoundedString(value.execution.providerModelId) ||
+    (value.execution.normalizedUsage !== null &&
+      !NormalizedUsageSchema.safeParse(value.execution.normalizedUsage).success) ||
+    ![null, "completed", "failed", "interrupted"].includes(
+      value.execution.terminalTurnStatus as string | null,
+    ) ||
+    typeof value.execution.appServerChildCleaned !== "boolean" ||
+    typeof value.execution.transientRuntimeCleaned !== "boolean"
+  ) {
+    return false;
+  }
+  const idOrNull = (
+    schema: { safeParse(value: unknown): { success: boolean; data?: unknown } },
+    candidate: unknown,
+  ): boolean => candidate === null || schemaMatchesExactly(schema, candidate);
+  if (
+    !idOrNull(ChatThreadIdSchema, value.execution.chatThreadId) ||
+    !idOrNull(ExecutionRunIdSchema, value.execution.executionRunId) ||
+    !idOrNull(
+      WorktreeOwnershipIdSchema,
+      value.execution.worktreeOwnershipId,
+    )
+  ) {
+    return false;
+  }
+  return value.execution.success
+    ? value.execution.failureCode === null &&
+        value.execution.chatThreadId !== null &&
+        value.execution.executionRunId !== null &&
+        value.execution.worktreeOwnershipId !== null
+    : typeof value.execution.failureCode === "string" &&
+        /^[A-Z][A-Z0-9_]*$/u.test(value.execution.failureCode);
+};
+
+const isErrorResponse = (value: Readonly<Record<string, unknown>>): boolean =>
+  hasExactKeys(value, ["error"]) &&
+  isRecord(value.error) &&
+  hasExactKeys(value.error, ["code"]) &&
+  typeof value.error.code === "string" &&
+  value.error.code.length <= 128 &&
+  /^[A-Z][A-Z0-9_]*$/u.test(value.error.code);
+
+const validateResponseShape = (
+  command: OperatorCommand,
+  status: number,
+  value: Readonly<Record<string, unknown>>,
+): boolean => {
+  if (status < 200 || status >= 300) {
+    return isErrorResponse(value);
+  }
+  if (status !== 200) {
+    return false;
+  }
+  switch (command.name) {
+    case "ping":
+      return (
+        hasExactKeys(value, ["ok", "schemaVersion"]) &&
+        value.ok === true &&
+        value.schemaVersion === 1
+      );
+    case "status":
+      return isInspectionResponse(value, command.subtaskId);
+    case "provision":
+      return isWorktreeResponse(value, "ACTIVE");
+    case "run":
+      return isExecutionResponse(value);
+    case "release":
+      return isWorktreeResponse(value, "RELEASED");
+  }
+};
 
 const parseSubtaskId = (value: string): SubtaskId => {
   const parsed = SubtaskIdSchema.safeParse(value);
@@ -136,12 +430,24 @@ const requestDaemon = async (
   const authority = `${LOCAL_CONTROL_HOST}:${descriptor.port}`;
   return new Promise((resolve, reject) => {
     let settled = false;
+    const timing: {
+      clientRequest?: ClientRequest;
+      deadline?: NodeJS.Timeout;
+    } = {};
     const fail = (error: LocalOperatorError): void => {
       if (!settled) {
         settled = true;
+        if (timing.deadline !== undefined) {
+          clearTimeout(timing.deadline);
+        }
         reject(error);
       }
     };
+    timing.deadline = setTimeout(() => {
+      timing.clientRequest?.destroy();
+      fail(new LocalOperatorError("OPERATOR_TIMEOUT"));
+    }, timeoutMilliseconds);
+    timing.deadline.unref();
     const headers: Record<string, string> = {
       accept: "application/json",
       authorization: `Bearer ${descriptor.sessionToken}`,
@@ -153,7 +459,7 @@ const requestDaemon = async (
       headers["content-type"] = "application/json";
       headers["x-ctc-request"] = "1";
     }
-    const clientRequest = request(
+    const outboundRequest = request(
       {
         agent: false,
         family: 4,
@@ -164,13 +470,31 @@ const requestDaemon = async (
         port: descriptor.port,
       },
       (response) => {
-        const contentType = response.headers["content-type"];
+        const contentTypes = response.headersDistinct["content-type"];
         if (
-          typeof contentType !== "string" ||
-          !/^application\/json(?:;\s*charset=utf-8)?$/iu.test(contentType)
+          contentTypes?.length !== 1 ||
+          !/^application\/json(?:;\s*charset=utf-8)?$/iu.test(
+            contentTypes[0] ?? "",
+          )
         ) {
           response.resume();
           fail(new LocalOperatorError("RESPONSE_MALFORMED"));
+          return;
+        }
+        const contentLength = response.headers["content-length"];
+        if (
+          contentLength !== undefined &&
+          (/^(?:0|[1-9][0-9]*)$/u.test(contentLength) === false ||
+            Number(contentLength) > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES)
+        ) {
+          response.resume();
+          fail(
+            new LocalOperatorError(
+              Number(contentLength) > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES
+                ? "RESPONSE_TOO_LARGE"
+                : "RESPONSE_MALFORMED",
+            ),
+          );
           return;
         }
         const chunks: Buffer[] = [];
@@ -179,7 +503,7 @@ const requestDaemon = async (
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           bytes += buffer.byteLength;
           if (bytes > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES) {
-            clientRequest.destroy();
+            outboundRequest.destroy();
             fail(new LocalOperatorError("RESPONSE_TOO_LARGE"));
             return;
           }
@@ -206,10 +530,27 @@ const requestDaemon = async (
             fail(new LocalOperatorError("RESPONSE_MALFORMED"));
             return;
           }
+          let serialized: string;
+          try {
+            serialized = JSON.stringify(parsed);
+          } catch {
+            fail(new LocalOperatorError("RESPONSE_MALFORMED"));
+            return;
+          }
+          if (
+            serialized.includes(descriptor.sessionToken) ||
+            !validateResponseShape(command, status, parsed)
+          ) {
+            fail(new LocalOperatorError("RESPONSE_MALFORMED"));
+            return;
+          }
           const execution = parsed.execution;
           const executionFailed =
             isRecord(execution) && execution.success === false;
           settled = true;
+          if (timing.deadline !== undefined) {
+            clearTimeout(timing.deadline);
+          }
           resolve(
             Object.freeze({
               httpStatus: status,
@@ -218,19 +559,28 @@ const requestDaemon = async (
             }),
           );
         });
+        response.once("aborted", () => {
+          fail(new LocalOperatorError("OPERATOR_UNAVAILABLE"));
+        });
+        response.once("error", () => {
+          fail(new LocalOperatorError("OPERATOR_UNAVAILABLE"));
+        });
       },
     );
-    clientRequest.setTimeout(timeoutMilliseconds, () => {
-      clientRequest.destroy();
-      fail(new LocalOperatorError("OPERATOR_TIMEOUT"));
-    });
-    clientRequest.once("error", () => {
-      fail(new LocalOperatorError("OPERATOR_UNAVAILABLE"));
+    timing.clientRequest = outboundRequest;
+    outboundRequest.once("error", (error) => {
+      fail(
+        new LocalOperatorError(
+          (error as NodeJS.ErrnoException).code?.startsWith("HPE_") === true
+            ? "RESPONSE_MALFORMED"
+            : "OPERATOR_UNAVAILABLE",
+        ),
+      );
     });
     if (outbound.body !== undefined) {
-      clientRequest.write(outbound.body);
+      outboundRequest.write(outbound.body);
     }
-    clientRequest.end();
+    outboundRequest.end();
   });
 };
 

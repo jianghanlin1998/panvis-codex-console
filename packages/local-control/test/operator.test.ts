@@ -87,6 +87,26 @@ const respondJson = (
   response.end(bytes);
 };
 
+const validInspection = (): Readonly<Record<string, unknown>> => ({
+  subtask: {
+    id: SUBTASK_ID,
+    status: "IN_PROGRESS",
+    maturity: "IMPLEMENTED",
+  },
+  dependencyReadiness: {
+    valid: true,
+    ready: true,
+    blockerCount: 0,
+    errorCodes: [],
+  },
+  worktree: null,
+  durableExecution: {
+    chatThreadCount: 0,
+    returnedChatThreadCount: 0,
+    recentChatThreads: [],
+  },
+});
+
 describe("thin operator command boundary", () => {
   it("accepts only the five fixed commands and canonical Subtask IDs", () => {
     expect(parseOperatorCommand(["ping"])).toEqual({ name: "ping" });
@@ -144,6 +164,8 @@ describe("thin operator command boundary", () => {
           worktree: {
             id: "wt_11111111111111111111111111111111",
             status: "ACTIVE",
+            startingCommitSha: "1".repeat(40),
+            releaseHeadSha: null,
           },
         });
       });
@@ -173,7 +195,7 @@ describe("thin operator command boundary", () => {
     const responder = await startResponder((request, response) => {
       observedPath = request.url ?? "";
       marker = request.headers["x-ctc-request"];
-      respondJson(response, 200, { subtask: { id: SUBTASK_ID } });
+      respondJson(response, 200, validInspection());
     });
     const paths = createPaths();
     installSession(paths, responder.port);

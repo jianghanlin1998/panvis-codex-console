@@ -27,6 +27,9 @@ import type {
   ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
+  BoundedDurableExecutionHistory,
+  BoundedDurableExecutionHistoryOptions,
+  BoundedDurableExecutionHistoryThread,
   BindChatThreadProviderReferenceInput,
   CreateChatThreadInput,
   CreateExecutionRunInput,
@@ -68,6 +71,9 @@ describe("storage package public exports", () => {
     expectTypeOf<ActiveContextItemSnapshot>().toBeObject();
     expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
     expectTypeOf<AllowedRawContextItemSnapshot>().toBeObject();
+    expectTypeOf<BoundedDurableExecutionHistory>().toBeObject();
+    expectTypeOf<BoundedDurableExecutionHistoryOptions>().toBeObject();
+    expectTypeOf<BoundedDurableExecutionHistoryThread>().toBeObject();
     expectTypeOf<BindChatThreadProviderReferenceInput>().toBeObject();
     expectTypeOf<CreateChatThreadInput>().toBeObject();
     expectTypeOf<CreateExecutionRunInput>().toBeObject();

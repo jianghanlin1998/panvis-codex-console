@@ -69,7 +69,7 @@ import type {
   SubtaskImplementationCheckpointId,
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
-import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 
@@ -154,6 +154,37 @@ export interface FinalizedPrimaryExecutionAttempt {
   readonly chatThread: ChatThread;
   readonly executionRun: ExecutionRun;
 }
+
+export interface BoundedDurableExecutionHistoryOptions {
+  readonly maxChatThreads: number;
+  readonly maxExecutionRunsPerThread: number;
+}
+
+export interface BoundedDurableExecutionHistoryThread {
+  readonly chatThread: ChatThread;
+  readonly executionRuns: readonly ExecutionRun[];
+}
+
+export interface BoundedDurableExecutionHistory {
+  readonly chatThreadCount: number;
+  readonly recentChatThreads: readonly BoundedDurableExecutionHistoryThread[];
+}
+
+const MAX_BOUNDED_DURABLE_HISTORY_LIMIT = 64;
+
+const parseBoundedDurableHistoryLimit = (value: number): number => {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_BOUNDED_DURABLE_HISTORY_LIMIT
+  ) {
+    throw new TaskStorageError(
+      "INVALID_INPUT",
+      "The bounded durable execution history limit is invalid.",
+    );
+  }
+  return value;
+};
 
 type ProjectContextScope = Extract<
   ContextScope,
@@ -1646,6 +1677,75 @@ export class TaskStorage {
         .orderBy(asc(chatThreadsTable.createdAt), asc(chatThreadsTable.id))
         .all()
         .map((row) => this.#chatThreadFromRow(row)),
+    );
+  }
+
+  readBoundedDurableExecutionHistoryForSubtask(
+    input: SubtaskId,
+    options: BoundedDurableExecutionHistoryOptions,
+  ): BoundedDurableExecutionHistory {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    const parsedOptions = parseStrictInputRecord(
+      options,
+      "Bounded durable execution history",
+      ["maxChatThreads", "maxExecutionRunsPerThread"],
+    );
+    const maxChatThreads = parseBoundedDurableHistoryLimit(
+      parsedOptions.maxChatThreads as number,
+    );
+    const maxExecutionRunsPerThread = parseBoundedDurableHistoryLimit(
+      parsedOptions.maxExecutionRunsPerThread as number,
+    );
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const countRow = this.#database
+          .select({ value: count() })
+          .from(chatThreadsTable)
+          .where(eq(chatThreadsTable.subtaskId, subtaskId))
+          .get();
+        if (
+          countRow === undefined ||
+          !Number.isSafeInteger(countRow.value) ||
+          countRow.value < 0
+        ) {
+          throw malformedStoredData();
+        }
+        const recentRows = this.#database
+          .select()
+          .from(chatThreadsTable)
+          .where(eq(chatThreadsTable.subtaskId, subtaskId))
+          .orderBy(desc(chatThreadsTable.createdAt), desc(chatThreadsTable.id))
+          .limit(maxChatThreads)
+          .all()
+          .reverse();
+        const recentChatThreads = recentRows.map((row) => {
+          const chatThread = this.#chatThreadFromRow(row);
+          this.#assertExecutionRunUsageIntegersAreDecodable(
+            "chat_thread_id",
+            chatThread.id,
+          );
+          const executionRuns = this.#database
+            .select()
+            .from(executionRunsTable)
+            .where(eq(executionRunsTable.chatThreadId, chatThread.id))
+            .orderBy(
+              desc(executionRunsTable.createdAt),
+              desc(executionRunsTable.id),
+            )
+            .limit(maxExecutionRunsPerThread)
+            .all()
+            .reverse()
+            .map((runRow) => this.#executionRunFromRow(runRow));
+          return Object.freeze({
+            chatThread,
+            executionRuns: Object.freeze(executionRuns),
+          });
+        });
+        return Object.freeze({
+          chatThreadCount: countRow.value,
+          recentChatThreads: Object.freeze(recentChatThreads),
+        });
+      }),
     );
   }
 
