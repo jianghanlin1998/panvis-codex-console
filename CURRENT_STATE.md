@@ -279,20 +279,25 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 shared-root blocker: CLOSED
 - Step 7 resume gate: SATISFIED
 - Active owned runtime continuity: PASS
-- Step 7 target state: AI Update Board preserved clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no remotes or Console-owned worktrees
+- Step 7 operator invocation recovery: MECHANICAL episode 1 PASS — supported `pnpm ctc:operator <command>` form used; documented extra-`--` mismatch remains a non-blocking follow-up
+- Step 7 target source: AI Update Board `main` remains clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no remotes and no product edits
 - Step 7 canonical hierarchy: `prj_ai_update_board` / `bt_ai_update_board` / `st_ai_update_board_ui` CREATED and exact readback PASS
 - Step 7 Subtask state: `IN_PROGRESS` / `NOT_STARTED`
 - Step 7 dependency readiness: PASS — valid, ready, zero blockers, zero edges
-- Step 7 failing stage: documented `pnpm ctc:operator -- ping` forwarded literal `--` and production CLI returned `INVALID_COMMAND`
-- Step 7 Local Control daemon: production start PASS; stopped cleanly after ping blocker; no current lock/session authority
-- Step 7 durable execution state: zero worktrees, zero ChatThreads, zero ExecutionRuns
-- Step 7 provider/model execution: NOT STARTED / 0 turns
+- Step 7 Local Control ping/status/provision: PASS
+- Step 7 ACTIVE ownership: `wt_d71afbd8e735b2246feb3fec3ae39d46`; clean at bootstrap HEAD on retained `ctc/worktree/wt_d71afbd8e735b2246feb3fec3ae39d46`
+- Step 7 provider/model execution: 1 turn attempted / allowance exhausted; FAILED closed before provider thread/run start with `WRITE_POLICY_REQUIRED`
+- Step 7 durable ChatThread: `thr_f37fa708f14dee1ebeac06bcf62fbfaf` / `CLOSED`; provider thread reference absent
+- Step 7 durable ExecutionRun: `run_7f98fffe838a2d52545c782770901484` / `FAILED` / never started; provider run/model and usage absent
+- Step 7 cleanup: App Server child and transient runtime cleaned; daemon stopped cleanly; no lock/session authority
+- Step 7 product verification/commit/checkpoint/release: NOT PERFORMED after hard-stop failure; ACTIVE clean owned worktree preserved
 - Step 7 automatic retry/repair: NONE
-- Step 7 state-only verification: lint/typecheck/build/public hygiene/diff checks PASS; full suite FAIL on five 5-second parallel-load timeouts across two files while focused rerun of both files passed 45/45; no test or production-code repair attempted
+- Step 7 Console verification: lint/typecheck/build/public hygiene/diff checks PASS; normal full suite PASS — 107 files / 3,506 tests
+- Hanlin manual UI QA: NOT READY — no UI implementation exists
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** ChatGPT audit of the Step 7 operator-invocation blocker and a separately authorized bounded resolution; do not retry Step 7 automatically.
+**Next safe task:** ChatGPT audit of the Step 7 `WRITE_POLICY_REQUIRED` failure and preserved durable state; do not retry the provider run automatically.
 
 Hanlin manual QA: NOT REQUIRED
 
