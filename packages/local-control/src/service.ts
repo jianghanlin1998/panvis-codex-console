@@ -1,0 +1,351 @@
+import {
+  executeSingleSubtaskOwnedWorktreeCodex,
+} from "@codex-task-console/codex-adapter";
+import type {
+  OwnedWorktreeCodexExecutionResult,
+} from "@codex-task-console/codex-adapter";
+import type {
+  ChatThread,
+  ExecutionRun,
+  SubtaskId,
+  WorktreeOwnership,
+} from "@codex-task-console/domain";
+import {
+  TaskStorageError,
+  WorktreeOwnershipError,
+  createWorktreeOwnershipManager,
+} from "@codex-task-console/storage";
+import type {
+  TaskStorage,
+  WorktreeOwnershipManager,
+} from "@codex-task-console/storage";
+
+const MAX_RECENT_THREADS = 8;
+const MAX_RECENT_RUNS_PER_THREAD = 8;
+
+export type LocalControlServiceErrorCode =
+  | "INVALID_REQUEST"
+  | "SUBTASK_NOT_FOUND"
+  | "OPERATION_CONFLICT"
+  | "LOCAL_OPERATION_FAILED";
+
+export class LocalControlServiceError extends Error {
+  readonly code: LocalControlServiceErrorCode;
+  readonly httpStatus: 400 | 404 | 409 | 500;
+
+  constructor(
+    code: LocalControlServiceErrorCode,
+    httpStatus: 400 | 404 | 409 | 500,
+  ) {
+    super(code);
+    this.name = "LocalControlServiceError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+interface ThreadSummary {
+  readonly id: string;
+  readonly status: ChatThread["status"];
+  readonly providerId: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly runs: readonly RunSummary[];
+}
+
+interface RunSummary {
+  readonly id: string;
+  readonly status: ExecutionRun["status"];
+  readonly providerRunId: string | null;
+  readonly providerModelId: string | null;
+  readonly normalizedUsage: ExecutionRun["normalizedUsage"];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface SubtaskInspection {
+  readonly subtask: {
+    readonly id: string;
+    readonly status: string;
+    readonly maturity: string;
+  };
+  readonly dependencyReadiness: {
+    readonly valid: boolean;
+    readonly ready: boolean;
+    readonly blockerCount: number;
+    readonly errorCodes: readonly string[];
+  };
+  readonly worktree: {
+    readonly id: string;
+    readonly status: string;
+    readonly activeAuthorityVerified: boolean;
+  } | null;
+  readonly durableExecution: {
+    readonly chatThreadCount: number;
+    readonly returnedChatThreadCount: number;
+    readonly recentChatThreads: readonly ThreadSummary[];
+  };
+}
+
+export interface WorktreeOperationResult {
+  readonly worktree: {
+    readonly id: string;
+    readonly status: WorktreeOwnership["status"];
+    readonly startingCommitSha: string;
+    readonly releaseHeadSha: string | null;
+  };
+}
+
+export interface ExecutionOperationResult {
+  readonly execution: {
+    readonly success: boolean;
+    readonly failureCode: string | null;
+    readonly chatThreadId: string | null;
+    readonly executionRunId: string | null;
+    readonly worktreeOwnershipId: string | null;
+    readonly providerId: string;
+    readonly providerThreadId: string | null;
+    readonly providerRunId: string | null;
+    readonly providerModelId: string | null;
+    readonly normalizedUsage: OwnedWorktreeCodexExecutionResult["normalizedUsage"];
+    readonly terminalTurnStatus: OwnedWorktreeCodexExecutionResult["terminalTurnStatus"];
+    readonly appServerChildCleaned: boolean;
+    readonly transientRuntimeCleaned: boolean;
+  };
+}
+
+export interface LocalControlService {
+  inspectSubtask(subtaskId: SubtaskId): Promise<SubtaskInspection>;
+  provisionOwnedWorktree(subtaskId: SubtaskId): Promise<WorktreeOperationResult>;
+  runOwnedWorktreeExecution(subtaskId: SubtaskId): Promise<ExecutionOperationResult>;
+  releaseOwnedWorktree(subtaskId: SubtaskId): Promise<WorktreeOperationResult>;
+}
+
+const sanitizeStorageError = (error: unknown): LocalControlServiceError => {
+  if (error instanceof LocalControlServiceError) {
+    return error;
+  }
+  if (error instanceof TaskStorageError) {
+    switch (error.code) {
+      case "INVALID_INPUT":
+        return new LocalControlServiceError("INVALID_REQUEST", 400);
+      case "PARENT_NOT_FOUND":
+        return new LocalControlServiceError("SUBTASK_NOT_FOUND", 404);
+      case "CONFLICT":
+        return new LocalControlServiceError("OPERATION_CONFLICT", 409);
+      default:
+        return new LocalControlServiceError("LOCAL_OPERATION_FAILED", 500);
+    }
+  }
+  if (error instanceof WorktreeOwnershipError) {
+    switch (error.code) {
+      case "INVALID_SUBTASK_ID":
+        return new LocalControlServiceError("INVALID_REQUEST", 400);
+      case "TASK_HIERARCHY_UNAVAILABLE":
+        return new LocalControlServiceError("SUBTASK_NOT_FOUND", 404);
+      case "STORAGE_UNAVAILABLE":
+      case "MALFORMED_STORED_OWNERSHIP":
+        return new LocalControlServiceError("LOCAL_OPERATION_FAILED", 500);
+      default:
+        return new LocalControlServiceError("OPERATION_CONFLICT", 409);
+    }
+  }
+  return new LocalControlServiceError("LOCAL_OPERATION_FAILED", 500);
+};
+
+const summarizeRun = (run: ExecutionRun): RunSummary =>
+  Object.freeze({
+    id: run.id,
+    status: run.status,
+    providerRunId: run.providerRun?.providerRunId ?? null,
+    providerModelId: run.providerModel?.providerModelId ?? null,
+    normalizedUsage: run.normalizedUsage,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+  });
+
+const summarizeThread = (
+  storage: TaskStorage,
+  thread: ChatThread,
+): ThreadSummary => {
+  const runs = storage.listExecutionRunsForChatThread(thread.id);
+  return Object.freeze({
+    id: thread.id,
+    status: thread.status,
+    providerId: thread.providerId,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    runs: Object.freeze(
+      runs.slice(-MAX_RECENT_RUNS_PER_THREAD).map(summarizeRun),
+    ),
+  });
+};
+
+const summarizeWorktree = (
+  ownership: WorktreeOwnership,
+): WorktreeOperationResult =>
+  Object.freeze({
+    worktree: Object.freeze({
+      id: ownership.id,
+      status: ownership.status,
+      startingCommitSha: ownership.startingCommitSha,
+      releaseHeadSha: ownership.releaseHeadSha,
+    }),
+  });
+
+const summarizeExecution = (
+  result: OwnedWorktreeCodexExecutionResult,
+): ExecutionOperationResult =>
+  Object.freeze({
+    execution: Object.freeze({
+      success: result.success,
+      failureCode: result.failureCode,
+      chatThreadId: result.chatThreadId,
+      executionRunId: result.executionRunId,
+      worktreeOwnershipId: result.worktreeOwnershipId,
+      providerId: result.providerId,
+      providerThreadId: result.providerThread?.providerThreadId ?? null,
+      providerRunId: result.providerRun?.providerRunId ?? null,
+      providerModelId: result.model?.providerModelId ?? null,
+      normalizedUsage: result.normalizedUsage,
+      terminalTurnStatus: result.terminalTurnStatus,
+      appServerChildCleaned: result.appServerChildCleaned,
+      transientRuntimeCleaned: result.transientRuntimeCleaned,
+    }),
+  });
+
+class ProductionLocalControlService implements LocalControlService {
+  readonly #storage: TaskStorage;
+  readonly #worktrees: WorktreeOwnershipManager;
+  readonly #execute: (
+    storage: TaskStorage,
+    subtaskId: SubtaskId,
+  ) => Promise<OwnedWorktreeCodexExecutionResult>;
+
+  constructor(
+    storage: TaskStorage,
+    worktrees: WorktreeOwnershipManager,
+    execute: (
+      storage: TaskStorage,
+      subtaskId: SubtaskId,
+    ) => Promise<OwnedWorktreeCodexExecutionResult>,
+  ) {
+    this.#storage = storage;
+    this.#worktrees = worktrees;
+    this.#execute = execute;
+  }
+
+  async inspectSubtask(subtaskId: SubtaskId): Promise<SubtaskInspection> {
+    try {
+      const subtask = this.#storage.getSubtaskById(subtaskId);
+      if (subtask === null) {
+        throw new LocalControlServiceError("SUBTASK_NOT_FOUND", 404);
+      }
+      const readiness = this.#storage.evaluateStoredSubtaskDependencyReadiness(
+        subtask.id,
+      );
+      const history = this.#worktrees.listWorktreeOwnershipHistoryForSubtask(
+        subtask.id,
+      );
+      const latestWorktree = history.at(-1) ?? null;
+      let activeAuthorityVerified = false;
+      if (latestWorktree?.status === "ACTIVE") {
+        try {
+          activeAuthorityVerified =
+            this.#worktrees.resolveActiveOwnedWorktreeForSubtask(subtask.id)
+              .ownership.id === latestWorktree.id;
+        } catch {
+          activeAuthorityVerified = false;
+        }
+      }
+      const threads = this.#storage.listChatThreadsForSubtask(subtask.id);
+      const recentThreads = threads.slice(-MAX_RECENT_THREADS);
+      return Object.freeze({
+        subtask: Object.freeze({
+          id: subtask.id,
+          status: subtask.status,
+          maturity: subtask.maturity,
+        }),
+        dependencyReadiness: Object.freeze({
+          valid: readiness.valid,
+          ready: readiness.ready,
+          blockerCount: readiness.blockers.length,
+          errorCodes: Object.freeze([...readiness.errorCodes]),
+        }),
+        worktree:
+          latestWorktree === null
+            ? null
+            : Object.freeze({
+                id: latestWorktree.id,
+                status: latestWorktree.status,
+                activeAuthorityVerified,
+              }),
+        durableExecution: Object.freeze({
+          chatThreadCount: threads.length,
+          returnedChatThreadCount: recentThreads.length,
+          recentChatThreads: Object.freeze(
+            recentThreads.map((thread) => summarizeThread(this.#storage, thread)),
+          ),
+        }),
+      });
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
+
+  async provisionOwnedWorktree(
+    subtaskId: SubtaskId,
+  ): Promise<WorktreeOperationResult> {
+    try {
+      return summarizeWorktree(
+        this.#worktrees.provisionOwnedWorktreeForSubtask(subtaskId),
+      );
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
+
+  async runOwnedWorktreeExecution(
+    subtaskId: SubtaskId,
+  ): Promise<ExecutionOperationResult> {
+    try {
+      return summarizeExecution(
+        await this.#execute(this.#storage, subtaskId),
+      );
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
+
+  async releaseOwnedWorktree(
+    subtaskId: SubtaskId,
+  ): Promise<WorktreeOperationResult> {
+    try {
+      return summarizeWorktree(
+        this.#worktrees.releaseOwnedWorktreeForSubtask(subtaskId),
+      );
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
+}
+
+export const createProductionLocalControlService = (
+  storage: TaskStorage,
+): LocalControlService =>
+  new ProductionLocalControlService(
+    storage,
+    createWorktreeOwnershipManager(storage),
+    executeSingleSubtaskOwnedWorktreeCodex,
+  );
+
+/** Package-private deterministic-test seam; not exported from the package root. */
+export const createLocalControlServiceForTesting = (
+  storage: TaskStorage,
+  worktrees: WorktreeOwnershipManager,
+  execute: (
+    storage: TaskStorage,
+    subtaskId: SubtaskId,
+  ) => Promise<OwnedWorktreeCodexExecutionResult>,
+): LocalControlService =>
+  new ProductionLocalControlService(storage, worktrees, execute);

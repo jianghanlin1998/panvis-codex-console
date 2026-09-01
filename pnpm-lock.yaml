@@ -45,6 +45,18 @@ importers:
         specifier: ^4.1.5
         version: 4.4.3
 
+  packages/local-control:
+    dependencies:
+      '@codex-task-console/codex-adapter':
+        specifier: workspace:*
+        version: link:../codex-adapter
+      '@codex-task-console/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@codex-task-console/storage':
+        specifier: workspace:*
+        version: link:../storage
+
   packages/shared: {}
 
   packages/storage:

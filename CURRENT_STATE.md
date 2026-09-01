@@ -186,7 +186,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-WORKTREE-HARD-003: CLOSED
 - CTC-WORKTREE-HARD-004: CLOSED
 - Real target WorktreeOwnership feature writes before acceptance: NO
-- Write-Enabled Execution Authority Binding V0: HARDENED
+- Write-Enabled Execution Authority Binding V0: ACCEPTED
 - Write-enabled deterministic baseline: PASS
 - ACTIVE owned worktree binding: PASS
 - workspaceWrite exact-root binding: PASS
@@ -214,26 +214,41 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Provider/model write-enabled turns: 0
 - Write-Enabled Execution Comprehensive Hardening: PASS
 - Write-Enabled Execution Post-Hardening Repair: PASS
-- Write-enabled implementation SHA: `a0f1cea`; hardening SHA: `a7931b3`; post-FQA repair: the commit containing this file
+- Write-enabled implementation SHA: `a0f1ceaca902f5da880dee431eef89ada7278705`; hardening SHA: `a7931b31f85e66b282a4288ff7ecfd3bef3b6564`; post-FQA repair and accepted evidence SHA: `8f3430263f4737a53fd10d8769c0d1abc5b8bed2`
 - Write-Enabled Execution Fresh Independent QA on `a7931b31f85e66b282a4288ff7ecfd3bef3b6564`: FAIL — historical result
-- CTC-WRITE-FQA-001: REPAIRED — pending Focused Fresh Re-QA
-- CTC-WRITE-FQA-002: REPAIRED — pending Focused Fresh Re-QA
-- CTC-WRITE-FQA-003: REPAIRED — pending Focused Fresh Re-QA
+- CTC-WRITE-FQA-001: CLOSED
+- CTC-WRITE-FQA-002: CLOSED
+- CTC-WRITE-FQA-003: CLOSED
 - CTC-WRITE-HARD-001 through CTC-WRITE-HARD-008: remain CLOSED
-- Focused Fresh Re-QA for CTC-WRITE-FQA-001/002/003: PENDING
+- Focused Fresh Re-QA on `8f3430263f4737a53fd10d8769c0d1abc5b8bed2`: PASS
 - Provider/model turns for post-FQA repair: 0
 - Real target Step 5B writes for post-FQA repair: 0
-- Step 5B ACCEPTED: NO
-- Roadmap Step 5 overall: PARTIAL
-- Step 6: NOT STARTED
+- Step 5B ACCEPTED: YES
+- Roadmap Step 5: ACCEPTED / COMPLETE
+- Local Control Service & Operator Harness V0: IMPLEMENTED
+- Canonical local state boundary: PASS
+- Loopback-only daemon baseline: PASS
+- Local session/auth baseline: PASS
+- Host/Origin/CSRF baseline: PASS
+- Narrow inspect/provision/run/release API: PASS
+- Thin operator CLI baseline: PASS
+- Generic shell/RPC: NONE
+- Browser UI: NOT IMPLEMENTED
+- Orchestration: NOT IMPLEMENTED
+- Real backend dogfood: NOT RUN
+- Provider/model turns for Step 6: 0
+- Comprehensive Hardening: PENDING
+- Fresh Independent QA: NOT READY
+- Step 6 ACCEPTED: NO
+- Roadmap Step 6: IMPLEMENTED / acceptance pending
 
 ## Next safe task
-**Next safe task:** new-chat Focused Fresh Re-QA for CTC-WRITE-FQA-001/002/003.
+**Next safe task:** new-chat Local Control Service & Operator Harness V0 Comprehensive Hardening.
 
 Hanlin manual QA: NOT REQUIRED
 
 ## Not operational yet
-- browser Console UI or daemon/local service
+- browser Console UI
 - TODO -> IN_PROGRESS start orchestration, repair/re-entry, or later maturity mutation
 - scheduling, concurrency control, or `WHEN_READY` execution
 - Focused Re-QA operational assembly
@@ -256,6 +271,6 @@ Hanlin manual QA: NOT REQUIRED
 - provider expansion or deployment
 
 ## Update rule
-- Write-enabled implementation, hardening, and repair tasks update this file when operational state changes.
+- Write-enabled execution and local-control implementation, hardening, and repair tasks update this file when operational state changes.
 - Independent QA is no-write and does not update it.
 - Keep it compact and replace superseded detail instead of appending history.

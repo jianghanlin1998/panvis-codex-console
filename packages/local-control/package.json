@@ -1,0 +1,22 @@
+{
+  "name": "@codex-task-console/local-control",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": ["dist"],
+  "bin": {
+    "ctc-daemon": "dist/daemon-cli.js",
+    "ctc-operator": "dist/operator-cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@codex-task-console/codex-adapter": "workspace:*",
+    "@codex-task-console/domain": "workspace:*",
+    "@codex-task-console/storage": "workspace:*"
+  }
+}

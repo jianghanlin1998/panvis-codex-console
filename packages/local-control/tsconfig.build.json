@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "references": [
+    { "path": "../domain/tsconfig.build.json" },
+    { "path": "../storage/tsconfig.build.json" },
+    { "path": "../codex-adapter/tsconfig.build.json" }
+  ],
+  "include": ["src/**/*.ts"]
+}
