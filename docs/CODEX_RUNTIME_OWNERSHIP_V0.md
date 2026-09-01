@@ -8,14 +8,16 @@ without changing Console runtime selection.
 
 ## Local runtime state
 
-On macOS, runtime files live outside the repository under:
+On macOS, runtime files live outside the repository beneath the shared Console
+Application Support root:
 
 ```text
-~/Library/Application Support/Codex Task Console/codex-runtime/
-  standalone-home/
-    packages/standalone/releases/<version>-<target>/bin/codex
-  installer-bin/
-  active.json
+~/Library/Application Support/Codex Task Console/  # current-user-owned, real, 0700
+  codex-runtime/
+    standalone-home/
+      packages/standalone/releases/<version>-<target>/bin/codex
+    installer-bin/
+    active.json
 ```
 
 The production resolver derives the executable from this trusted root, an exact
@@ -53,6 +55,13 @@ Run the repository wrapper with an explicit version:
 ```sh
 pnpm codex:runtime:install -- 0.148.0-alpha.9
 ```
+
+Before download, the wrapper explicitly establishes the shared Console-owned
+Application Support root as a canonical, current-user-owned, non-symlink real
+directory with exact mode `0700`. An existing owner-owned root is tightened
+non-recursively; wrong-owner, symlink, non-directory, or noncanonical roots fail
+closed. The wrapper does not chmod `HOME`, `Library`, `Application Support`, or
+unrelated children. Existing runtime-owned child privacy rules are unchanged.
 
 The wrapper downloads the [official standalone installer](https://chatgpt.com/codex/install.sh)
 over HTTPS to a temporary file, checks that the installer still exposes the

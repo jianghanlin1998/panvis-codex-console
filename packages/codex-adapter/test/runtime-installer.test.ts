@@ -2,10 +2,12 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -26,7 +28,9 @@ let installerCapture: string;
 let installerTemporaryRoot: string;
 
 beforeEach(() => {
-  fixtureRoot = mkdtempSync(join(tmpdir(), "ctc-runtime-installer-test-"));
+  fixtureRoot = realpathSync(
+    mkdtempSync(join(tmpdir(), "ctc-runtime-installer-test-")),
+  );
   fakeBin = join(fixtureRoot, "fake-bin");
   fakeHome = join(fixtureRoot, "Home with spaces 雪");
   fakeInstaller = join(fixtureRoot, "official-install.sh");
@@ -63,6 +67,163 @@ describe("owned Codex runtime installer wrapper", () => {
     const result = runInstaller([RELEASE_VERSION], { FAKE_UNAME_S: "Linux" });
     expect(result.status).toBe(2);
     expect(existsSync(installerCapture)).toBe(false);
+  });
+
+  it("creates a current-user private shared root and private installer directories under umask 022", () => {
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).toBe(0);
+    const applicationRoot = ownedApplicationRoot();
+    const runtimeRoot = ownedRuntimeRoot();
+    expect(lstatSync(applicationRoot).mode & 0o777).toBe(0o700);
+    expect(lstatSync(applicationRoot).uid).toBe(process.getuid?.());
+    for (const path of [
+      runtimeRoot,
+      join(runtimeRoot, "standalone-home"),
+      join(runtimeRoot, "installer-bin"),
+      join(runtimeRoot, "installer-home"),
+    ]) {
+      expect(lstatSync(path).mode & 0o777).toBe(0o700);
+    }
+    expect(existsSync(ownedCandidatePath())).toBe(true);
+  });
+
+  it("tightens a current-user shared root from 0755 without changing an existing child", () => {
+    const applicationRoot = ownedApplicationRoot();
+    mkdirSync(applicationRoot, { mode: 0o755, recursive: true });
+    chmodSync(applicationRoot, 0o755);
+    const sentinel = join(applicationRoot, "preserve.txt");
+    writeFileSync(sentinel, "preserve-shared-root-child\n", {
+      encoding: "utf8",
+      mode: 0o640,
+    });
+    const sentinelBefore = lstatSync(sentinel);
+
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).toBe(0);
+    expect(lstatSync(applicationRoot).mode & 0o777).toBe(0o700);
+    expect(readFileSync(sentinel, "utf8")).toBe(
+      "preserve-shared-root-child\n",
+    );
+    const sentinelAfter = lstatSync(sentinel);
+    expect({
+      device: sentinelAfter.dev,
+      inode: sentinelAfter.ino,
+      mode: sentinelAfter.mode,
+      modified: sentinelAfter.mtimeMs,
+      size: sentinelAfter.size,
+    }).toEqual({
+      device: sentinelBefore.dev,
+      inode: sentinelBefore.ino,
+      mode: sentinelBefore.mode,
+      modified: sentinelBefore.mtimeMs,
+      size: sentinelBefore.size,
+    });
+  });
+
+  it("continues from a private shared root without changing an existing child", () => {
+    const applicationRoot = ownedApplicationRoot();
+    mkdirSync(applicationRoot, { mode: 0o700, recursive: true });
+    chmodSync(applicationRoot, 0o700);
+    const runtimeRoot = ownedRuntimeRoot();
+    for (const path of [
+      runtimeRoot,
+      join(runtimeRoot, "standalone-home"),
+      join(runtimeRoot, "installer-bin"),
+      join(runtimeRoot, "installer-home"),
+    ]) {
+      mkdirSync(path, { mode: 0o700 });
+      chmodSync(path, 0o700);
+    }
+    const sentinel = join(applicationRoot, "preserve-private.txt");
+    writeFileSync(sentinel, "preserve-private-root-child\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    const rootBefore = lstatSync(applicationRoot);
+    const sentinelBefore = lstatSync(sentinel);
+
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).toBe(0);
+    const rootAfter = lstatSync(applicationRoot);
+    expect({
+      changed: rootAfter.ctimeMs,
+      device: rootAfter.dev,
+      inode: rootAfter.ino,
+      mode: rootAfter.mode,
+      modified: rootAfter.mtimeMs,
+      uid: rootAfter.uid,
+    }).toEqual({
+      changed: rootBefore.ctimeMs,
+      device: rootBefore.dev,
+      inode: rootBefore.ino,
+      mode: rootBefore.mode,
+      modified: rootBefore.mtimeMs,
+      uid: rootBefore.uid,
+    });
+    expect(readFileSync(sentinel, "utf8")).toBe(
+      "preserve-private-root-child\n",
+    );
+    const sentinelAfter = lstatSync(sentinel);
+    expect({
+      device: sentinelAfter.dev,
+      inode: sentinelAfter.ino,
+      mode: sentinelAfter.mode,
+      modified: sentinelAfter.mtimeMs,
+      size: sentinelAfter.size,
+    }).toEqual({
+      device: sentinelBefore.dev,
+      inode: sentinelBefore.ino,
+      mode: sentinelBefore.mode,
+      modified: sentinelBefore.mtimeMs,
+      size: sentinelBefore.size,
+    });
+  });
+
+  it("rejects a shared-root symlink before downloading without touching its target", () => {
+    const applicationRoot = ownedApplicationRoot();
+    const outsideRoot = join(fixtureRoot, "outside-application-root");
+    mkdirSync(join(applicationRoot, ".."), { recursive: true });
+    mkdirSync(outsideRoot);
+    symlinkSync(outsideRoot, applicationRoot);
+
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(installerCapture)).toBe(false);
+    expect(readdirSync(outsideRoot)).toEqual([]);
+  });
+
+  it("rejects a non-directory shared root before downloading", () => {
+    const applicationRoot = ownedApplicationRoot();
+    mkdirSync(join(applicationRoot, ".."), { recursive: true });
+    writeFileSync(applicationRoot, "not-a-directory\n", { encoding: "utf8" });
+
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(installerCapture)).toBe(false);
+    expect(readFileSync(applicationRoot, "utf8")).toBe("not-a-directory\n");
+  });
+
+  it("does not change HOME, Library, or Application Support modes", () => {
+    const library = join(fakeHome, "Library");
+    const applicationSupport = join(library, "Application Support");
+    chmodSync(fakeHome, 0o711);
+    mkdirSync(library, { mode: 0o751 });
+    chmodSync(library, 0o751);
+    mkdirSync(applicationSupport, { mode: 0o750 });
+    chmodSync(applicationSupport, 0o750);
+
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).toBe(0);
+    expect(lstatSync(fakeHome).mode & 0o777).toBe(0o711);
+    expect(lstatSync(library).mode & 0o777).toBe(0o751);
+    expect(lstatSync(applicationSupport).mode & 0o777).toBe(0o750);
+    expect(lstatSync(ownedApplicationRoot()).mode & 0o777).toBe(0o700);
   });
 
   it("rejects a preexisting runtime-root symlink before downloading", () => {
@@ -160,30 +321,43 @@ function runInstaller(
   arguments_: readonly string[],
   overrides: Readonly<Record<string, string>> = {},
 ): ReturnType<typeof spawnSync> {
-  return spawnSync("/bin/sh", [INSTALLER_WRAPPER, ...arguments_], {
-    encoding: "utf8",
-    env: {
-      FAKE_CANDIDATE_BEHAVIOR: "success",
-      FAKE_CAPTURE_PATH: installerCapture,
-      FAKE_INSTALLER_SOURCE: fakeInstaller,
-      FAKE_UNAME_M: "arm64",
-      FAKE_UNAME_S: "Darwin",
-      HOME: fakeHome,
-      PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
-      TMPDIR: installerTemporaryRoot,
-      ...overrides,
+  return spawnSync(
+    "/bin/sh",
+    [
+      "-c",
+      'umask 022\nexec /bin/sh "$@"',
+      "ctc-runtime-installer-test",
+      INSTALLER_WRAPPER,
+      ...arguments_,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        FAKE_CANDIDATE_BEHAVIOR: "success",
+        FAKE_CAPTURE_PATH: installerCapture,
+        FAKE_INSTALLER_SOURCE: fakeInstaller,
+        FAKE_UNAME_M: "arm64",
+        FAKE_UNAME_S: "Darwin",
+        HOME: fakeHome,
+        PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+        TMPDIR: installerTemporaryRoot,
+        ...overrides,
+      },
     },
-  });
+  );
 }
 
-function ownedRuntimeRoot(): string {
+function ownedApplicationRoot(): string {
   return join(
     fakeHome,
     "Library",
     "Application Support",
     "Codex Task Console",
-    "codex-runtime",
   );
+}
+
+function ownedRuntimeRoot(): string {
+  return join(ownedApplicationRoot(), "codex-runtime");
 }
 
 function ownedCandidatePath(): string {

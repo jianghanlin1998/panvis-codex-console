@@ -270,15 +270,21 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
 - Step 7 Backend Dogfood #1: IN PROGRESS / BLOCKED
-- Step 7 failing stage: canonical TaskStorage bootstrap rejected the pre-existing `Codex Task Console` state root as `UNSAFE_LOCAL_STATE` because its mode is `0755`, not required `0700`
-- Step 7 durable Console state: no Project, Big Task, Subtask, daemon authority, worktree, ChatThread, or ExecutionRun created
+- Step 7 original blocker: shared Console application root observed at `0755`; Local Control correctly required exact `0700`
+- Step 7 blocker root cause: the runtime installer could implicitly create the shared parent without enforcing the Local Control `0700` contract
+- Shared application-root installer contract: REPAIRED
+- Live shared application-root mode: safely tightened to `0700`
+- Existing owned runtime continuity: PASS
+- Step 7 target state: dedicated AI Update Board bootstrap repository preserved clean; no provider edits and no remote
+- Step 7 canonical Project / Big Task / Subtask: still NOT CREATED
+- Step 7 durable Console state: no daemon authority, worktree, ChatThread, or ExecutionRun created
 - Step 7 provider/model execution: NOT STARTED / 0 turns
-- Step 7 target state: dedicated local AI Update Board repository created with clean bootstrap commit only; no provider edits and no remote
-- Step 7 automatic retry/repair: NONE
+- Step 7 retry: NOT YET RUN
+- Blocker repair Fresh Focused Re-QA: PENDING
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** ChatGPT audit of the Step 7 blocker and a separately authorized bounded resolution; do not retry the dogfood automatically.
+**Next safe task:** New-chat Fresh Focused Re-QA of the installer shared-root `0700` contract, live root safe repaired state, and runtime continuity; do not retry Step 7 automatically.
 
 Hanlin manual QA: NOT REQUIRED
 
