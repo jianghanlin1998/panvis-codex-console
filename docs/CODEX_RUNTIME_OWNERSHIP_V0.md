@@ -56,12 +56,17 @@ Run the repository wrapper with an explicit version:
 pnpm codex:runtime:install -- 0.148.0-alpha.9
 ```
 
-Before download, the wrapper explicitly establishes the shared Console-owned
-Application Support root as a canonical, current-user-owned, non-symlink real
-directory with exact mode `0700`. An existing owner-owned root is tightened
+Before creating the shared Console root, the wrapper requires the existing
+`$HOME/Library/Application Support` parent to be canonical, current-user-owned,
+non-symlink, and stable by filesystem identity. A missing, symlinked, or
+noncanonical parent fails before `Codex Task Console` is created. The wrapper
+creates only that direct child, revalidates the parent, and then requires the
+shared root to be a canonical, current-user-owned, non-symlink real directory
+with exact mode `0700`. An existing owner-owned root is tightened
 non-recursively; wrong-owner, symlink, non-directory, or noncanonical roots fail
-closed. The wrapper does not chmod `HOME`, `Library`, `Application Support`, or
-unrelated children. Existing runtime-owned child privacy rules are unchanged.
+closed. The wrapper does not create or chmod `HOME`, `Library`, or `Application
+Support`, and does not chmod unrelated children. Existing runtime-owned child
+privacy rules are unchanged.
 
 The wrapper downloads the [official standalone installer](https://chatgpt.com/codex/install.sh)
 over HTTPS to a temporary file, checks that the installer still exposes the

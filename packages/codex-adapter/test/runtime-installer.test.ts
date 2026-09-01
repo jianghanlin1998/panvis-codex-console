@@ -24,6 +24,7 @@ let fixtureRoot: string;
 let fakeBin: string;
 let fakeHome: string;
 let fakeInstaller: string;
+let curlCapture: string;
 let installerCapture: string;
 let installerTemporaryRoot: string;
 
@@ -34,10 +35,14 @@ beforeEach(() => {
   fakeBin = join(fixtureRoot, "fake-bin");
   fakeHome = join(fixtureRoot, "Home with spaces 雪");
   fakeInstaller = join(fixtureRoot, "official-install.sh");
+  curlCapture = join(fixtureRoot, "curl-capture.txt");
   installerCapture = join(fixtureRoot, "installer-capture.txt");
   installerTemporaryRoot = join(fixtureRoot, "tmp");
   mkdirSync(fakeBin);
   mkdirSync(fakeHome);
+  mkdirSync(join(fakeHome, "Library", "Application Support"), {
+    recursive: true,
+  });
   mkdirSync(installerTemporaryRoot);
   writeExecutable(join(fakeBin, "curl"), fakeCurlScript());
   writeExecutable(join(fakeBin, "uname"), fakeUnameScript());
@@ -66,6 +71,61 @@ describe("owned Codex runtime installer wrapper", () => {
   it("rejects unsupported platforms before downloading", () => {
     const result = runInstaller([RELEASE_VERSION], { FAKE_UNAME_S: "Linux" });
     expect(result.status).toBe(2);
+    expect(existsSync(installerCapture)).toBe(false);
+  });
+
+  it("rejects a symlinked Application Support parent before creating the shared root", () => {
+    const applicationSupport = join(
+      fakeHome,
+      "Library",
+      "Application Support",
+    );
+    const outsideRoot = join(fixtureRoot, "outside-application-support");
+    rmSync(applicationSupport, { recursive: true });
+    mkdirSync(outsideRoot);
+    symlinkSync(outsideRoot, applicationSupport);
+    const outsideBefore = lstatSync(outsideRoot);
+
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(join(outsideRoot, "Codex Task Console"))).toBe(false);
+    expect(
+      existsSync(join(outsideRoot, "Codex Task Console", "codex-runtime")),
+    ).toBe(false);
+    expect(existsSync(curlCapture)).toBe(false);
+    expect(existsSync(installerCapture)).toBe(false);
+    expect(readdirSync(outsideRoot)).toEqual([]);
+    const outsideAfter = lstatSync(outsideRoot);
+    expect({
+      changed: outsideAfter.ctimeMs,
+      device: outsideAfter.dev,
+      inode: outsideAfter.ino,
+      mode: outsideAfter.mode,
+      modified: outsideAfter.mtimeMs,
+    }).toEqual({
+      changed: outsideBefore.ctimeMs,
+      device: outsideBefore.dev,
+      inode: outsideBefore.ino,
+      mode: outsideBefore.mode,
+      modified: outsideBefore.mtimeMs,
+    });
+  });
+
+  it("rejects a missing Application Support parent without creating ancestors", () => {
+    const applicationSupport = join(
+      fakeHome,
+      "Library",
+      "Application Support",
+    );
+    rmSync(applicationSupport, { recursive: true });
+
+    const result = runInstaller([RELEASE_VERSION]);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(applicationSupport)).toBe(false);
+    expect(existsSync(ownedApplicationRoot())).toBe(false);
+    expect(existsSync(curlCapture)).toBe(false);
     expect(existsSync(installerCapture)).toBe(false);
   });
 
@@ -212,9 +272,7 @@ describe("owned Codex runtime installer wrapper", () => {
     const library = join(fakeHome, "Library");
     const applicationSupport = join(library, "Application Support");
     chmodSync(fakeHome, 0o711);
-    mkdirSync(library, { mode: 0o751 });
     chmodSync(library, 0o751);
-    mkdirSync(applicationSupport, { mode: 0o750 });
     chmodSync(applicationSupport, 0o750);
 
     const result = runInstaller([RELEASE_VERSION]);
@@ -335,6 +393,7 @@ function runInstaller(
       env: {
         FAKE_CANDIDATE_BEHAVIOR: "success",
         FAKE_CAPTURE_PATH: installerCapture,
+        FAKE_CURL_CAPTURE_PATH: curlCapture,
         FAKE_INSTALLER_SOURCE: fakeInstaller,
         FAKE_UNAME_M: "arm64",
         FAKE_UNAME_S: "Darwin",
@@ -383,6 +442,7 @@ function writeExecutable(path: string, body: string): void {
 
 function fakeCurlScript(): string {
   return [
+    'printf "invoked\\n" > "$FAKE_CURL_CAPTURE_PATH"',
     'if [ "${FAKE_CURL_FAIL:-0}" = "1" ]; then exit 22; fi',
     "output=",
     'while [ "$#" -gt 0 ]; do',

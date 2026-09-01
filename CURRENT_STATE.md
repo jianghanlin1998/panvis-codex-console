@@ -270,21 +270,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
 - Step 7 Backend Dogfood #1: IN PROGRESS / BLOCKED
-- Step 7 original blocker: shared Console application root observed at `0755`; Local Control correctly required exact `0700`
-- Step 7 blocker root cause: the runtime installer could implicitly create the shared parent without enforcing the Local Control `0700` contract
-- Shared application-root installer contract: REPAIRED
-- Live shared application-root mode: safely tightened to `0700`
-- Existing owned runtime continuity: PASS
-- Step 7 target state: dedicated AI Update Board bootstrap repository preserved clean; no provider edits and no remote
+- Step 7 original shared-root `0755` blocker: live state repaired; first repair SHA `cf7dfee62defc8d4c198f70dc7c7d740611162f8`
+- First shared-root repair Fresh Focused Re-QA: FAIL
+- CTC-STEP7-ROOT-REQA-001 root cause: the installer could create `Codex Task Console` through a noncanonical symlinked `Application Support` parent before detecting the mismatch
+- CTC-STEP7-ROOT-REQA-001: REPAIRED; extra Hanlin-authorized Fresh Focused Re-QA pending
+- This is an additional human-authorized bounded repair after the prior Re-QA failure
+- Live shared application root: remains exact `0700`; no further live mutation in this repair
+- Active owned runtime continuity: PASS
+- Step 7 target state: AI Update Board preserved clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no remotes or Console-owned worktrees
 - Step 7 canonical Project / Big Task / Subtask: still NOT CREATED
 - Step 7 durable Console state: no daemon authority, worktree, ChatThread, or ExecutionRun created
 - Step 7 provider/model execution: NOT STARTED / 0 turns
 - Step 7 retry: NOT YET RUN
-- Blocker repair Fresh Focused Re-QA: PENDING
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** New-chat Fresh Focused Re-QA of the installer shared-root `0700` contract, live root safe repaired state, and runtime continuity; do not retry Step 7 automatically.
+**Next safe task:** New-chat Fresh Focused Re-QA of CTC-STEP7-ROOT-REQA-001; do not retry Step 7 yet.
 
 Hanlin manual QA: NOT REQUIRED
 

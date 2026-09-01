@@ -33,12 +33,30 @@ case "$(uname -s):$(uname -m)" in
     ;;
 esac
 
-application_root="$HOME/Library/Application Support/Codex Task Console"
+application_support_root="$HOME/Library/Application Support"
+application_root="$application_support_root/Codex Task Console"
 runtime_root="$application_root/codex-runtime"
 standalone_home="$runtime_root/standalone-home"
 installer_bin="$runtime_root/installer-bin"
 installer_home="$runtime_root/installer-home"
 candidate="$standalone_home/packages/standalone/releases/$release_version-$target/bin/codex"
+
+if [ -L "$application_support_root" ] || [ ! -d "$application_support_root" ]; then
+  echo "Application Support root must be an existing real directory." >&2
+  exit 1
+fi
+application_support_root_realpath=$(CDPATH= cd -- "$application_support_root" && pwd -P)
+if [ "$application_support_root_realpath" != "$application_support_root" ]; then
+  echo "Application Support root must be canonical." >&2
+  exit 1
+fi
+current_user_uid=$(/usr/bin/id -u)
+application_support_root_uid=$(/usr/bin/stat -f '%u' "$application_support_root")
+if [ "$application_support_root_uid" != "$current_user_uid" ]; then
+  echo "Application Support root must be owned by the current user." >&2
+  exit 1
+fi
+application_support_root_identity=$(/usr/bin/stat -f '%d:%i' "$application_support_root")
 
 if [ -L "$application_root" ]; then
   echo "Shared Codex application root must not be a symbolic link." >&2
@@ -50,7 +68,18 @@ if [ -e "$application_root" ]; then
     exit 1
   fi
 else
-  mkdir -p "$application_root"
+  mkdir "$application_root"
+fi
+
+if [ -L "$application_support_root" ] || [ ! -d "$application_support_root" ]; then
+  echo "Application Support root changed during shared-root creation." >&2
+  exit 1
+fi
+if [ "$(CDPATH= cd -- "$application_support_root" && pwd -P)" != "$application_support_root" ] ||
+  [ "$(/usr/bin/stat -f '%u' "$application_support_root")" != "$current_user_uid" ] ||
+  [ "$(/usr/bin/stat -f '%d:%i' "$application_support_root")" != "$application_support_root_identity" ]; then
+  echo "Application Support root changed during shared-root creation." >&2
+  exit 1
 fi
 
 if [ -L "$application_root" ] || [ ! -d "$application_root" ]; then
@@ -62,7 +91,6 @@ if [ "$application_root_realpath" != "$application_root" ]; then
   echo "Shared Codex application root must be canonical." >&2
   exit 1
 fi
-current_user_uid=$(/usr/bin/id -u)
 application_root_uid=$(/usr/bin/stat -f '%u' "$application_root")
 if [ "$application_root_uid" != "$current_user_uid" ]; then
   echo "Shared Codex application root must be owned by the current user." >&2
