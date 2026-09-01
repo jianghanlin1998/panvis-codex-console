@@ -247,22 +247,26 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real target writes for Step 6 hardening: 0
 - Fresh Independent QA on `bcb4652823f663ee9ef4ffb7caaa1c1ea981e7d8`: FAIL — PARTIAL execution but conclusive blocking evidence
 - CTC-LOCAL-FQA-001: NON_DEFECT
-- CTC-LOCAL-FQA-002: disposition evidence completion pending
+- CTC-LOCAL-FQA-002: NON_DEFECT — `Content-Length` framed one exact trusted request; the extra byte began a later malformed message
 - CTC-LOCAL-FQA-003: NON_DEFECT
-- CTC-LOCAL-FQA-004: upstream canonical identifier exact-preservation defect discovered
 - Canonical durable identifier invariant: unpaired UTF-16 surrogates are invalid under the Hanlin-approved decision
-- Upstream canonical identifier exact-preservation repair: REPAIRED
-- Fresh Focused Re-QA of the repaired foundation invariant: PENDING
-- Historical S0A/S0B1 accepted evidence remains historical; downstream reliance on the reopened identifier exact-preservation invariant is PAUSED until Focused Re-QA PASS
-- CTC-LOCAL-FQA-005/006/007: OPEN / UNREPAIRED
+- Upstream canonical identifier exact-preservation repair: `5273e6da47f57fe36cd73d21e2ca9e4550ed8045`
+- Fresh Focused Re-QA of the repaired foundation invariant: PASS
+- Canonical durable identifier exact-preservation invariant: RESTORED; downstream reliance RESUMED
+- CTC-LOCAL-FQA-004: CLOSED — UPSTREAM_REPAIRED / Fresh Focused Re-QA PASS
+- CTC-LOCAL-FQA-005: REPAIRED — duplicate response object keys fail closed before JSON normalization; Fresh Re-QA pending
+- CTC-LOCAL-FQA-006: REPAIRED — operator uses canonical Subtask status/maturity schemas; Fresh Re-QA pending
+- CTC-LOCAL-FQA-007: REPAIRED — operator uses the canonical Step 5B failure-code vocabulary; Fresh Re-QA pending
 - Provider/model turns for the identifier repair: 0
 - Real target writes for the identifier repair: 0
+- Provider/model turns for the Step 6 repair: 0
+- Real target writes for the Step 6 repair: 0
 - Step 6 ACCEPTED: NO
-- Roadmap Step 6: HARDENED / NOT ACCEPTED
+- Roadmap Step 6: HARDENED / post-Fresh-QA repair complete / final independent verification pending
 - Step 7: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** new-chat Fresh Focused Re-QA of canonical durable identifier exact preservation.
+**Next safe task:** Focused Fresh Re-QA + Completion of Interrupted Fresh QA.
 
 Hanlin manual QA: NOT REQUIRED
 

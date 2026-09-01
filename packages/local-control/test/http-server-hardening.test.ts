@@ -276,6 +276,25 @@ describe("raw HTTP parser and authority-header hardening", () => {
     expect(server.service.provisionOwnedWorktree).not.toHaveBeenCalled();
   });
 
+  it("frames bytes after Content-Length as a later malformed message", async () => {
+    const server = await startServer();
+    const body = JSON.stringify({ subtaskId: SUBTASK_ID });
+    const result = await rawExchange(
+      server.port,
+      rawPost(
+        server,
+        `${body}X`,
+        [],
+        String(Buffer.byteLength(body, "utf-8")),
+      ),
+    );
+
+    expect(result.status).toBe(400);
+    expect(server.service.provisionOwnedWorktree).toHaveBeenCalledExactlyOnceWith(
+      SUBTASK_ID,
+    );
+  });
+
   it("enforces the exact 32-field header count without silent truncation", async () => {
     const server = await startServer();
     const acceptedFillers = Array.from(

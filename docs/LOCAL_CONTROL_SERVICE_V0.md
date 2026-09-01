@@ -1,6 +1,6 @@
 # Local Control Service & Operator Harness V0
 
-Status: HARDENED. Comprehensive Hardening passed; Fresh Independent QA is pending and this boundary is not yet accepted.
+Status: HARDENED. Post-Fresh-QA repair is complete; final independent verification is pending and this boundary is not yet accepted.
 
 ## Purpose and composition
 
@@ -66,7 +66,7 @@ pnpm ctc:operator -- run <subtask-id>
 pnpm ctc:operator -- release <subtask-id>
 ```
 
-It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and 64 KiB response limit, and handles resets/aborted responses without hanging. It validates one JSON content type and the exact route-specific result shape. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
+It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and 64 KiB response limit, and handles resets/aborted responses without hanging. Before parsing, it structurally validates the bounded JSON text and rejects duplicate decoded object keys at every nesting level. It then validates the exact route-specific result shape using canonical Domain schemas and the canonical Step 5B failure-code vocabulary. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
 
 ## Lifecycle, privacy, and limitations
 
@@ -76,4 +76,4 @@ Unexpected process crashes can leave lock/session evidence or accepted Step 5B d
 
 There is no generic shell, command, SQL, filesystem-write, provider-request, or raw App Server endpoint. There is no task authoring, generic CRUD, streaming/WebSocket/SSE, orchestration, planner/reviewer/dispatcher, queue, scheduling, retry, maturity automation, browser UI, or real backend dogfood in this slice. Tests use synthetic disposable repositories only and make zero provider/model turns.
 
-The next maturity gate is a new-chat Fresh Independent QA for Local Control Service & Operator Harness V0. Real backend dogfood and Roadmap Step 7 remain not started and unauthorized.
+The next maturity gate is a new-chat Focused Fresh Re-QA plus completion of the interrupted Fresh QA for Local Control Service & Operator Harness V0. Real backend dogfood and Roadmap Step 7 remain not started and unauthorized.

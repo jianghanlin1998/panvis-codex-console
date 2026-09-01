@@ -12,6 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES } from "@codex-task-console/codex-adapter";
+import {
+  SubtaskMaturitySchema,
+  SubtaskStatusSchema,
+} from "@codex-task-console/domain";
 import type { SubtaskId } from "@codex-task-console/domain";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -95,19 +100,41 @@ const startHttpServer = async (
   return (server.address() as AddressInfo).port;
 };
 
+const runResponse = async (
+  arguments_: readonly string[],
+  body: string,
+) => {
+  const port = await startHttpServer((_request, response) => {
+    respond(response, 200, body);
+  });
+  const paths = createPaths();
+  installSession(paths, port);
+  return runOperatorCommandForTesting(
+    parseOperatorCommand(arguments_),
+    paths,
+    1_000,
+  );
+};
+
 const validInspection = (
   providerId: string = "synthetic-provider",
+  options: {
+    readonly status?: string;
+    readonly maturity?: string;
+    readonly errorCodes?: readonly string[];
+    readonly runs?: readonly Readonly<Record<string, unknown>>[];
+  } = {},
 ): Readonly<Record<string, unknown>> => ({
   subtask: {
     id: SUBTASK_ID,
-    status: "IN_PROGRESS",
-    maturity: "IMPLEMENTED",
+    status: options.status ?? "IN_PROGRESS",
+    maturity: options.maturity ?? "IMPLEMENTED",
   },
   dependencyReadiness: {
     valid: true,
     ready: true,
     blockerCount: 0,
-    errorCodes: [],
+    errorCodes: options.errorCodes ?? [],
   },
   worktree: null,
   durableExecution: {
@@ -120,7 +147,7 @@ const validInspection = (
         providerId,
         createdAt: "2026-09-01T00:00:00.000Z",
         updatedAt: "2026-09-01T00:00:00.000Z",
-        runs: [],
+        runs: options.runs ?? [],
       },
     ],
   },
@@ -144,10 +171,12 @@ const releasedWorktree = (): Readonly<Record<string, unknown>> => ({
   },
 });
 
-const failedExecution = (): Readonly<Record<string, unknown>> => ({
+const failedExecution = (
+  failureCode: string = "ACTIVE_WORKTREE_REQUIRED",
+): Readonly<Record<string, unknown>> => ({
   execution: {
     success: false,
-    failureCode: "ACTIVE_WORKTREE_REQUIRED",
+    failureCode,
     chatThreadId: null,
     executionRunId: null,
     worktreeOwnershipId: null,
@@ -160,6 +189,40 @@ const failedExecution = (): Readonly<Record<string, unknown>> => ({
     appServerChildCleaned: true,
     transientRuntimeCleaned: true,
   },
+});
+
+const successfulExecution = (
+  providerOverrides: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> => ({
+  execution: {
+    success: true,
+    failureCode: null,
+    chatThreadId: "thr_operator_hardening",
+    executionRunId: "run_operator_hardening",
+    worktreeOwnershipId: "wt_11111111111111111111111111111111",
+    providerId: "codex-app-server",
+    providerThreadId: "provider-thread",
+    providerRunId: "provider-run",
+    providerModelId: "provider-model",
+    normalizedUsage: null,
+    terminalTurnStatus: "completed",
+    appServerChildCleaned: true,
+    transientRuntimeCleaned: true,
+    ...providerOverrides,
+  },
+});
+
+const validRunSummary = (
+  providerOverrides: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> => ({
+  id: "run_operator_hardening",
+  status: "FAILED",
+  providerRunId: "provider-run",
+  providerModelId: "provider-model",
+  normalizedUsage: null,
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-01T00:00:00.000Z",
+  ...providerOverrides,
 });
 
 describe("operator route-specific response integrity", () => {
@@ -215,6 +278,164 @@ describe("operator route-specific response integrity", () => {
         1_000,
       ),
     ).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+  });
+
+  it.each([
+    ["duplicate root key", ["ping"], '{"ok":false,"ok":true,"schemaVersion":1}'],
+    [
+      "escaped root key equivalence",
+      ["ping"],
+      '{"ok":false,"\\u006fk":true,"schemaVersion":1}',
+    ],
+    [
+      "duplicate nested Subtask status",
+      ["status", SUBTASK_ID],
+      JSON.stringify(validInspection()).replace(
+        '"status":"IN_PROGRESS"',
+        '"status":"TODO","status":"IN_PROGRESS"',
+      ),
+    ],
+    [
+      "duplicate nested Subtask maturity",
+      ["status", SUBTASK_ID],
+      JSON.stringify(validInspection()).replace(
+        '"maturity":"IMPLEMENTED"',
+        '"maturity":"NOT_STARTED","maturity":"IMPLEMENTED"',
+      ),
+    ],
+    [
+      "duplicate nested execution success",
+      ["run", SUBTASK_ID],
+      JSON.stringify(failedExecution()).replace(
+        '"success":false',
+        '"success":true,"success":false',
+      ),
+    ],
+    [
+      "duplicate nested execution failureCode",
+      ["run", SUBTASK_ID],
+      JSON.stringify(failedExecution()).replace(
+        '"failureCode":"ACTIVE_WORKTREE_REQUIRED"',
+        '"failureCode":"TURN_FAILED","failureCode":"ACTIVE_WORKTREE_REQUIRED"',
+      ),
+    ],
+  ] as const)("rejects %s before JSON.parse normalization", async (_name, arguments_, body) => {
+    await expect(runResponse(arguments_, body)).rejects.toMatchObject({
+      code: "RESPONSE_MALFORMED",
+    });
+  });
+
+  it("accepts unambiguous valid nested responses", async () => {
+    await expect(
+      runResponse(
+        ["status", SUBTASK_ID],
+        JSON.stringify(
+          validInspection("synthetic-provider", { runs: [validRunSummary()] }),
+        ),
+      ),
+    ).resolves.toMatchObject({ succeeded: true });
+    await expect(
+      runResponse(
+        ["run", SUBTASK_ID],
+        JSON.stringify(successfulExecution()),
+      ),
+    ).resolves.toMatchObject({ succeeded: true });
+  });
+
+  it.each(SubtaskStatusSchema.options)(
+    "accepts canonical Subtask status %s",
+    async (status) => {
+      await expect(
+        runResponse(
+          ["status", SUBTASK_ID],
+          JSON.stringify(validInspection("synthetic-provider", { status })),
+        ),
+      ).resolves.toMatchObject({ succeeded: true });
+    },
+  );
+
+  it.each(SubtaskMaturitySchema.options)(
+    "accepts canonical Subtask maturity %s",
+    async (maturity) => {
+      await expect(
+        runResponse(
+          ["status", SUBTASK_ID],
+          JSON.stringify(validInspection("synthetic-provider", { maturity })),
+        ),
+      ).resolves.toMatchObject({ succeeded: true });
+    },
+  );
+
+  it.each([
+    ["status", { status: "IMPOSSIBLE_STATUS" }],
+    ["maturity", { maturity: "IMPOSSIBLE_MATURITY" }],
+  ] as const)("rejects impossible Subtask %s", async (_field, options) => {
+    await expect(
+      runResponse(
+        ["status", SUBTASK_ID],
+        JSON.stringify(validInspection("synthetic-provider", options)),
+      ),
+    ).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+  });
+
+  it.each(OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES)(
+    "accepts canonical Step 5B failure code %s",
+    async (failureCode) => {
+      await expect(
+        runResponse(
+          ["run", SUBTASK_ID],
+          JSON.stringify(failedExecution(failureCode)),
+        ),
+      ).resolves.toMatchObject({ succeeded: false });
+    },
+  );
+
+  it("rejects an unknown uppercase execution failure code", async () => {
+    await expect(
+      runResponse(
+        ["run", SUBTASK_ID],
+        JSON.stringify(failedExecution("UNKNOWN_STEP_5B_FAILURE")),
+      ),
+    ).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+  });
+
+  it("rejects adjacent noncanonical response vocabulary", async () => {
+    await expect(
+      runResponse(
+        ["status", SUBTASK_ID],
+        JSON.stringify(
+          validInspection("synthetic-provider", {
+            errorCodes: ["UNKNOWN_DEPENDENCY_ERROR"],
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+
+    for (const field of ["providerRunId", "providerModelId"] as const) {
+      await expect(
+        runResponse(
+          ["status", SUBTASK_ID],
+          JSON.stringify(
+            validInspection("synthetic-provider", {
+              runs: [validRunSummary({ [field]: "provider-\ud800" })],
+            }),
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    }
+
+    for (const field of [
+      "providerThreadId",
+      "providerRunId",
+      "providerModelId",
+    ] as const) {
+      await expect(
+        runResponse(
+          ["run", SUBTASK_ID],
+          JSON.stringify(successfulExecution({ [field]: "provider-\ud800" })),
+        ),
+      ).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    }
   });
 
   it("rejects Unicode-escaped token reflection after parsed-value transformation", async () => {

@@ -2,13 +2,22 @@ import { request } from "node:http";
 import type { ClientRequest } from "node:http";
 
 import {
+  OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
+} from "@codex-task-console/codex-adapter";
+import {
   ChatThreadIdSchema,
   ChatThreadStatusSchema,
+  DependencyValidationErrorCodeSchema,
   ExecutionProviderIdSchema,
   ExecutionRunIdSchema,
   ExecutionRunStatusSchema,
   NormalizedUsageSchema,
+  ProviderModelIdSchema,
+  ProviderRunIdSchema,
+  ProviderThreadIdSchema,
   SubtaskIdSchema,
+  SubtaskMaturitySchema,
+  SubtaskStatusSchema,
   WorktreeOwnershipIdSchema,
 } from "@codex-task-console/domain";
 import type { SubtaskId } from "@codex-task-console/domain";
@@ -79,6 +88,122 @@ const hasExactKeys = (
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 };
 
+const JSON_MAX_NESTING_DEPTH = 64;
+
+const hasUnambiguousJsonStructure = (text: string): boolean => {
+  const numberPattern = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
+  const skipWhitespace = (start: number): number => {
+    let cursor = start;
+    while (
+      text[cursor] === " " ||
+      text[cursor] === "\t" ||
+      text[cursor] === "\n" ||
+      text[cursor] === "\r"
+    ) {
+      cursor += 1;
+    }
+    return cursor;
+  };
+  const scanString = (
+    start: number,
+  ): { readonly end: number; readonly value: string } | null => {
+    if (text[start] !== '"') {
+      return null;
+    }
+    let cursor = start + 1;
+    while (cursor < text.length) {
+      if (text[cursor] === "\\") {
+        cursor += 2;
+        continue;
+      }
+      if (text[cursor] === '"') {
+        const end = cursor + 1;
+        try {
+          const value: unknown = JSON.parse(text.slice(start, end));
+          return typeof value === "string" ? { end, value } : null;
+        } catch {
+          return null;
+        }
+      }
+      cursor += 1;
+    }
+    return null;
+  };
+  const scanValue = (start: number, depth: number): number => {
+    if (depth > JSON_MAX_NESTING_DEPTH) {
+      return -1;
+    }
+    let cursor = skipWhitespace(start);
+    if (text[cursor] === '"') {
+      return scanString(cursor)?.end ?? -1;
+    }
+    if (text[cursor] === "{") {
+      cursor = skipWhitespace(cursor + 1);
+      const keys = new Set<string>();
+      if (text[cursor] === "}") {
+        return cursor + 1;
+      }
+      while (cursor < text.length) {
+        const key = scanString(cursor);
+        if (key === null || keys.has(key.value)) {
+          return -1;
+        }
+        keys.add(key.value);
+        cursor = skipWhitespace(key.end);
+        if (text[cursor] !== ":") {
+          return -1;
+        }
+        cursor = scanValue(cursor + 1, depth + 1);
+        if (cursor < 0) {
+          return -1;
+        }
+        cursor = skipWhitespace(cursor);
+        if (text[cursor] === "}") {
+          return cursor + 1;
+        }
+        if (text[cursor] !== ",") {
+          return -1;
+        }
+        cursor = skipWhitespace(cursor + 1);
+      }
+      return -1;
+    }
+    if (text[cursor] === "[") {
+      cursor = skipWhitespace(cursor + 1);
+      if (text[cursor] === "]") {
+        return cursor + 1;
+      }
+      while (cursor < text.length) {
+        cursor = scanValue(cursor, depth + 1);
+        if (cursor < 0) {
+          return -1;
+        }
+        cursor = skipWhitespace(cursor);
+        if (text[cursor] === "]") {
+          return cursor + 1;
+        }
+        if (text[cursor] !== ",") {
+          return -1;
+        }
+        cursor = skipWhitespace(cursor + 1);
+      }
+      return -1;
+    }
+    for (const literal of ["true", "false", "null"] as const) {
+      if (text.startsWith(literal, cursor)) {
+        return cursor + literal.length;
+      }
+    }
+    numberPattern.lastIndex = cursor;
+    const number = numberPattern.exec(text);
+    return number?.index === cursor ? numberPattern.lastIndex : -1;
+  };
+
+  const start = skipWhitespace(0);
+  const end = scanValue(start, 0);
+  return end >= 0 && skipWhitespace(end) === text.length;
+};
+
 const schemaMatchesExactly = (
   schema: { safeParse(value: unknown): { success: boolean; data?: unknown } },
   value: unknown,
@@ -92,12 +217,14 @@ const isCanonicalTimestamp = (value: unknown): value is string =>
   !Number.isNaN(Date.parse(value)) &&
   new Date(value).toISOString() === value;
 
-const isNullableBoundedString = (value: unknown): boolean =>
-  value === null ||
-  (typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= 512 &&
-    value.trim() === value);
+const nullableSchemaMatchesExactly = (
+  schema: { safeParse(value: unknown): { success: boolean; data?: unknown } },
+  value: unknown,
+): boolean => value === null || schemaMatchesExactly(schema, value);
+
+const OWNED_WORKTREE_FAILURE_CODES = new Set<string>(
+  OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
+);
 
 const isRunSummary = (value: unknown): boolean => {
   if (
@@ -117,8 +244,8 @@ const isRunSummary = (value: unknown): boolean => {
   return (
     schemaMatchesExactly(ExecutionRunIdSchema, value.id) &&
     ExecutionRunStatusSchema.safeParse(value.status).success &&
-    isNullableBoundedString(value.providerRunId) &&
-    isNullableBoundedString(value.providerModelId) &&
+    nullableSchemaMatchesExactly(ProviderRunIdSchema, value.providerRunId) &&
+    nullableSchemaMatchesExactly(ProviderModelIdSchema, value.providerModelId) &&
     (value.normalizedUsage === null ||
       NormalizedUsageSchema.safeParse(value.normalizedUsage).success) &&
     isCanonicalTimestamp(value.createdAt) &&
@@ -166,8 +293,8 @@ const isInspectionResponse = (
     !isRecord(value.subtask) ||
     !hasExactKeys(value.subtask, ["id", "status", "maturity"]) ||
     value.subtask.id !== subtaskId ||
-    typeof value.subtask.status !== "string" ||
-    typeof value.subtask.maturity !== "string" ||
+    !schemaMatchesExactly(SubtaskStatusSchema, value.subtask.status) ||
+    !schemaMatchesExactly(SubtaskMaturitySchema, value.subtask.maturity) ||
     !isRecord(value.dependencyReadiness) ||
     !hasExactKeys(value.dependencyReadiness, [
       "valid",
@@ -180,8 +307,8 @@ const isInspectionResponse = (
     !Number.isSafeInteger(value.dependencyReadiness.blockerCount) ||
     (value.dependencyReadiness.blockerCount as number) < 0 ||
     !Array.isArray(value.dependencyReadiness.errorCodes) ||
-    !value.dependencyReadiness.errorCodes.every(
-      (code) => typeof code === "string" && /^[A-Z][A-Z0-9_]*$/u.test(code),
+    !value.dependencyReadiness.errorCodes.every((code) =>
+      schemaMatchesExactly(DependencyValidationErrorCodeSchema, code),
     )
   ) {
     return false;
@@ -281,9 +408,18 @@ const isExecutionResponse = (
     ]) ||
     typeof value.execution.success !== "boolean" ||
     value.execution.providerId !== "codex-app-server" ||
-    !isNullableBoundedString(value.execution.providerThreadId) ||
-    !isNullableBoundedString(value.execution.providerRunId) ||
-    !isNullableBoundedString(value.execution.providerModelId) ||
+    !nullableSchemaMatchesExactly(
+      ProviderThreadIdSchema,
+      value.execution.providerThreadId,
+    ) ||
+    !nullableSchemaMatchesExactly(
+      ProviderRunIdSchema,
+      value.execution.providerRunId,
+    ) ||
+    !nullableSchemaMatchesExactly(
+      ProviderModelIdSchema,
+      value.execution.providerModelId,
+    ) ||
     (value.execution.normalizedUsage !== null &&
       !NormalizedUsageSchema.safeParse(value.execution.normalizedUsage).success) ||
     ![null, "completed", "failed", "interrupted"].includes(
@@ -314,7 +450,7 @@ const isExecutionResponse = (
         value.execution.executionRunId !== null &&
         value.execution.worktreeOwnershipId !== null
     : typeof value.execution.failureCode === "string" &&
-        /^[A-Z][A-Z0-9_]*$/u.test(value.execution.failureCode);
+        OWNED_WORKTREE_FAILURE_CODES.has(value.execution.failureCode);
 };
 
 const isErrorResponse = (value: Readonly<Record<string, unknown>>): boolean =>
@@ -515,6 +651,10 @@ const requestDaemon = async (
           }
           const text = Buffer.concat(chunks, bytes).toString("utf-8");
           if (text.includes(descriptor.sessionToken)) {
+            fail(new LocalOperatorError("RESPONSE_MALFORMED"));
+            return;
+          }
+          if (!hasUnambiguousJsonStructure(text)) {
             fail(new LocalOperatorError("RESPONSE_MALFORMED"));
             return;
           }
