@@ -270,22 +270,29 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
 - Step 7 Backend Dogfood #1: IN PROGRESS / BLOCKED
-- Step 7 original shared-root `0755` blocker: live state repaired; first repair SHA `cf7dfee62defc8d4c198f70dc7c7d740611162f8`
+- Step 7 original shared-root `0755` blocker: CLOSED; first repair SHA `cf7dfee62defc8d4c198f70dc7c7d740611162f8`
 - First shared-root repair Fresh Focused Re-QA: FAIL
 - CTC-STEP7-ROOT-REQA-001 root cause: the installer could create `Codex Task Console` through a noncanonical symlinked `Application Support` parent before detecting the mismatch
-- CTC-STEP7-ROOT-REQA-001: REPAIRED; extra Hanlin-authorized Fresh Focused Re-QA pending
+- CTC-STEP7-ROOT-REQA-001: CLOSED — repaired / Fresh Focused Re-QA PASS
 - This is an additional human-authorized bounded repair after the prior Re-QA failure
-- Live shared application root: remains exact `0700`; no further live mutation in this repair
+- Live shared application root: exact `0700`
+- Step 7 shared-root blocker: CLOSED
+- Step 7 resume gate: SATISFIED
 - Active owned runtime continuity: PASS
 - Step 7 target state: AI Update Board preserved clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no remotes or Console-owned worktrees
-- Step 7 canonical Project / Big Task / Subtask: still NOT CREATED
-- Step 7 durable Console state: no daemon authority, worktree, ChatThread, or ExecutionRun created
+- Step 7 canonical hierarchy: `prj_ai_update_board` / `bt_ai_update_board` / `st_ai_update_board_ui` CREATED and exact readback PASS
+- Step 7 Subtask state: `IN_PROGRESS` / `NOT_STARTED`
+- Step 7 dependency readiness: PASS — valid, ready, zero blockers, zero edges
+- Step 7 failing stage: documented `pnpm ctc:operator -- ping` forwarded literal `--` and production CLI returned `INVALID_COMMAND`
+- Step 7 Local Control daemon: production start PASS; stopped cleanly after ping blocker; no current lock/session authority
+- Step 7 durable execution state: zero worktrees, zero ChatThreads, zero ExecutionRuns
 - Step 7 provider/model execution: NOT STARTED / 0 turns
-- Step 7 retry: NOT YET RUN
+- Step 7 automatic retry/repair: NONE
+- Step 7 state-only verification: lint/typecheck/build/public hygiene/diff checks PASS; full suite FAIL on five 5-second parallel-load timeouts across two files while focused rerun of both files passed 45/45; no test or production-code repair attempted
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** New-chat Fresh Focused Re-QA of CTC-STEP7-ROOT-REQA-001; do not retry Step 7 yet.
+**Next safe task:** ChatGPT audit of the Step 7 operator-invocation blocker and a separately authorized bounded resolution; do not retry Step 7 automatically.
 
 Hanlin manual QA: NOT REQUIRED
 
