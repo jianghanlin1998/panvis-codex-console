@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type {
@@ -181,7 +182,11 @@ const readBoundedBody = async (request: IncomingMessage): Promise<string> => {
   if (bytes !== expectedBytes) {
     throw new HttpBoundaryError("INVALID_REQUEST", 400);
   }
-  return Buffer.concat(chunks, bytes).toString("utf-8");
+  const body = Buffer.concat(chunks, bytes);
+  if (!isUtf8(body)) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  return body.toString("utf-8");
 };
 
 const skipWhitespace = (text: string, start: number): number => {

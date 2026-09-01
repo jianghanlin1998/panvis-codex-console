@@ -308,6 +308,27 @@ describe("daemon lock, session, and startup publication hardening", () => {
     },
   );
 
+  it("fails closed when invalid UTF-8 replacement decoding alters session authority", () => {
+    const root = disposableRoot();
+    const paths = initializePaths(root);
+    const bytes = Buffer.from(validSessionText(), "utf-8");
+    const tokenPrefix = Buffer.from('"sessionToken":"', "utf-8");
+    const tokenStart = bytes.indexOf(tokenPrefix) + tokenPrefix.byteLength;
+    expect(tokenStart).toBeGreaterThan(tokenPrefix.byteLength);
+    bytes[tokenStart] = 0xc3;
+    bytes[tokenStart + 1] = 0x28;
+    writeFileSync(paths.sessionPath, bytes, { mode: 0o600 });
+
+    const replacementDecoded = JSON.parse(bytes.toString("utf-8")) as {
+      readonly sessionToken: string;
+    };
+    expect(replacementDecoded.sessionToken).toContain("\ufffd");
+
+    expect(() => readSessionDescriptor(paths)).toThrowError(
+      expect.objectContaining({ code: "SESSION_MALFORMED" }),
+    );
+  });
+
   it("cleans owned startup evidence and storage across injected failures without publishing readiness", async () => {
     for (const phase of ["open", "service", "listen", "readiness"] as const) {
       const root = disposableRoot();

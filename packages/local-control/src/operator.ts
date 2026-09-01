@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { request } from "node:http";
 import type { ClientRequest } from "node:http";
 
@@ -649,7 +650,12 @@ const requestDaemon = async (
           if (settled) {
             return;
           }
-          const text = Buffer.concat(chunks, bytes).toString("utf-8");
+          const responseBytes = Buffer.concat(chunks, bytes);
+          if (!isUtf8(responseBytes)) {
+            fail(new LocalOperatorError("RESPONSE_MALFORMED"));
+            return;
+          }
+          const text = responseBytes.toString("utf-8");
           if (text.includes(descriptor.sessionToken)) {
             fail(new LocalOperatorError("RESPONSE_MALFORMED"));
             return;

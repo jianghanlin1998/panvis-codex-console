@@ -1,6 +1,6 @@
 # Local Control Service & Operator Harness V0
 
-Status: HARDENED. Post-Fresh-QA repair is complete; final independent verification is pending and this boundary is not yet accepted.
+Status: HARDENED. The additional bounded strict UTF-8 repair is complete; Fresh Focused Re-QA is pending and this boundary is not yet accepted.
 
 ## Purpose and composition
 
@@ -52,7 +52,7 @@ All responses are bounded JSON. Errors have a stable `{ "error": { "code": "..."
 
 Provision does not run a provider. Run does not auto-provision. Release offers no force, cleanup, reset, prune, or branch-deletion option. Callers cannot supply repository/worktree paths, roots, branches, SHAs, ownership IDs, cwd, sandbox, writable roots, network, runtime, model, approval policy, profile, retry, or provider request data.
 
-The built-in Node HTTP boundary caps request bodies at 16 KiB, responses at 64 KiB, routes at 256 characters, headers at 8 KiB/32 fields, and active requests at 16. Header byte/count limits are enforced explicitly instead of relying on Node's truncating `maxHeadersCount` behavior, and parser-level malformed requests receive the same bounded JSON error surface. It also sets finite request, header, and keep-alive timeouts. JSON mutation bodies must have exact length and be one strict object with the one allowed field; malformed JSON/UTF-8 identifiers, duplicate or escaped-duplicate keys, unknown fields, arrays, primitives, and noncanonical IDs are rejected. Inspection counts durable threads separately but fetches only the eight returned threads and eight returned runs per thread from SQLite.
+The built-in Node HTTP boundary caps request bodies at 16 KiB, responses at 64 KiB, routes at 256 characters, headers at 8 KiB/32 fields, and active requests at 16. Header byte/count limits are enforced explicitly instead of relying on Node's truncating `maxHeadersCount` behavior, and parser-level malformed requests receive the same bounded JSON error surface. It also sets finite request, header, and keep-alive timeouts. Raw JSON mutation bodies must have exact length and valid UTF-8 before JSON interpretation, then be one strict object with the one allowed field; malformed JSON, duplicate or escaped-duplicate keys, unknown fields, arrays, primitives, and noncanonical IDs are rejected. Inspection counts durable threads separately but fetches only the eight returned threads and eight returned runs per thread from SQLite.
 
 ## Operator CLI
 
@@ -66,7 +66,7 @@ pnpm ctc:operator -- run <subtask-id>
 pnpm ctc:operator -- release <subtask-id>
 ```
 
-It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and 64 KiB response limit, and handles resets/aborted responses without hanging. Before parsing, it structurally validates the bounded JSON text and rejects duplicate decoded object keys at every nesting level. It then validates the exact route-specific result shape using canonical Domain schemas and the canonical Step 5B failure-code vocabulary. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
+It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and 64 KiB response limit, and handles resets/aborted responses without hanging. Before parsing, it requires the bounded response bytes to be valid UTF-8, structurally validates the resulting JSON text, and rejects duplicate decoded object keys at every nesting level. It then validates the exact route-specific result shape using canonical Domain schemas and the canonical Step 5B failure-code vocabulary. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
 
 ## Lifecycle, privacy, and limitations
 
@@ -76,4 +76,4 @@ Unexpected process crashes can leave lock/session evidence or accepted Step 5B d
 
 There is no generic shell, command, SQL, filesystem-write, provider-request, or raw App Server endpoint. There is no task authoring, generic CRUD, streaming/WebSocket/SSE, orchestration, planner/reviewer/dispatcher, queue, scheduling, retry, maturity automation, browser UI, or real backend dogfood in this slice. Tests use synthetic disposable repositories only and make zero provider/model turns.
 
-The next maturity gate is a new-chat Focused Fresh Re-QA plus completion of the interrupted Fresh QA for Local Control Service & Operator Harness V0. Real backend dogfood and Roadmap Step 7 remain not started and unauthorized.
+The next maturity gate is a new-chat Fresh Focused Re-QA for CTC-LOCAL-FQA-008/009. Real backend dogfood and Roadmap Step 7 remain not started and unauthorized.

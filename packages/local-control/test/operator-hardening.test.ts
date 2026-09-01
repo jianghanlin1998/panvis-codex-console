@@ -77,10 +77,10 @@ const installSession = (paths: LocalControlPaths, port: number): void => {
 const respond = (
   response: ServerResponse,
   status: number,
-  body: string,
+  body: string | Buffer,
   contentType: string = "application/json; charset=utf-8",
 ): void => {
-  const bytes = Buffer.from(body, "utf-8");
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body, "utf-8");
   response.writeHead(status, {
     "content-length": String(bytes.byteLength),
     "content-type": contentType,
@@ -102,7 +102,7 @@ const startHttpServer = async (
 
 const runResponse = async (
   arguments_: readonly string[],
-  body: string,
+  body: string | Buffer,
 ) => {
   const port = await startHttpServer((_request, response) => {
     respond(response, 200, body);
@@ -114,6 +114,24 @@ const runResponse = async (
     paths,
     1_000,
   );
+};
+
+const replaceUtf8Segment = (
+  text: string,
+  target: string,
+  replacement: Buffer,
+): Buffer => {
+  const bytes = Buffer.from(text, "utf-8");
+  const targetBytes = Buffer.from(target, "utf-8");
+  const start = bytes.indexOf(targetBytes);
+  if (start < 0) {
+    throw new Error("UTF-8 response fixture target was not found");
+  }
+  return Buffer.concat([
+    bytes.subarray(0, start),
+    replacement,
+    bytes.subarray(start + targetBytes.byteLength),
+  ]);
 };
 
 const validInspection = (
@@ -340,6 +358,66 @@ describe("operator route-specific response integrity", () => {
         JSON.stringify(successfulExecution()),
       ),
     ).resolves.toMatchObject({ succeeded: true });
+  });
+
+  it.each([
+    [
+      "invalid UTF-8 in providerThreadId",
+      "provider-thread",
+      Buffer.concat([
+        Buffer.from("provider-", "utf-8"),
+        Buffer.from([0xc3, 0x28]),
+      ]),
+    ],
+    [
+      "invalid UTF-8 in providerModelId",
+      "provider-model",
+      Buffer.concat([
+        Buffer.from("provider-", "utf-8"),
+        Buffer.from([0xe2, 0x28, 0xa1]),
+      ]),
+    ],
+    [
+      "truncated multibyte providerRunId",
+      "provider-run",
+      Buffer.concat([
+        Buffer.from("provider-", "utf-8"),
+        Buffer.from([0xe2, 0x82]),
+      ]),
+    ],
+  ] as const)("rejects a response with %s", async (_name, target, replacement) => {
+    const body = replaceUtf8Segment(
+      JSON.stringify(successfulExecution()),
+      target,
+      replacement,
+    );
+    await expect(runResponse(["run", SUBTASK_ID], body)).rejects.toMatchObject({
+      code: "RESPONSE_MALFORMED",
+    });
+  });
+
+  it("preserves valid non-ASCII provider-owned identifiers exactly", async () => {
+    const identifiers = {
+      providerThreadId: "thread-e\u0301-\u{1f600}",
+      providerRunId: "\u8fd0\u884c-\u{1f680}",
+      providerModelId: "\u6a21\u578b-e\u0301",
+    };
+    const result = await runResponse(
+      ["run", SUBTASK_ID],
+      JSON.stringify(successfulExecution(identifiers)),
+    );
+
+    expect(result.body.execution).toMatchObject(identifiers);
+  });
+
+  it("accepts a legitimately encoded replacement character", async () => {
+    const providerThreadId = "provider-\ufffd-thread";
+    const result = await runResponse(
+      ["run", SUBTASK_ID],
+      JSON.stringify(successfulExecution({ providerThreadId })),
+    );
+
+    expect(result.body.execution).toMatchObject({ providerThreadId });
   });
 
   it.each(SubtaskStatusSchema.options)(

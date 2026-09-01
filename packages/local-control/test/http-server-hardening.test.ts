@@ -188,6 +188,36 @@ const rawPost = (
     body,
   ].join("\r\n");
 
+const rawPostBytes = (
+  server: RunningServer,
+  route: string,
+  body: Buffer,
+): Buffer =>
+  Buffer.concat([
+    Buffer.from(
+      [
+        `POST ${route} HTTP/1.1`,
+        `Host: ${server.authority}`,
+        `Authorization: Bearer ${TOKEN}`,
+        "Content-Type: application/json",
+        "X-CTC-Request: 1",
+        `Content-Length: ${body.byteLength}`,
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n"),
+      "utf-8",
+    ),
+    body,
+  ]);
+
+const subtaskBodyBytes = (subtaskIdBytes: Buffer): Buffer =>
+  Buffer.concat([
+    Buffer.from('{"subtaskId":"', "utf-8"),
+    subtaskIdBytes,
+    Buffer.from('"}', "utf-8"),
+  ]);
+
 const highLevelGet = async (
   server: RunningServer,
   path: string = "/v0/ping",
@@ -462,6 +492,65 @@ describe("route, body, and authentication boundary matrices", () => {
     expect(Buffer.byteLength(bodyOver)).toBe(LOCAL_CONTROL_BODY_LIMIT_BYTES + 1);
     expect((await rawExchange(server.port, rawPost(server, bodyOver))).status).toBe(
       413,
+    );
+  });
+
+  it.each([
+    [
+      "invalid two-byte sequence",
+      "/v0/worktrees/provision",
+      Buffer.concat([
+        Buffer.from("st_invalid_two_byte_", "utf-8"),
+        Buffer.from([0xc3, 0x28]),
+      ]),
+    ],
+    [
+      "truncated multibyte sequence",
+      "/v0/executions/run",
+      Buffer.concat([
+        Buffer.from("st_truncated_", "utf-8"),
+        Buffer.from([0xe2, 0x82]),
+      ]),
+    ],
+    [
+      "invalid continuation byte",
+      "/v0/worktrees/release",
+      Buffer.concat([
+        Buffer.from("st_invalid_continuation_", "utf-8"),
+        Buffer.from([0xe2, 0x28, 0xa1]),
+      ]),
+    ],
+  ] as const)("strictly rejects %s before mutation authority", async (_name, route, idBytes) => {
+    const server = await startServer();
+    const result = await rawExchange(
+      server.port,
+      rawPostBytes(server, route, subtaskBodyBytes(idBytes)),
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({ error: { code: "INVALID_REQUEST" } });
+    expect(server.service.provisionOwnedWorktree).not.toHaveBeenCalled();
+    expect(server.service.runOwnedWorktreeExecution).not.toHaveBeenCalled();
+    expect(server.service.releaseOwnedWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["decomposed supplementary Unicode", "st_e\u0301_\u{1f600}"],
+    ["legitimate replacement character", "st_valid_\ufffd"],
+  ] as const)("preserves valid UTF-8 for %s", async (_name, subtaskId) => {
+    const server = await startServer();
+    const result = await rawExchange(
+      server.port,
+      rawPostBytes(
+        server,
+        "/v0/worktrees/provision",
+        subtaskBodyBytes(Buffer.from(subtaskId, "utf-8")),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    expect(server.service.provisionOwnedWorktree).toHaveBeenCalledExactlyOnceWith(
+      subtaskId,
     );
   });
 });

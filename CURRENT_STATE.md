@@ -246,6 +246,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Provider/model turns for Step 6: 0
 - Real target writes for Step 6 hardening: 0
 - Fresh Independent QA on `bcb4652823f663ee9ef4ffb7caaa1c1ea981e7d8`: FAIL — PARTIAL execution but conclusive blocking evidence
+- Latest final Step 6 QA on `26f858bdb8eff8f163c10fabd009d4929630f9e6`: FAIL
 - CTC-LOCAL-FQA-001: NON_DEFECT
 - CTC-LOCAL-FQA-002: NON_DEFECT — `Content-Length` framed one exact trusted request; the extra byte began a later malformed message
 - CTC-LOCAL-FQA-003: NON_DEFECT
@@ -254,19 +255,23 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Fresh Focused Re-QA of the repaired foundation invariant: PASS
 - Canonical durable identifier exact-preservation invariant: RESTORED; downstream reliance RESUMED
 - CTC-LOCAL-FQA-004: CLOSED — UPSTREAM_REPAIRED / Fresh Focused Re-QA PASS
-- CTC-LOCAL-FQA-005: REPAIRED — duplicate response object keys fail closed before JSON normalization; Fresh Re-QA pending
-- CTC-LOCAL-FQA-006: REPAIRED — operator uses canonical Subtask status/maturity schemas; Fresh Re-QA pending
-- CTC-LOCAL-FQA-007: REPAIRED — operator uses the canonical Step 5B failure-code vocabulary; Fresh Re-QA pending
+- CTC-LOCAL-FQA-005: CLOSED — duplicate response object keys fail closed before JSON normalization / Fresh Re-QA PASS
+- CTC-LOCAL-FQA-006: CLOSED — operator uses canonical Subtask status/maturity schemas / Fresh Re-QA PASS
+- CTC-LOCAL-FQA-007: CLOSED — operator uses the canonical Step 5B failure-code vocabulary / Fresh Re-QA PASS
+- CTC-LOCAL-FQA-008: REPAIRED — extra Hanlin-authorized Fresh Re-QA pending
+- CTC-LOCAL-FQA-009: REPAIRED — extra Hanlin-authorized Fresh Re-QA pending
+- Same-root state UTF-8 audit: SAFE_FAIL_CLOSED — replacement-decoded altered session authority fails exact descriptor validation
+- This repair is an additional human-authorized exception after the default bounded rework ceiling.
 - Provider/model turns for the identifier repair: 0
 - Real target writes for the identifier repair: 0
 - Provider/model turns for the Step 6 repair: 0
 - Real target writes for the Step 6 repair: 0
 - Step 6 ACCEPTED: NO
-- Roadmap Step 6: HARDENED / post-Fresh-QA repair complete / final independent verification pending
+- Roadmap Step 6: HARDENED / additional bounded repair complete / final Fresh Re-QA pending
 - Step 7: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** Focused Fresh Re-QA + Completion of Interrupted Fresh QA.
+**Next safe task:** New-chat Fresh Focused Re-QA for CTC-LOCAL-FQA-008/009.
 
 Hanlin manual QA: NOT REQUIRED
 
