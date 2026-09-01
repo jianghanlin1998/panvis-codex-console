@@ -20,6 +20,8 @@ The selected driver is Node.js 24's built-in `node:sqlite` `DatabaseSync`, integ
 
 Structured string-array fields use compact JSON arrays. Writes clone and encode validated S0A values; reads decode and validate the reconstructed entity through the corresponding S0A Zod schema. Malformed data produces a typed sanitized error rather than a JSON or driver error.
 
+Canonical durable identifiers cross this boundary only after Domain validation as well-formed Unicode. TaskStorage preserves each accepted JavaScript string exactly across write/read and close/reopen; it does not normalize valid Unicode. The stricter validation requires no schema migration and does not rewrite, normalize, or reinterpret existing stored identifiers.
+
 ## Deferred
 
 Context Items, Context Digests, Context Packets, audit events, Decision/Roadmap Packets, provisioning batches, FTS5, artifacts, Handoffs, Promoted Context, execution/usage/approval/worktree records, lifecycle mutations, task scheduling, App Server integration, daemon/API work, UI, native-subagent execution, and deployment remain unimplemented.

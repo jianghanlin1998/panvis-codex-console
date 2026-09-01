@@ -1,11 +1,16 @@
 import { z } from "zod";
 
+import { isWellFormedUnicode } from "./well-formed-unicode.js";
+
 const identifierSchema = <Brand extends string>(prefix: string) =>
   z
     .string()
     .trim()
     .min(1)
     .max(128)
+    .refine(isWellFormedUnicode, {
+      message: "Canonical durable identifiers must be well-formed Unicode",
+    })
     .refine((value) => value.startsWith(`${prefix}_`) && value.length > prefix.length + 1, {
       message: `Identifier must use the ${prefix}_ prefix`,
     })

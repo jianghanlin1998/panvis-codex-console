@@ -6,7 +6,7 @@ S0D establishes a narrow provider boundary before execution persistence and live
 
 - An execution provider has a bounded, stable slug ID rather than a vendor enum.
 - A descriptor records a bounded display name, an optional runtime version, and a validated, unique, canonically ordered capability set.
-- Provider thread, run, and model references keep the provider ID separate from opaque provider-owned IDs. A provider run belongs to one provider thread without importing a provider-specific term such as Codex turn.
+- Provider thread, run, and model references keep the provider ID separate from opaque provider-owned IDs. These durable provider-owned IDs must be well-formed Unicode; unpaired UTF-16 surrogates are invalid, valid Unicode remains supported, and no Unicode normalization is performed. A provider run belongs to one provider thread without importing a provider-specific term such as Codex turn.
 - Normalized usage can record input, cached-input, output, reasoning, and total tokens plus runtime seconds and tool-call count when reported. Unsupported fields remain absent. Cached-input tokens are part of input tokens, and reasoning tokens are part of output tokens, so total-token validation uses input plus output and does not add those subsets again.
 - Provider-specific metadata is omitted. The core schemas are strict and expose no authentication, raw prompt, reasoning, transcript, billing, or arbitrary JSON extension field.
 

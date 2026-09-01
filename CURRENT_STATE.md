@@ -245,13 +245,24 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real backend dogfood: NOT RUN
 - Provider/model turns for Step 6: 0
 - Real target writes for Step 6 hardening: 0
-- Fresh Independent QA: PENDING / READY
+- Fresh Independent QA on `bcb4652823f663ee9ef4ffb7caaa1c1ea981e7d8`: FAIL — PARTIAL execution but conclusive blocking evidence
+- CTC-LOCAL-FQA-001: NON_DEFECT
+- CTC-LOCAL-FQA-002: disposition evidence completion pending
+- CTC-LOCAL-FQA-003: NON_DEFECT
+- CTC-LOCAL-FQA-004: upstream canonical identifier exact-preservation defect discovered
+- Canonical durable identifier invariant: unpaired UTF-16 surrogates are invalid under the Hanlin-approved decision
+- Upstream canonical identifier exact-preservation repair: REPAIRED
+- Fresh Focused Re-QA of the repaired foundation invariant: PENDING
+- Historical S0A/S0B1 accepted evidence remains historical; downstream reliance on the reopened identifier exact-preservation invariant is PAUSED until Focused Re-QA PASS
+- CTC-LOCAL-FQA-005/006/007: OPEN / UNREPAIRED
+- Provider/model turns for the identifier repair: 0
+- Real target writes for the identifier repair: 0
 - Step 6 ACCEPTED: NO
-- Roadmap Step 6: HARDENED / Fresh Independent QA pending
+- Roadmap Step 6: HARDENED / NOT ACCEPTED
 - Step 7: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** new-chat Fresh Independent QA for Local Control Service & Operator Harness V0.
+**Next safe task:** new-chat Fresh Focused Re-QA of canonical durable identifier exact preservation.
 
 Hanlin manual QA: NOT REQUIRED
 

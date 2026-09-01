@@ -1,10 +1,15 @@
 import { z } from "zod";
 
+import { isWellFormedUnicode } from "./well-formed-unicode.js";
+
 const boundedProviderOwnedIdentifier = <Brand extends string>() =>
   z
     .string()
     .min(1)
     .max(512)
+    .refine(isWellFormedUnicode, {
+      message: "Provider-owned identifiers must be well-formed Unicode",
+    })
     .refine((value) => value.trim() === value && value.length > 0, {
       message: "Provider-owned identifiers must be non-empty and have no surrounding whitespace",
     })

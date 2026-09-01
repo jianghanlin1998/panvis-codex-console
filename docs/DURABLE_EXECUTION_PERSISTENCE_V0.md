@@ -34,7 +34,7 @@ The database does not persist prompt or context text, response text, transcripts
 
 The original forward Drizzle migration adds restrictive `chat_threads` and `execution_runs` tables without recreating existing tables. A later forward migration adds provider-run ownership uniqueness without rewriting the historical migration. Existing unambiguous durable data and all task, dependency, context, digest, audit, and checkpoint rows survive the upgrade unchanged. If pre-repair data contains ambiguous duplicate provider-run ownership, migration fails and rolls back instead of selecting or deleting an owner.
 
-Fresh databases, migrated prior-boundary databases, and closed/reopened databases reconstruct the same strict domain state with deterministic timestamp-plus-ID ordering.
+Fresh databases, migrated prior-boundary databases, and closed/reopened databases reconstruct the same strict domain state with deterministic timestamp-plus-ID ordering. Every accepted Console or provider-owned identifier is preserved as the exact JavaScript string supplied by the authoritative Domain contract; persistence performs no Unicode normalization.
 
 This foundation does not automatically connect `executeSingleSubtaskLiveCodex` to storage, resume provider threads, persist live response content, or add orchestration, retry, cancellation, scheduling, worktrees, UI, or provider expansion.
 
