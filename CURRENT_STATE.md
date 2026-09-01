@@ -225,7 +225,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real target Step 5B writes for post-FQA repair: 0
 - Step 5B ACCEPTED: YES
 - Roadmap Step 5: ACCEPTED / COMPLETE
-- Local Control Service & Operator Harness V0: HARDENED
+- Local Control Service & Operator Harness V0: ACCEPTED
 - Canonical local state boundary: PASS
 - Loopback-only daemon baseline: PASS
 - Local session/auth baseline: PASS
@@ -258,20 +258,27 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-LOCAL-FQA-005: CLOSED — duplicate response object keys fail closed before JSON normalization / Fresh Re-QA PASS
 - CTC-LOCAL-FQA-006: CLOSED — operator uses canonical Subtask status/maturity schemas / Fresh Re-QA PASS
 - CTC-LOCAL-FQA-007: CLOSED — operator uses the canonical Step 5B failure-code vocabulary / Fresh Re-QA PASS
-- CTC-LOCAL-FQA-008: REPAIRED — extra Hanlin-authorized Fresh Re-QA pending
-- CTC-LOCAL-FQA-009: REPAIRED — extra Hanlin-authorized Fresh Re-QA pending
+- CTC-LOCAL-FQA-008: CLOSED — repaired / Fresh Re-QA PASS
+- CTC-LOCAL-FQA-009: CLOSED — repaired / Fresh Re-QA PASS
+- Final Fresh Focused Re-QA on `f2681899bc03c84663bf087066aa00c7c24ed88d`: PASS
 - Same-root state UTF-8 audit: SAFE_FAIL_CLOSED — replacement-decoded altered session authority fails exact descriptor validation
 - This repair is an additional human-authorized exception after the default bounded rework ceiling.
 - Provider/model turns for the identifier repair: 0
 - Real target writes for the identifier repair: 0
 - Provider/model turns for the Step 6 repair: 0
 - Real target writes for the Step 6 repair: 0
-- Step 6 ACCEPTED: NO
-- Roadmap Step 6: HARDENED / additional bounded repair complete / final Fresh Re-QA pending
-- Step 7: NOT STARTED / NOT AUTHORIZED
+- Step 6 ACCEPTED: YES
+- Roadmap Step 6: ACCEPTED / COMPLETE
+- Step 7 Backend Dogfood #1: IN PROGRESS / BLOCKED
+- Step 7 failing stage: canonical TaskStorage bootstrap rejected the pre-existing `Codex Task Console` state root as `UNSAFE_LOCAL_STATE` because its mode is `0755`, not required `0700`
+- Step 7 durable Console state: no Project, Big Task, Subtask, daemon authority, worktree, ChatThread, or ExecutionRun created
+- Step 7 provider/model execution: NOT STARTED / 0 turns
+- Step 7 target state: dedicated local AI Update Board repository created with clean bootstrap commit only; no provider edits and no remote
+- Step 7 automatic retry/repair: NONE
+- Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** New-chat Fresh Focused Re-QA for CTC-LOCAL-FQA-008/009.
+**Next safe task:** ChatGPT audit of the Step 7 blocker and a separately authorized bounded resolution; do not retry the dogfood automatically.
 
 Hanlin manual QA: NOT REQUIRED
 
