@@ -270,8 +270,8 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
 - Roadmap Step 7 Backend Dogfood #1: engineering dogfood PASS — Cycle 2 repaired the reproduced `.9` path representation, Attempt #4 succeeded, and product verification/checkpoint/release completed
-- Step 7 Fresh Independent QA on `20932e5438c14d6d0a82c00967de0fee00b8378e`: PASS; target implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`; blocking findings NONE
-- Step 7 acceptance evidence: PASS
+- Step 7 Fresh Independent QA on `20932e5438c14d6d0a82c00967de0fee00b8378e`: PASS; target implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`; blocking P0/P1 findings NONE
+- Step 7 acceptance evidence: COMPLETE — engineering dogfood PASS, Fresh Independent QA PASS, and Hanlin manual UI QA PASS
 - Step 7 Cycle 1 validated-progress idle liveness: independently PASS
 - Step 7 Cycle 2 contained absolute file-change representation: independently PASS
 - CTC-STEP7-FINAL-QA-001: CLOSED — explicit `OPERATOR_TIMEOUT` reconciliation documented
@@ -333,11 +333,11 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 automatic provider retry: NONE
 - Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
-- Hanlin manual QA: REQUIRED / PENDING
+- Hanlin manual UI QA: PASS — explicit human product/workflow acceptance of implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** Hanlin manual UI QA of AI Update Board. If it passes, Step 8 remains a separate Hanlin decision; reconcile the manual-QA result in the next write-enabled task if one follows soon, and use a tiny state-sync only if leaving this file stale would materially mislead future work. Do not authorize or begin Step 8 here.
+**Next safe task:** Roadmap Step 7 is complete from engineering, Fresh Independent QA, and Hanlin manual UI QA evidence. Further work requires a new explicit Hanlin decision: either approve or update the validated Master candidate for provider-turn liveness, or scope and authorize Roadmap Step 8. Neither is authorized by this state sync; Step 8 remains not started and not authorized.
 
 ## Not operational yet
 - browser Console UI
