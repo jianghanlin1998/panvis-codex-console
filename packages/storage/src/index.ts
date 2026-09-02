@@ -4,6 +4,7 @@ export type { StorageErrorCode } from "./errors.js";
 export {
   auditEventsTable,
   bigTasksTable,
+  candidateTaskContractBindingsTable,
   chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
@@ -15,6 +16,7 @@ export {
   projectsTable,
   subtaskImplementationCheckpointsTable,
   subtasksTable,
+  taskContractsTable,
   taskDependenciesTable,
 } from "./schema.js";
 
@@ -43,10 +45,14 @@ export type {
 } from "./task-storage.js";
 
 export type {
+  ApprovedTaskContractAuthority,
   DurableOrchestrationPlanningSnapshot,
+  DurablePlanningReviewBundle,
   DurablePlanCandidateArtifact,
   DurableReviewDecisionArtifact,
+  TaskContractAuthorityReadiness,
 } from "./orchestration-planning.js";
+export { TASK_CONTRACT_AUTHORITY_READINESS } from "./orchestration-planning.js";
 
 export {
   TrustedRepositorySourceError,

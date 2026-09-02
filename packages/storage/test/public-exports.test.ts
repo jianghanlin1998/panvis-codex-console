@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   auditEventsTable,
   bigTasksTable,
+  candidateTaskContractBindingsTable,
   chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
@@ -20,13 +21,16 @@ import {
   STORAGE_ERROR_CODES,
   subtaskImplementationCheckpointsTable,
   subtasksTable,
+  taskContractsTable,
   taskDependenciesTable,
+  TASK_CONTRACT_AUTHORITY_READINESS,
   TaskStorage,
   TaskStorageError,
   TrustedRepositorySourceError,
   TrustedRepositorySourceReader,
 } from "@codex-task-console/storage";
 import type {
+  ApprovedTaskContractAuthority,
   ActiveContextItemBucket,
   ActiveContextItemSnapshot,
   AllowedRawContextItemBucket,
@@ -41,12 +45,14 @@ import type {
   ExecutionInputPreflightResult,
   FinishExecutionRunInput,
   DurableOrchestrationPlanningSnapshot,
+  DurablePlanningReviewBundle,
   DurablePlanCandidateArtifact,
   DurableReviewDecisionArtifact,
   JitContextStorageSourceSnapshot,
   OperationalJitContextAssemblyErrorCode,
   OperationalJitContextProfile,
   StartExecutionRunInput,
+  TaskContractAuthorityReadiness,
   TrustedRepositorySourceErrorCode,
   TrustedRepositorySourceSnapshot,
   TrustedRepositorySourceTextBlock,
@@ -66,6 +72,7 @@ describe("storage package public exports", () => {
     expect(STORAGE_ERROR_CODES).toContain("MIGRATION_FAILED");
     expect(projectsTable).toBeDefined();
     expect(bigTasksTable).toBeDefined();
+    expect(candidateTaskContractBindingsTable).toBeDefined();
     expect(chatThreadsTable).toBeDefined();
     expect(executionRunsTable).toBeDefined();
     expect(orchestrationMaterializationsTable).toBeDefined();
@@ -76,8 +83,14 @@ describe("storage package public exports", () => {
     expect(auditEventsTable).toBeDefined();
     expect(contextItemsTable).toBeDefined();
     expect(subtasksTable).toBeDefined();
+    expect(taskContractsTable).toBeDefined();
     expect(taskDependenciesTable).toBeDefined();
     expect(subtaskImplementationCheckpointsTable).toBeDefined();
+    expect(TASK_CONTRACT_AUTHORITY_READINESS).toEqual([
+      "TASK_CONTRACT_AUTHORITY_READY",
+      "TASK_CONTRACT_AUTHORITY_NOT_READY",
+    ]);
+    expectTypeOf<ApprovedTaskContractAuthority>().toBeObject();
     expectTypeOf<ActiveContextItemBucket>().toBeObject();
     expectTypeOf<ActiveContextItemSnapshot>().toBeObject();
     expectTypeOf<AllowedRawContextItemBucket>().toBeObject();
@@ -91,6 +104,7 @@ describe("storage package public exports", () => {
     expectTypeOf<StartExecutionRunInput>().toBeObject();
     expectTypeOf<FinishExecutionRunInput>().toBeObject();
     expectTypeOf<DurableOrchestrationPlanningSnapshot>().toBeObject();
+    expectTypeOf<DurablePlanningReviewBundle>().toBeObject();
     expectTypeOf<DurablePlanCandidateArtifact>().toBeObject();
     expectTypeOf<DurableReviewDecisionArtifact>().toBeObject();
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
@@ -101,5 +115,6 @@ describe("storage package public exports", () => {
     expectTypeOf<TrustedRepositorySourceSnapshot>().toBeObject();
     expectTypeOf<TrustedRepositorySourceTextBlock>().toBeObject();
     expectTypeOf<TrustedRepositorySourceErrorCode>().toBeString();
+    expectTypeOf<TaskContractAuthorityReadiness>().toBeString();
   });
 });

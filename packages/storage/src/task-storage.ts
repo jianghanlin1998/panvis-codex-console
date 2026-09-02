@@ -67,6 +67,7 @@ import type {
   SubtaskId,
   SubtaskImplementationCheckpoint,
   SubtaskImplementationCheckpointId,
+  TaskContractV0,
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
 import type { PlanCandidate, ReviewDecision } from "@codex-task-console/orchestration";
@@ -77,7 +78,11 @@ import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { TaskStorageError } from "./errors.js";
 import { defaultMigrationsFolder, runMigrations } from "./migrations.js";
 import { DurableOrchestrationPlanningStore } from "./orchestration-planning.js";
-import type { DurableOrchestrationPlanningSnapshot } from "./orchestration-planning.js";
+import type {
+  ApprovedTaskContractAuthority,
+  DurableOrchestrationPlanningSnapshot,
+  DurablePlanningReviewBundle,
+} from "./orchestration-planning.js";
 import {
   auditEventsTable,
   bigTasksTable,
@@ -1513,6 +1518,15 @@ export class TaskStorage {
     return this.#operation(() => this.#orchestrationPlanning.begin(candidate));
   }
 
+  beginDurablePlanningBundle(
+    candidate: PlanCandidate,
+    taskContracts: readonly TaskContractV0[],
+  ): DurablePlanningReviewBundle {
+    return this.#operation(() =>
+      this.#orchestrationPlanning.beginBundle(candidate, taskContracts),
+    );
+  }
+
   recordDurableReviewerDecision(
     bigTaskId: BigTaskId,
     decision: ReviewDecision,
@@ -1528,6 +1542,15 @@ export class TaskStorage {
     return this.#operation(() => this.#orchestrationPlanning.submitRevision(candidate));
   }
 
+  submitDurablePlannerRevisionBundle(
+    candidate: PlanCandidate,
+    taskContracts: readonly TaskContractV0[],
+  ): DurablePlanningReviewBundle {
+    return this.#operation(() =>
+      this.#orchestrationPlanning.submitRevisionBundle(candidate, taskContracts),
+    );
+  }
+
   materializeDurablePlan(bigTaskId: BigTaskId): DurableOrchestrationPlanningSnapshot {
     return this.#operation(() => this.#orchestrationPlanning.materialize(bigTaskId));
   }
@@ -1536,6 +1559,22 @@ export class TaskStorage {
     bigTaskId: BigTaskId,
   ): DurableOrchestrationPlanningSnapshot | null {
     return this.#operation(() => this.#orchestrationPlanning.getSnapshot(bigTaskId));
+  }
+
+  getDurablePlanningReviewBundle(
+    bigTaskId: BigTaskId,
+  ): DurablePlanningReviewBundle | null {
+    return this.#operation(() =>
+      this.#orchestrationPlanning.getReviewBundle(bigTaskId),
+    );
+  }
+
+  getApprovedTaskContractAuthority(
+    bigTaskId: BigTaskId,
+  ): ApprovedTaskContractAuthority | null {
+    return this.#operation(() =>
+      this.#orchestrationPlanning.getApprovedTaskContractAuthority(bigTaskId),
+    );
   }
 
   reservePrimaryExecutionAttempt(

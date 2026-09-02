@@ -57,6 +57,7 @@ import {
   renderDeterministicEngineeringFact,
   SubtaskDependencySchema,
   SubtaskMaturitySchema,
+  TaskContractV0Schema,
   evaluateSubtaskDependencyReadiness,
   validateBudgetPolicy,
   narrowContextCandidatesForQa,
@@ -111,6 +112,7 @@ describe("domain package public exports", () => {
     expect(compileJitContextPacket).toBeTypeOf("function");
     expect(SubtaskDependencySchema).toBeDefined();
     expect(SubtaskMaturitySchema).toBeDefined();
+    expect(TaskContractV0Schema).toBeDefined();
     expect(DependencyRequiredGateSchema).toBeDefined();
     expect(NativeSubagentOwnershipSchema).toBeDefined();
     expect(BudgetPolicySchema).toBeDefined();

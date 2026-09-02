@@ -134,6 +134,7 @@ export const orchestrationPlanCandidatesTable = sqliteTable(
     revision: integer("revision").notNull(),
     candidatePayload: text("candidate_payload").notNull(),
     candidateBinding: text("candidate_binding").notNull(),
+    taskContractCount: integer("task_contract_count"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
@@ -153,6 +154,88 @@ export const orchestrationPlanCandidatesTable = sqliteTable(
     check(
       "orchestration_plan_candidates_binding_check",
       sql`length(${table.candidateBinding}) >= 1`,
+    ),
+  ],
+);
+
+export const taskContractsTable = sqliteTable(
+  "task_contracts",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    taskContractRef: text("task_contract_ref").notNull(),
+    bigTaskId: text("big_task_id")
+      .notNull()
+      .references(() => bigTasksTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    subtaskId: text("subtask_id").notNull(),
+    contractPayload: text("contract_payload").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.taskContractRef] }),
+    index("task_contracts_big_task_subtask_index").on(
+      table.bigTaskId,
+      table.subtaskId,
+    ),
+    check(
+      "task_contracts_ref_check",
+      sql`length(${table.taskContractRef}) between 1 and 1000`,
+    ),
+    check(
+      "task_contracts_payload_check",
+      sql`length(${table.contractPayload}) >= 1`,
+    ),
+  ],
+);
+
+export const candidateTaskContractBindingsTable = sqliteTable(
+  "candidate_task_contract_bindings",
+  {
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    taskContractRef: text("task_contract_ref").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.bigTaskId, table.planRevision, table.subtaskId] }),
+    uniqueIndex("candidate_task_contract_bindings_ref_unique").on(
+      table.projectId,
+      table.bigTaskId,
+      table.planRevision,
+      table.taskContractRef,
+    ),
+    foreignKey({
+      name: "candidate_task_contract_bindings_candidate_fk",
+      columns: [table.bigTaskId, table.planRevision],
+      foreignColumns: [
+        orchestrationPlanCandidatesTable.bigTaskId,
+        orchestrationPlanCandidatesTable.revision,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("cascade"),
+    foreignKey({
+      name: "candidate_task_contract_bindings_contract_fk",
+      columns: [table.projectId, table.taskContractRef],
+      foreignColumns: [taskContractsTable.projectId, taskContractsTable.taskContractRef],
+    })
+      .onDelete("restrict")
+      .onUpdate("cascade"),
+    check(
+      "candidate_task_contract_bindings_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "candidate_task_contract_bindings_candidate_binding_check",
+      sql`length(${table.candidateBinding}) >= 1`,
+    ),
+    check(
+      "candidate_task_contract_bindings_ref_check",
+      sql`length(${table.taskContractRef}) between 1 and 1000`,
     ),
   ],
 );

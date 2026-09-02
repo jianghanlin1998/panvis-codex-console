@@ -276,7 +276,7 @@ describe("S1A migration from the accepted S0B2b foundation", () => {
         ).toEqual({ count: 0 });
         expect(
           verified.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 11 });
+        ).toEqual({ count: 12 });
         expect(
           verified
             .prepare(

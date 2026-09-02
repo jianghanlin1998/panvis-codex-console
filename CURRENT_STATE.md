@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-09-02
+Last reconciled: 2026-09-03
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -356,26 +356,35 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8B: STARTED / overall NOT COMPLETE
 - Step 8B1 implementation SHA: `6d1add21949d7bf03f287ed2a709c03ba99858fc`
 - Step 8B1 Comprehensive Hardening: PASS
-- Step 8B1 Durable Orchestration Planning State V0 maturity: HARDENED
+- Step 8B1 Fresh Independent QA: PASS
+- Step 8B1 Fresh Independent QA findings: NONE (`CTC-ORCH-B1-FQA-*`)
+- Step 8B1 Durable Orchestration Planning State V0 maturity: ACCEPTED
+- Step 8B1 accepted evidence SHA: `1b7714ddee0b79671c67972e132b61ec110fa12a`
 - CTC-ORCH-B1-HARD-001: CLOSED — durable review preserves accepted Step 8A graph-validation order
 - CTC-ORCH-B1-HARD-002: CLOSED — historical replay is isolated from later mutable status and proposed-ID collisions
 - CTC-ORCH-B1-HARD-003: CLOSED — nested planning mutations use savepoint-equivalent rollback isolation
 - CTC-ORCH-B1-HARD-004: CLOSED — durable artifact chronology and regressing clocks fail closed atomically
 - CTC-ORCH-B1-HARD-005: CLOSED — decisions and materializations require an exact candidate revision FK
-- Step 8B1 Fresh Independent QA: PENDING
 - Durable Plan Candidate / Reviewer Decision artifact persistence and deterministic review-state replay: IMPLEMENTED
 - Durable materialization authority and approved graph replay: IMPLEMENTED
 - Durable orchestration text policy: well-formed Unicode preserved exactly without normalization; C0/C1 controls and unpaired surrogates rejected
-- Approved graph to canonical executable Subtask / Task Contract materialization: NOT IMPLEMENTED
+- Step 8B2a Immutable Task Contract Authority V0: IMPLEMENTED
+- Immutable Task Contract artifact persistence: IMPLEMENTED
+- Exact candidate revision / candidateBinding / Subtask contract association: IMPLEMENTED
+- Approved Task Contract authority derivation: IMPLEMENTED
+- Contract-aware Review bundle source: IMPLEMENTED
+- Step 8B2a Comprehensive Hardening: NOT RUN
+- Step 8B2a Fresh Independent QA: NOT RUN
+- Approved graph to canonical executable Subtask / dependency materialization: NOT IMPLEMENTED
 - Orchestration stage/evidence persistence: NOT IMPLEMENTED
 - IMPLEMENTED -> HARDENED -> ACCEPTED public durable mutations: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Step 8B2: NOT STARTED / BLOCKED on Step 8B1 ACCEPTED
+- Step 8B2b: NOT STARTED / BLOCKED on Step 8B2a ACCEPTED
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Independent no-write QA of Step 8B1. Do not begin Step 8B2.
+**Next safe task:** NEW CHAT Comprehensive Hardening of Step 8B2a. Do not begin Step 8B2b.
 
 ## Not operational yet
 - browser Console UI

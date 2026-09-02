@@ -23,6 +23,9 @@ export type {
   WorktreeOwnershipId,
 } from "./identifiers.js";
 
+export { TaskContractV0Schema } from "./task-contract.js";
+export type { TaskContractV0 } from "./task-contract.js";
+
 export {
   WorktreeOwnershipBranchSchema,
   WorktreeOwnershipPathSchema,
