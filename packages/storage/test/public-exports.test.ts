@@ -9,6 +9,10 @@ import {
   ExecutionInputPreflight,
   ExecutionInputPreflightError,
   executionRunsTable,
+  orchestrationMaterializationsTable,
+  orchestrationPlanCandidatesTable,
+  orchestrationPlanningTracksTable,
+  orchestrationReviewDecisionsTable,
   openTaskDatabase,
   OperationalJitContextAssembler,
   OperationalJitContextAssemblyError,
@@ -36,6 +40,9 @@ import type {
   ExecutionInputPreflightErrorCode,
   ExecutionInputPreflightResult,
   FinishExecutionRunInput,
+  DurableOrchestrationPlanningSnapshot,
+  DurablePlanCandidateArtifact,
+  DurableReviewDecisionArtifact,
   JitContextStorageSourceSnapshot,
   OperationalJitContextAssemblyErrorCode,
   OperationalJitContextProfile,
@@ -61,6 +68,10 @@ describe("storage package public exports", () => {
     expect(bigTasksTable).toBeDefined();
     expect(chatThreadsTable).toBeDefined();
     expect(executionRunsTable).toBeDefined();
+    expect(orchestrationMaterializationsTable).toBeDefined();
+    expect(orchestrationPlanCandidatesTable).toBeDefined();
+    expect(orchestrationPlanningTracksTable).toBeDefined();
+    expect(orchestrationReviewDecisionsTable).toBeDefined();
     expect(contextDigestsTable).toBeDefined();
     expect(auditEventsTable).toBeDefined();
     expect(contextItemsTable).toBeDefined();
@@ -79,6 +90,9 @@ describe("storage package public exports", () => {
     expectTypeOf<CreateExecutionRunInput>().toBeObject();
     expectTypeOf<StartExecutionRunInput>().toBeObject();
     expectTypeOf<FinishExecutionRunInput>().toBeObject();
+    expectTypeOf<DurableOrchestrationPlanningSnapshot>().toBeObject();
+    expectTypeOf<DurablePlanCandidateArtifact>().toBeObject();
+    expectTypeOf<DurableReviewDecisionArtifact>().toBeObject();
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
     expectTypeOf<OperationalJitContextAssemblyErrorCode>().toBeString();
     expectTypeOf<OperationalJitContextProfile>().toBeString();

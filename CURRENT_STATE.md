@@ -336,6 +336,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
 - Hanlin manual UI QA: PASS — explicit human product/workflow acceptance of implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
 - Roadmap Step 8: explicitly authorized by Hanlin; overall step NOT COMPLETE
+- Repository Development Environment Preflight V0: PASS
 - Step 8A implementation SHA: `0a15fcb5953a42593741d6afa5ff7ef48de6fff5`
 - Step 8A Comprehensive Hardening: PASS
 - Step 8A Deterministic Orchestration Kernel V0 maturity: ACCEPTED
@@ -352,16 +353,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8A final controlled-worker regression: 112 / 112 files; 3,620 / 3,620 tests PASS
 - Step 8A ACCEPTED: YES
 - Step 8A accepted evidence SHA: `addc44200662cdddd69095065bee27eaeac43ddb`
-- Orchestration persistence: NOT IMPLEMENTED
+- Step 8B: STARTED / overall NOT COMPLETE
+- Step 8B1 Durable Orchestration Planning State V0: IMPLEMENTED
+- Durable Plan Candidate / Reviewer Decision artifact persistence and deterministic review-state replay: IMPLEMENTED
+- Durable materialization authority and approved graph replay: IMPLEMENTED
+- Durable orchestration text policy: well-formed Unicode preserved exactly without normalization; C0/C1 controls and unpaired surrogates rejected
+- Approved graph to canonical executable Subtask / Task Contract materialization: NOT IMPLEMENTED
+- Orchestration stage/evidence persistence: NOT IMPLEMENTED
+- IMPLEMENTED -> HARDENED -> ACCEPTED public durable mutations: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Step 8B: NOT STARTED
+- Step 8B2: NOT STARTED
 - Step 8B dependency gate: Step 8A ACCEPTED satisfied
-- Step 8B design requirement: define and test durable well-formed-Unicode and control-character policy before persisting proposal-only orchestration text
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** Return to Hanlin/ChatGPT for Roadmap Step 8B scope and implementation authorization. Do not begin Step 8B automatically.
+**Next safe task:** NEW CHAT comprehensive write-enabled hardening of Step 8B1. Do not begin Step 8B2.
 
 ## Not operational yet
 - browser Console UI

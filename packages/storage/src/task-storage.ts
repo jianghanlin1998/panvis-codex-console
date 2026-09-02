@@ -69,12 +69,15 @@ import type {
   SubtaskImplementationCheckpointId,
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
+import type { PlanCandidate, ReviewDecision } from "@codex-task-console/orchestration";
 import { and, asc, count, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 
 import { TaskStorageError } from "./errors.js";
 import { defaultMigrationsFolder, runMigrations } from "./migrations.js";
+import { DurableOrchestrationPlanningStore } from "./orchestration-planning.js";
+import type { DurableOrchestrationPlanningSnapshot } from "./orchestration-planning.js";
 import {
   auditEventsTable,
   bigTasksTable,
@@ -1283,12 +1286,18 @@ export class TaskStorage {
   readonly #sqlite: DatabaseSync;
   readonly #database: NodeSQLiteDatabase;
   readonly #clock: () => Date;
+  readonly #orchestrationPlanning: DurableOrchestrationPlanningStore;
   #closed = false;
 
   constructor(sqlite: DatabaseSync, database: NodeSQLiteDatabase, clock: () => Date) {
     this.#sqlite = sqlite;
     this.#database = database;
     this.#clock = clock;
+    this.#orchestrationPlanning = new DurableOrchestrationPlanningStore(
+      sqlite,
+      database,
+      clock,
+    );
     registerTaskStorageWorktreeAccess(this, {
       sqlite,
       clock,
@@ -1498,6 +1507,35 @@ export class TaskStorage {
         .all()
         .map(subtaskFromRow),
     );
+  }
+
+  beginDurablePlanning(candidate: PlanCandidate): DurableOrchestrationPlanningSnapshot {
+    return this.#operation(() => this.#orchestrationPlanning.begin(candidate));
+  }
+
+  recordDurableReviewerDecision(
+    bigTaskId: BigTaskId,
+    decision: ReviewDecision,
+  ): DurableOrchestrationPlanningSnapshot {
+    return this.#operation(() =>
+      this.#orchestrationPlanning.recordReviewerDecision(bigTaskId, decision),
+    );
+  }
+
+  submitDurablePlannerRevision(
+    candidate: PlanCandidate,
+  ): DurableOrchestrationPlanningSnapshot {
+    return this.#operation(() => this.#orchestrationPlanning.submitRevision(candidate));
+  }
+
+  materializeDurablePlan(bigTaskId: BigTaskId): DurableOrchestrationPlanningSnapshot {
+    return this.#operation(() => this.#orchestrationPlanning.materialize(bigTaskId));
+  }
+
+  getDurablePlanningSnapshot(
+    bigTaskId: BigTaskId,
+  ): DurableOrchestrationPlanningSnapshot | null {
+    return this.#operation(() => this.#orchestrationPlanning.getSnapshot(bigTaskId));
   }
 
   reservePrimaryExecutionAttempt(

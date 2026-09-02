@@ -8,6 +8,10 @@ export {
   contextDigestsTable,
   contextItemsTable,
   executionRunsTable,
+  orchestrationMaterializationsTable,
+  orchestrationPlanCandidatesTable,
+  orchestrationPlanningTracksTable,
+  orchestrationReviewDecisionsTable,
   projectsTable,
   subtaskImplementationCheckpointsTable,
   subtasksTable,
@@ -37,6 +41,12 @@ export type {
   ReservedPrimaryExecutionAttempt,
   StartExecutionRunInput,
 } from "./task-storage.js";
+
+export type {
+  DurableOrchestrationPlanningSnapshot,
+  DurablePlanCandidateArtifact,
+  DurableReviewDecisionArtifact,
+} from "./orchestration-planning.js";
 
 export {
   TrustedRepositorySourceError,

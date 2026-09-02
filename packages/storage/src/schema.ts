@@ -104,6 +104,123 @@ export const subtasksTable = sqliteTable(
   ],
 );
 
+export const orchestrationPlanningTracksTable = sqliteTable(
+  "orchestration_planning_tracks",
+  {
+    bigTaskId: text("big_task_id")
+      .primaryKey()
+      .references(() => bigTasksTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("orchestration_planning_tracks_project_id_index").on(table.projectId)],
+);
+
+export const orchestrationPlanCandidatesTable = sqliteTable(
+  "orchestration_plan_candidates",
+  {
+    bigTaskId: text("big_task_id")
+      .notNull()
+      .references(() => orchestrationPlanningTracksTable.bigTaskId, {
+        onDelete: "restrict",
+        onUpdate: "cascade",
+      }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    revision: integer("revision").notNull(),
+    candidatePayload: text("candidate_payload").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.bigTaskId, table.revision] }),
+    uniqueIndex("orchestration_plan_candidates_binding_unique").on(
+      table.bigTaskId,
+      table.candidateBinding,
+    ),
+    check(
+      "orchestration_plan_candidates_revision_check",
+      sql`typeof(${table.revision}) = 'integer' and ${table.revision} >= 1`,
+    ),
+    check(
+      "orchestration_plan_candidates_payload_check",
+      sql`length(${table.candidatePayload}) >= 1`,
+    ),
+    check(
+      "orchestration_plan_candidates_binding_check",
+      sql`length(${table.candidateBinding}) >= 1`,
+    ),
+  ],
+);
+
+export const orchestrationReviewDecisionsTable = sqliteTable(
+  "orchestration_review_decisions",
+  {
+    bigTaskId: text("big_task_id")
+      .notNull()
+      .references(() => orchestrationPlanningTracksTable.bigTaskId, {
+        onDelete: "restrict",
+        onUpdate: "cascade",
+      }),
+    planRevision: integer("plan_revision").notNull(),
+    outcome: text("outcome").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    revisionRequirements: text("revision_requirements"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.bigTaskId, table.planRevision] }),
+    check(
+      "orchestration_review_decisions_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "orchestration_review_decisions_outcome_check",
+      sql`${table.outcome} in ('APPROVE', 'REJECT', 'ESCALATE')`,
+    ),
+    check(
+      "orchestration_review_decisions_binding_check",
+      sql`length(${table.candidateBinding}) >= 1`,
+    ),
+    check(
+      "orchestration_review_decisions_requirements_check",
+      sql`(${table.outcome} = 'REJECT' and ${table.revisionRequirements} is not null)
+        or (${table.outcome} in ('APPROVE', 'ESCALATE') and ${table.revisionRequirements} is null)`,
+    ),
+  ],
+);
+
+export const orchestrationMaterializationsTable = sqliteTable(
+  "orchestration_materializations",
+  {
+    bigTaskId: text("big_task_id")
+      .primaryKey()
+      .references(() => orchestrationPlanningTracksTable.bigTaskId, {
+        onDelete: "restrict",
+        onUpdate: "cascade",
+      }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "cascade" }),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    materializedAt: text("materialized_at").notNull(),
+  },
+  (table) => [
+    check(
+      "orchestration_materializations_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "orchestration_materializations_binding_check",
+      sql`length(${table.candidateBinding}) >= 1`,
+    ),
+  ],
+);
+
 export const worktreeOwnershipsTable = sqliteTable(
   "worktree_ownerships",
   {

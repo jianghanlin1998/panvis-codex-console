@@ -97,6 +97,10 @@ describe("database lifecycle and migrations", () => {
           "context_digests",
           "context_items",
           "execution_runs",
+          "orchestration_materializations",
+          "orchestration_plan_candidates",
+          "orchestration_planning_tracks",
+          "orchestration_review_decisions",
           "projects",
           "subtask_implementation_checkpoints",
           "subtasks",
@@ -120,7 +124,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(9);
+        expect(row.count).toBe(10);
       } finally {
         sqlite.close();
       }
@@ -137,7 +141,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(9);
+        expect(row.count).toBe(10);
       } finally {
         sqlite.close();
       }
@@ -712,7 +716,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           after.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 9 });
+        ).toEqual({ count: 10 });
       } finally {
         after.close();
       }
@@ -832,7 +836,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           migrated.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 9 });
+        ).toEqual({ count: 10 });
       } finally {
         migrated.close();
       }

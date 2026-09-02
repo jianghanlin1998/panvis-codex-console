@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@codex-task-console/domain": "workspace:*",
+    "@codex-task-console/orchestration": "workspace:*",
     "drizzle-orm": "1.0.0-rc.4"
   },
   "devDependencies": {
