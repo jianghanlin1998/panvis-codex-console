@@ -19,7 +19,8 @@ type Scenario =
   | "turn-start-failed"
   | "tools-before-response"
   | "wait-for-authority-mutation"
-  | "wait-for-interrupt";
+  | "wait-for-interrupt"
+  | "wait-for-interrupt-without-terminal";
 type ThreadStartVariant =
   | "approval-policy-on-request"
   | "approvals-reviewer-auto"
@@ -164,7 +165,10 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
     if (scenario === "wait-for-authority-mutation") {
       return;
     }
-    if (scenario === "wait-for-interrupt") {
+    if (
+      scenario === "wait-for-interrupt" ||
+      scenario === "wait-for-interrupt-without-terminal"
+    ) {
       return;
     }
     if (scenario === "progress-success") {
@@ -226,6 +230,9 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       return;
     }
     send({ id, result: {} });
+    if (scenario === "wait-for-interrupt-without-terminal") {
+      return;
+    }
     send({
       method: "turn/completed",
       params: { threadId: THREAD_ID, turn: fixtureTurn("interrupted") },
@@ -504,6 +511,7 @@ function readScenario(): Scenario {
     "tools-before-response",
     "wait-for-authority-mutation",
     "wait-for-interrupt",
+    "wait-for-interrupt-without-terminal",
   ];
   if (!allowed.includes(value as Scenario)) {
     process.exit(2);

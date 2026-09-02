@@ -58,7 +58,8 @@ type Scenario =
   | "turn-start-failed"
   | "tools-before-response"
   | "wait-for-authority-mutation"
-  | "wait-for-interrupt";
+  | "wait-for-interrupt"
+  | "wait-for-interrupt-without-terminal";
 type ThreadStartVariant =
   | "approval-policy-on-request"
   | "approvals-reviewer-auto"
@@ -276,7 +277,7 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
     const fixture = createFixture(true);
     try {
       const ownedBefore = fixture.manager.resolveActiveOwnedWorktreeForSubtask(SUBTASK_ID);
-      const harness = makeHarness(fixture, "wait-for-interrupt", {
+      const harness = makeHarness(fixture, "wait-for-interrupt-without-terminal", {
         limits: {
           turnIdleTimeoutMs: 100,
           turnAbsoluteTimeoutMs: 600,
