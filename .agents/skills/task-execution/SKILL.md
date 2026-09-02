@@ -13,3 +13,29 @@ description: Execute an approved repository Task Contract with scoped implementa
 6. Run the Task Contract's focused and full verification, including `git diff --check`. Summarize successful logs instead of pasting them; investigate failures at their root cause.
 7. Update `CURRENT_STATE.md` when a write-enabled task changes operational state, keeping it compact and limited to verified facts.
 8. Produce the required structured Handoff with repository and commit state, planned versus actual scope, changed files, behavior, exact verification results, push or deployment status, remaining risks, and rollback or activation instructions when applicable.
+
+## Known mechanical environment normalization
+
+Classify a failure as `KNOWN_MECHANICAL_ENVIRONMENT` only when it exactly matches one of the cases below and the stated evidence excludes a repository or product cause. Unknown or ambiguous failures are `REPOSITORY_OR_PRODUCT_FAILURE`. Each mechanical class permits at most one automatic correction per task; never repeat an unchanged recovery loop. If that correction fails or the same class needs another correction, stop as an unresolved environment blocker unless the Task Contract explicitly grants a different bounded policy.
+
+### Authorized Git metadata write
+
+When an already-authorized ordinary fetch, reconciliation, checkout, commit, or push operation against the approved current repository first fails specifically because the sandbox denies repository-metadata writes, retry the same operation once with the available repository-write permission mechanism. Do so only when there is no evidence of corruption, conflict, unexpected remote movement, ownership mismatch, or a destructive operation. Never force-push, destructively reset, discard work, retry a Git semantic error, or treat divergence or a merge conflict as a sandbox failure.
+
+### Workspace-link / pnpm refresh
+
+After an approved intentional package or workspace manifest change, first establish that a Node command failed because local workspace links or `node_modules` metadata need refresh, rather than because of a source, type, or build assertion. Perform at most one smallest repository-supported non-interactive offline refresh using the existing pnpm store, without contacting the network or downloading dependencies unless the Task Contract separately authorizes them. After a successful refresh, rerun only the affected verification command. Stop if the offline store is insufficient, lockfile or package state is unexpectedly inconsistent, or another refresh would be needed. `scripts/runtime-preflight.sh` remains authoritative; do not rediscover or reinstall the runtime during this correction.
+
+### Loopback-listener sandbox
+
+When every failure in an affected test command occurs before meaningful assertions solely because the sandbox denied an intentionally required localhost or loopback listener (for example, `EPERM` or `LISTEN_FAILED`), preserve the tests and rerun the same command once with the required listener permission. Record both observations in the Handoff, and do not count the initial sandbox-only denial as a repository defect. This does not apply when an assertion failed, the listener bound before a later failure, the host is non-loopback, or access beyond the approved local listener is required.
+
+### Host-load-only test timeout
+
+When a full suite has only a bounded set of short timeout failures, the affected tests pass in focused isolation, no assertion or invariant failure reproduces, and evidence supports host load rather than code behavior, allow one controlled-worker rerun using the repository's supported direct runner form, such as `pnpm exec vitest run --maxWorkers=4`. Do not forward a stray literal `--` and do not rerun repeatedly until green. A repeated timeout class follows the Task Contract's blocker policy; any reproducible assertion or invariant failure is a real failure.
+
+### Accounting and fail-closed boundary
+
+Mechanical corrections consume neither production repair or re-QA cycles nor semantic or provider retry budgets; they do not change product maturity and are not product defects. Add an **Environment normalization** Handoff section listing each class used, its initial evidence, correction, attempt count, and final outcome.
+
+Never normalize assertion or invariant failures; source-caused type, lint, or build errors; schema or migration failures; database corruption or integrity failures; dependency or readiness failures; Context ACL or budget failures; worktree ownership or hardlink-safety failures; provider protocol or model failures; security, privacy, or authority failures; unexpected Git divergence or conflict; dirty or unresolved repository state; or test-invalidity or ambiguous evidence. These remain fail-closed blockers or normal root-cause work.
