@@ -50,6 +50,7 @@ type Scenario =
   | "interrupted"
   | "malformed-response-after-tools"
   | "malformed-tool"
+  | "progress-success"
   | "success"
   | "turn-failed"
   | "turn-started-before-response"
@@ -96,7 +97,8 @@ const FAKE_OWNED_EXECUTABLE =
 const BASE_LIMITS = Object.freeze({
   startupTimeoutMs: 2_000,
   requestTimeoutMs: 2_000,
-  turnTimeoutMs: 2_000,
+  turnIdleTimeoutMs: 2_000,
+  turnAbsoluteTimeoutMs: 5_000,
   interruptTimeoutMs: 500,
   shutdownGraceMs: 500,
   terminateGraceMs: 500,
@@ -267,6 +269,83 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         fixture.storage.close();
       }
       rmSync(fixture.directory, { force: true, recursive: true });
+    }
+  });
+
+  it("terminally fails an idle owned turn while preserving exact ACTIVE authority", async () => {
+    const fixture = createFixture(true);
+    try {
+      const ownedBefore = fixture.manager.resolveActiveOwnedWorktreeForSubtask(SUBTASK_ID);
+      const harness = makeHarness(fixture, "wait-for-interrupt", {
+        limits: {
+          turnIdleTimeoutMs: 100,
+          turnAbsoluteTimeoutMs: 600,
+        },
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_TIMEOUT",
+        terminalTurnStatus: null,
+        diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "FAILED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+      const ownedAfter = fixture.manager.resolveActiveOwnedWorktreeForSubtask(SUBTASK_ID);
+      expect(ownedAfter.ownership.status).toBe("ACTIVE");
+      expect(ownedAfter.currentHeadSha).toBe(ownedBefore.currentHeadSha);
+      expect(runGit(fixture.worktreePath!, ["status", "--porcelain=v1"])).toBe("");
+    } finally {
+      cleanupFixture(fixture);
+    }
+  });
+
+  it("allows validated authorized tool progress beyond one owned idle interval", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "progress-success", {
+        limits: {
+          turnIdleTimeoutMs: 250,
+          turnAbsoluteTimeoutMs: 1_500,
+        },
+      });
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: true,
+        failureCode: null,
+        terminalTurnStatus: "completed",
+        diagnostics: {
+          interruptRequests: 0,
+          toolActionsObserved: 2,
+          turnStartRequests: 1,
+        },
+      });
+      expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+        "SUCCEEDED",
+      );
+      expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+        "CLOSED",
+      );
+      expect(
+        fixture.manager.resolveActiveOwnedWorktreeForSubtask(SUBTASK_ID).ownership.status,
+      ).toBe("ACTIVE");
+      expect(readFileSync(join(fixture.worktreePath!, "owned-output.txt"), "utf8")).toBe(
+        "owned worktree write\n",
+      );
+    } finally {
+      cleanupFixture(fixture);
     }
   });
 
@@ -1367,6 +1446,7 @@ function makeHarness(
     >;
     readonly failResolveCall?: number;
     readonly removeWorkspaceThrows?: boolean;
+    readonly limits?: Partial<TestDependencies["limits"]>;
     readonly threadStartVariant?: ThreadStartVariant;
     readonly beforeWorktreeAuthorityGate?: NonNullable<
       TestDependencies["beforeWorktreeAuthorityGate"]
@@ -1449,7 +1529,7 @@ function makeHarness(
       }
       rmSync(path, { force: true, recursive: true });
     },
-    limits: BASE_LIMITS,
+    limits: { ...BASE_LIMITS, ...options.limits },
   };
   return { children, dependencies, launches, transientDirectories };
 }

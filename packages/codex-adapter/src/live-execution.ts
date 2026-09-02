@@ -125,11 +125,16 @@ const TURN_SCOPED_NOTIFICATION_METHODS = new Set([
   "turn/completed",
 ]);
 const MAX_WRITE_TOOL_ITEMS = 512;
+export const LIVE_EXECUTION_LIVENESS_POLICY = Object.freeze({
+  idleTimeoutMs: 300_000,
+  absoluteTimeoutMs: 1_200_000,
+});
 
 const DEFAULT_LIMITS = Object.freeze({
   startupTimeoutMs: 10_000,
   requestTimeoutMs: 15_000,
-  turnTimeoutMs: 120_000,
+  turnIdleTimeoutMs: LIVE_EXECUTION_LIVENESS_POLICY.idleTimeoutMs,
+  turnAbsoluteTimeoutMs: LIVE_EXECUTION_LIVENESS_POLICY.absoluteTimeoutMs,
   interruptTimeoutMs: 3_000,
   shutdownGraceMs: 2_000,
   terminateGraceMs: 2_000,
@@ -342,7 +347,8 @@ interface OwnedWorktreeExecutionEvidence {
 interface LiveExecutionLimits {
   readonly startupTimeoutMs: number;
   readonly requestTimeoutMs: number;
-  readonly turnTimeoutMs: number;
+  readonly turnIdleTimeoutMs: number;
+  readonly turnAbsoluteTimeoutMs: number;
   readonly interruptTimeoutMs: number;
   readonly shutdownGraceMs: number;
   readonly terminateGraceMs: number;
@@ -428,6 +434,14 @@ interface TerminalEvent {
   readonly status: "completed" | "failed" | "interrupted";
 }
 
+interface TerminalWaiter {
+  readonly idleTimeoutMs: number;
+  idleTimeout: NodeJS.Timeout | null;
+  absoluteTimeout: NodeJS.Timeout | null;
+  readonly reject: (error: LiveExecutionError) => void;
+  readonly resolve: (event: TerminalEvent) => void;
+}
+
 interface WriteToolItemState {
   readonly type: "commandExecution" | "fileChange";
   state: "STARTED" | "COMPLETED";
@@ -453,12 +467,7 @@ class TurnEventTracker {
   #observedThreadId: string | null = null;
   #observedTurnId: string | null = null;
   #turnStartSent = false;
-  #waiter:
-    | {
-        readonly reject: (error: LiveExecutionError) => void;
-        readonly resolve: (event: TerminalEvent) => void;
-      }
-    | undefined;
+  #waiter: TerminalWaiter | undefined;
 
   constructor(
     private readonly diagnostics: MutableDiagnostics,
@@ -471,8 +480,8 @@ class TurnEventTracker {
       return;
     }
     this.#failure = error;
-    this.#waiter?.reject(error);
-    this.#waiter = undefined;
+    const waiter = this.#takeWaiter();
+    waiter?.reject(error);
   }
 
   establishChatGptAuth(): void {
@@ -546,6 +555,7 @@ class TurnEventTracker {
         if (turn.status !== "inProgress") {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
+        this.#refreshIdleDeadline();
         return true;
       }
       case "item/started":
@@ -599,6 +609,7 @@ class TurnEventTracker {
             this.#appendAgentText(requireString(item.text));
           }
         }
+        this.#refreshIdleDeadline();
         return true;
       }
       case "item/commandExecution/outputDelta":
@@ -626,6 +637,7 @@ class TurnEventTracker {
         } else if (typeof record.delta !== "string") {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
+        this.#refreshIdleDeadline();
         return true;
       }
       case "item/agentMessage/delta": {
@@ -639,6 +651,7 @@ class TurnEventTracker {
         const itemId = requireBoundedString(record.itemId, 512);
         this.#deltaItemIds.add(itemId);
         this.#appendAgentText(requireString(record.delta));
+        this.#refreshIdleDeadline();
         return true;
       }
       case "thread/tokenUsage/updated": {
@@ -653,6 +666,7 @@ class TurnEventTracker {
         this.normalizedUsage = mapCodexTokenUsage(
           parseTokenUsageBreakdown(requireRecord(tokenUsage.total)),
         );
+        this.#refreshIdleDeadline();
         return true;
       }
       case "turn/completed": {
@@ -681,8 +695,8 @@ class TurnEventTracker {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
         this.terminal = { status };
-        this.#waiter?.resolve(this.terminal);
-        this.#waiter = undefined;
+        const waiter = this.#takeWaiter();
+        waiter?.resolve(this.terminal);
         return true;
       }
       case "serverRequest/resolved":
@@ -732,7 +746,10 @@ class TurnEventTracker {
     this.turnId = turnId;
   }
 
-  waitForTerminal(timeoutMs: number): Promise<TerminalEvent> {
+  waitForTerminal(
+    idleTimeoutMs: number,
+    absoluteTimeoutMs: number,
+  ): Promise<TerminalEvent> {
     if (this.#failure !== null) {
       return Promise.reject(this.#failure);
     }
@@ -740,23 +757,55 @@ class TurnEventTracker {
       return Promise.resolve(this.terminal);
     }
     return new Promise<TerminalEvent>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (this.#waiter !== undefined) {
-          this.#waiter = undefined;
-          reject(new LiveExecutionError("APP_SERVER_TIMEOUT"));
-        }
-      }, timeoutMs);
-      this.#waiter = {
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        },
-        resolve: (event) => {
-          clearTimeout(timeout);
-          resolve(event);
-        },
+      const waiter: TerminalWaiter = {
+        idleTimeoutMs,
+        idleTimeout: null,
+        absoluteTimeout: null,
+        reject,
+        resolve,
       };
+      this.#waiter = waiter;
+      waiter.idleTimeout = this.#createTimeout(waiter, idleTimeoutMs);
+      waiter.absoluteTimeout = this.#createTimeout(waiter, absoluteTimeoutMs);
     });
+  }
+
+  #createTimeout(waiter: TerminalWaiter, timeoutMs: number): NodeJS.Timeout {
+    return setTimeout(() => {
+      if (this.#waiter !== waiter) {
+        return;
+      }
+      const activeWaiter = this.#takeWaiter();
+      activeWaiter?.reject(new LiveExecutionError("APP_SERVER_TIMEOUT"));
+    }, timeoutMs);
+  }
+
+  #refreshIdleDeadline(): void {
+    const waiter = this.#waiter;
+    if (waiter === undefined || this.#failure !== null || this.terminal !== null) {
+      return;
+    }
+    if (waiter.idleTimeout !== null) {
+      clearTimeout(waiter.idleTimeout);
+    }
+    waiter.idleTimeout = this.#createTimeout(waiter, waiter.idleTimeoutMs);
+  }
+
+  #takeWaiter(): TerminalWaiter | undefined {
+    const waiter = this.#waiter;
+    if (waiter === undefined) {
+      return undefined;
+    }
+    this.#waiter = undefined;
+    if (waiter.idleTimeout !== null) {
+      clearTimeout(waiter.idleTimeout);
+      waiter.idleTimeout = null;
+    }
+    if (waiter.absoluteTimeout !== null) {
+      clearTimeout(waiter.absoluteTimeout);
+      waiter.absoluteTimeout = null;
+    }
+    return waiter;
   }
 
   #observeNotificationThreadId(threadId: string): void {
@@ -1503,7 +1552,8 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     }
 
     const terminal = await eventTracker.waitForTerminal(
-      dependencies.limits.turnTimeoutMs,
+      dependencies.limits.turnIdleTimeoutMs,
+      dependencies.limits.turnAbsoluteTimeoutMs,
     );
     if (client.failure !== null) {
       throw client.failure;
@@ -1871,7 +1921,8 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     evidence.providerRun = mapCodexTurnReference(thread.threadId, turnId);
 
     const terminal = await eventTracker.waitForTerminal(
-      dependencies.limits.turnTimeoutMs,
+      dependencies.limits.turnIdleTimeoutMs,
+      dependencies.limits.turnAbsoluteTimeoutMs,
     );
     if (client.failure !== null) {
       throw client.failure;

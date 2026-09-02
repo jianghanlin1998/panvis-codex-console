@@ -29,6 +29,7 @@ import {
 import {
   buildLiveCodexChildEnvironmentForTest,
   executeSingleSubtaskLiveCodexWithDependenciesForTest,
+  LIVE_EXECUTION_LIVENESS_POLICY,
 } from "../src/live-execution.js";
 import { TESTED_CODEX_VERSION } from "../src/index.js";
 
@@ -57,6 +58,8 @@ type TestScenario =
   | "malformed-account"
   | "malformed-json"
   | "notification-overflow"
+  | "progress-absolute-timeout"
+  | "progress-token-completes"
   | "oversized-jsonl"
   | "shutdown-hang"
   | "shutdown-needs-kill"
@@ -79,6 +82,7 @@ type TestScenario =
   | "tool-action"
   | "turn-response-timeout"
   | "turn-failed"
+  | "unknown-progress-timeout"
   | "unknown-account"
   | "unknown-request"
   | "wrong-response-id";
@@ -95,7 +99,8 @@ const FAKE_OWNED_EXECUTABLE =
 const BASE_LIMITS = Object.freeze({
   startupTimeoutMs: 2_000,
   requestTimeoutMs: 2_000,
-  turnTimeoutMs: 2_000,
+  turnIdleTimeoutMs: 2_000,
+  turnAbsoluteTimeoutMs: 5_000,
   interruptTimeoutMs: 500,
   shutdownGraceMs: 500,
   terminateGraceMs: 500,
@@ -134,6 +139,13 @@ afterEach(() => {
 });
 
 describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
+  it("uses the fixed Console-owned liveness policy in production", () => {
+    expect(LIVE_EXECUTION_LIVENESS_POLICY).toEqual({
+      idleTimeoutMs: 300_000,
+      absoluteTimeoutMs: 1_200_000,
+    });
+  });
+
   it("uses canonical preflight text byte-for-byte and maps the completed live result", async () => {
     await withFixtureStorage(async (storage) => {
       const expected = new ExecutionInputPreflight(
@@ -520,7 +532,7 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
   it("times out once, interrupts once, and never retries the real turn", async () => {
     await withFixtureStorage(async (storage) => {
       const harness = makeDependencies("timeout", {
-        limits: { turnTimeoutMs: 30 },
+        limits: { turnIdleTimeoutMs: 30, turnAbsoluteTimeoutMs: 200 },
       });
       const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
         storage,
@@ -541,6 +553,82 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
           harness.children[0]?.signalCode !== null,
       ).toBe(true);
       expect(harness.workspaces.every((path) => !existsSync(path))).toBe(true);
+    });
+  });
+
+  it("refreshes idle only for validated exact-turn token progress", async () => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies("progress-token-completes", {
+        limits: {
+          turnIdleTimeoutMs: 400,
+          turnAbsoluteTimeoutMs: 2_000,
+        },
+      });
+      const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+        storage,
+        SUBTASK_ID,
+        "STANDARD_SUBTASK_EXECUTION",
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: true,
+        failureCode: null,
+        normalizedUsage: {
+          inputTokens: 21,
+          outputTokens: 5,
+          totalTokens: 26,
+        },
+        diagnostics: { interruptRequests: 0, turnStartRequests: 1 },
+      });
+    });
+  });
+
+  it("does not refresh idle for unknown traffic", async () => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies("unknown-progress-timeout", {
+        limits: {
+          turnIdleTimeoutMs: 300,
+          turnAbsoluteTimeoutMs: 1_200,
+        },
+      });
+      const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+        storage,
+        SUBTASK_ID,
+        "STANDARD_SUBTASK_EXECUTION",
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_TIMEOUT",
+        diagnostics: {
+          interruptRequests: 1,
+          turnStartRequests: 1,
+          unknownNotificationsIgnored: 2,
+        },
+      });
+    });
+  });
+
+  it("never extends the fixed absolute ceiling for repeated valid progress", async () => {
+    await withFixtureStorage(async (storage) => {
+      const harness = makeDependencies("progress-absolute-timeout", {
+        limits: {
+          turnIdleTimeoutMs: 300,
+          turnAbsoluteTimeoutMs: 550,
+        },
+      });
+      const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
+        storage,
+        SUBTASK_ID,
+        "STANDARD_SUBTASK_EXECUTION",
+        harness.dependencies,
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "APP_SERVER_TIMEOUT",
+        diagnostics: { interruptRequests: 1, turnStartRequests: 1 },
+      });
+      expect(result.normalizedUsage).toMatchObject({ totalTokens: 26 });
     });
   });
 
@@ -569,7 +657,7 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
   it("preserves the original turn timeout when the one interrupt fails", async () => {
     await withFixtureStorage(async (storage) => {
       const harness = makeDependencies("interrupt-failure", {
-        limits: { turnTimeoutMs: 30 },
+        limits: { turnIdleTimeoutMs: 30, turnAbsoluteTimeoutMs: 200 },
       });
       const result = await executeSingleSubtaskLiveCodexWithDependenciesForTest(
         storage,

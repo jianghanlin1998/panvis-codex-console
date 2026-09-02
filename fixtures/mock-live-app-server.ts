@@ -25,6 +25,8 @@ type Scenario =
   | "malformed-account"
   | "malformed-json"
   | "notification-overflow"
+  | "progress-absolute-timeout"
+  | "progress-token-completes"
   | "oversized-jsonl"
   | "shutdown-hang"
   | "shutdown-needs-kill"
@@ -47,6 +49,7 @@ type Scenario =
   | "tool-action"
   | "turn-response-timeout"
   | "turn-failed"
+  | "unknown-progress-timeout"
   | "unknown-account"
   | "unknown-request"
   | "wrong-response-id";
@@ -307,6 +310,28 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       }
       return;
     }
+    if (scenario === "progress-token-completes") {
+      setTimeout(emitUsage, 250);
+      setTimeout(() => emitCompletedTurn(agentText, "completed"), 500);
+      return;
+    }
+    if (scenario === "unknown-progress-timeout") {
+      setTimeout(
+        () => send({ method: "fixture/unknown/progress-1", params: null }),
+        100,
+      );
+      setTimeout(
+        () => send({ method: "fixture/unknown/progress-2", params: null }),
+        200,
+      );
+      return;
+    }
+    if (scenario === "progress-absolute-timeout") {
+      for (const delay of [100, 200, 300, 400, 500]) {
+        setTimeout(emitUsage, delay);
+      }
+      return;
+    }
     if (scenario === "command-approval") {
       send({
         id: "approval-command-live-1",
@@ -508,6 +533,15 @@ function emitCompletedTurn(
       },
     },
   });
+  emitUsage();
+  activeTurn = false;
+  send({
+    method: "turn/completed",
+    params: { threadId: THREAD_ID, turn: fixtureTurn(status) },
+  });
+}
+
+function emitUsage(): void {
   send({
     method: "thread/tokenUsage/updated",
     params: {
@@ -519,11 +553,6 @@ function emitCompletedTurn(
         modelContextWindow: 200_000,
       },
     },
-  });
-  activeTurn = false;
-  send({
-    method: "turn/completed",
-    params: { threadId: THREAD_ID, turn: fixtureTurn(status) },
   });
 }
 
@@ -699,6 +728,8 @@ function readScenario(): Scenario {
     "malformed-account",
     "malformed-json",
     "notification-overflow",
+    "progress-absolute-timeout",
+    "progress-token-completes",
     "oversized-jsonl",
     "shutdown-hang",
     "shutdown-needs-kill",
@@ -721,6 +752,7 @@ function readScenario(): Scenario {
     "tool-action",
     "turn-response-timeout",
     "turn-failed",
+    "unknown-progress-timeout",
     "unknown-account",
     "unknown-request",
     "wrong-response-id",

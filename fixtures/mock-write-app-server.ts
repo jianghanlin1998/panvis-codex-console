@@ -11,6 +11,7 @@ type Scenario =
   | "interrupted"
   | "malformed-response-after-tools"
   | "malformed-tool"
+  | "progress-success"
   | "success"
   | "turn-failed"
   | "turn-started-before-response"
@@ -166,6 +167,10 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
     if (scenario === "wait-for-interrupt") {
       return;
     }
+    if (scenario === "progress-success") {
+      scheduleProgressActiveSuccessfulTurn();
+      return;
+    }
     if (scenario === "approval") {
       send({
         id: "write-approval-1",
@@ -303,6 +308,58 @@ function emitAllowedToolItems(): void {
   });
 }
 
+function scheduleProgressActiveSuccessfulTurn(): void {
+  setTimeout(() => {
+    sendItemLifecycle({
+      type: "commandExecution",
+      id: "write-command-1",
+      command: "printf synthetic",
+      commandActions: [],
+      cwd: process.cwd(),
+      status: "completed",
+    });
+  }, 100);
+  setTimeout(() => {
+    sendItemLifecycle({
+      type: "fileChange",
+      id: "write-file-1",
+      changes: [
+        {
+          path: "owned-output.txt",
+          diff: "synthetic diff not retained",
+          kind: { type: "add" },
+        },
+      ],
+      status: "completed",
+    });
+    writeFileSync("owned-output.txt", "owned worktree write\n", {
+      encoding: "utf8",
+    });
+  }, 200);
+  setTimeout(() => {
+    send({
+      method: "item/completed",
+      params: {
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        completedAtMs: 2,
+        item: {
+          type: "agentMessage",
+          id: "write-agent-1",
+          text: "synthetic completion",
+        },
+      },
+    });
+  }, 300);
+  setTimeout(emitUsage, 400);
+  setTimeout(() => {
+    send({
+      method: "turn/completed",
+      params: { threadId: THREAD_ID, turn: fixtureTurn("completed") },
+    });
+  }, 500);
+}
+
 function sendItemLifecycle(item: JsonRecord): void {
   send({
     method: "item/started",
@@ -438,6 +495,7 @@ function readScenario(): Scenario {
     "interrupted",
     "malformed-response-after-tools",
     "malformed-tool",
+    "progress-success",
     "success",
     "turn-failed",
     "turn-started-before-response",

@@ -269,7 +269,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real target writes for the Step 6 repair: 0
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
-- Step 7 Backend Dogfood #1: IN PROGRESS / BLOCKED on the terminal replacement-run timeout
+- Step 7 Backend Dogfood #1: IN PROGRESS / integrated hardening Cycle 1 verified; Attempt #3 pending
 - Step 7 original shared-root `0755` blocker: CLOSED; first repair SHA `cf7dfee62defc8d4c198f70dc7c7d740611162f8`
 - First shared-root repair Fresh Focused Re-QA: FAIL
 - CTC-STEP7-ROOT-REQA-001 root cause: the installer could create `Codex Task Console` through a noncanonical symlinked `Application Support` parent before detecting the mismatch
@@ -296,17 +296,21 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 replacement durable ChatThread: `thr_d62f34803922633261403abcede08b8f` / `CLOSED`; provider thread `01a05fed-17e2-7db2-b24d-17c8987f2f11`
 - Step 7 replacement durable ExecutionRun: `run_655320be3f9fe709669d1394f56971a8` / `FAILED`; provider run `01a05fed-18a6-7523-a891-7fc937fab0db`; model `gpt-5.6-sol`
 - Step 7 replacement normalized usage: 28,084 input / 13,056 cached input / 410 output / 125 reasoning / 28,494 total tokens
+- Step 7 integrated hardening sweep: repair cycles 1/3; additional provider runs 0/2; mechanical recovery episodes 0/3
+- Step 7 Repair Cycle 1: candidate hardened — fixed-total 120-second wait replaced by validated-progress idle timeout 300,000 ms plus non-refreshable absolute ceiling 1,200,000 ms; public timeout code, one interrupt, zero retry, cleanup, durable terminalization, and ACTIVE ownership preservation unchanged
+- Step 7 Cycle 1 regressions: focused liveness 119 tests PASS; Codex-adapter corpus 20 files / 497 tests PASS; full suite 107 files / 3,525 tests PASS; lint/typecheck/build/diff-check PASS
+- Step 7 Cycle 1 acceptance: write-enabled hardening evidence only; Fresh Independent QA NOT PERFORMED
 - Step 7 cleanup: App Server child and transient runtime cleaned; daemon stopped cleanly; no lock/session authority
 - Step 7 target result: provider made no file or commit change; source `main` and ACTIVE owned branch both remain clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no remote exists
 - Step 7 product verification/implementation commit/checkpoint/release: NOT PERFORMED after the required hard-stop; ACTIVE clean owned worktree preserved
 - Step 7 automatic provider retry: NONE
 - Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
-- Step 7 recovery accounting: historical mechanical operator-invocation episode 1/3 PASS; replacement run used 0 additional recovery episodes and 0 retries
+- Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
 - Hanlin manual QA: NOT REQUIRED / NOT READY
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** Hanlin decides whether to authorize a bounded investigation or repair of the replacement `APP_SERVER_TIMEOUT`; do not retry the provider run, checkpoint, release, or begin Step 8 without new approval.
+**Next safe task:** Continue the approved integrated Step 7 sweep: re-read exact canonical authority, then issue Attempt #3 as additional provider run 1/2 only if every gate remains exact. Do not begin Step 8.
 
 ## Not operational yet
 - browser Console UI
