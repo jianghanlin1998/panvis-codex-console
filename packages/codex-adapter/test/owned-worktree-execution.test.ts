@@ -44,6 +44,7 @@ type TestDependencies = Parameters<
   typeof executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest
 >[2];
 type Scenario =
+  | "absolute-file-change-path-success"
   | "approval"
   | "hardlink-during-turn"
   | "head-drift-during-turn"
@@ -270,6 +271,40 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
         fixture.storage.close();
       }
       rmSync(fixture.directory, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts the exact .9 absolute file-change path representation inside the owned worktree", async () => {
+    const fixture = createFixture(true);
+    try {
+      const sourceBefore = sourceEvidence(fixture.sourcePath);
+      const harness = makeHarness(fixture, "absolute-file-change-path-success");
+      const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+        fixture.storage,
+        SUBTASK_ID,
+        harness.dependencies,
+      );
+
+      expect(result).toMatchObject({
+        success: true,
+        failureCode: null,
+        terminalTurnStatus: "completed",
+        diagnostics: {
+          interruptRequests: 0,
+          toolActionsObserved: 2,
+          turnStartRequests: 1,
+        },
+      });
+      expect(sourceEvidence(fixture.sourcePath)).toEqual(sourceBefore);
+      expect(
+        fixture.manager.resolveActiveOwnedWorktreeForSubtask(SUBTASK_ID)
+          .ownership.status,
+      ).toBe("ACTIVE");
+      expect(
+        readFileSync(join(fixture.worktreePath!, "owned-output.txt"), "utf8"),
+      ).toBe("owned worktree write\n");
+    } finally {
+      cleanupFixture(fixture);
     }
   });
 

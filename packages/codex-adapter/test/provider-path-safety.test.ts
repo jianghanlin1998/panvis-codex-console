@@ -43,7 +43,7 @@ describe("provider-reported path safety", () => {
     expect(commandCwdIsWithinForTest(nested, root)).toBe(false);
   });
 
-  it("accepts relative file changes only through real in-worktree ancestors", () => {
+  it("accepts relative or absolute file changes only through real in-worktree ancestors", () => {
     const root = fixtureRoot();
     const outside = fixtureRoot();
     mkdirSync(join(root, "nested space", "Unicode-目录"), { recursive: true });
@@ -57,7 +57,20 @@ describe("provider-reported path safety", () => {
         root,
       ),
     ).toBe(true);
+    expect(fileChangePathIsWithinForTest(join(root, "existing.txt"), root)).toBe(
+      true,
+    );
+    expect(
+      fileChangePathIsWithinForTest(
+        join(root, "nested space", "Unicode-目录", "new absolute file.txt"),
+        root,
+      ),
+    ).toBe(true);
     expect(fileChangePathIsWithinForTest("/absolute.txt", root)).toBe(false);
+    expect(
+      fileChangePathIsWithinForTest(join(outside, "outside.txt"), root),
+    ).toBe(false);
+    expect(fileChangePathIsWithinForTest(root, root)).toBe(false);
     expect(fileChangePathIsWithinForTest("../outside.txt", root)).toBe(false);
     expect(fileChangePathIsWithinForTest("nested space/./value.txt", root)).toBe(
       false,
@@ -65,6 +78,12 @@ describe("provider-reported path safety", () => {
     expect(fileChangePathIsWithinForTest("outside-link/value.txt", root)).toBe(
       false,
     );
+    expect(
+      fileChangePathIsWithinForTest(
+        join(root, "outside-link", "absolute-value.txt"),
+        root,
+      ),
+    ).toBe(false);
 
     rmSync(join(root, "nested space"), { recursive: true });
     symlinkSync(outside, join(root, "nested space"));

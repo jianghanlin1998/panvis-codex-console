@@ -13,7 +13,7 @@ import {
   rmSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 
 import type {
@@ -2488,19 +2488,24 @@ function commandCwdIsWithin(candidate: string, root: string): boolean {
 }
 
 function fileChangePathIsWithin(candidate: string, root: string): boolean {
+  const candidateIsAbsolute = isAbsolute(candidate);
+  const unrootedCandidate = candidateIsAbsolute
+    ? candidate.slice(parse(candidate).root.length)
+    : candidate;
   if (
-    isAbsolute(candidate) ||
+    !isAbsolute(root) ||
     candidate.includes("\0") ||
-    candidate.split(sep).some((segment) => segment === "" || segment === "." || segment === "..")
+    unrootedCandidate.split(sep).some(
+      (segment) => segment === "" || segment === "." || segment === "..",
+    )
   ) {
     return false;
   }
   try {
     const rootPath = realpathSync.native(root);
-    const target = resolve(rootPath, candidate);
-    if (!pathIsLexicallyWithin(target, rootPath) || target === rootPath) {
-      return false;
-    }
+    const target = candidateIsAbsolute
+      ? resolve(candidate)
+      : resolve(rootPath, candidate);
     let ancestor = target;
     try {
       const targetStat = lstatSync(target);

@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { linkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 type JsonRecord = Record<string, unknown>;
 type RequestId = number | string;
 type Scenario =
+  | "absolute-file-change-path-success"
   | "approval"
   | "hardlink-during-turn"
   | "head-drift-during-turn"
@@ -193,7 +195,7 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       return;
     }
     if (scenario !== "tools-before-response") {
-      emitAllowedToolItems();
+      emitAllowedToolItems(scenario === "absolute-file-change-path-success");
     }
     writeFileSync("owned-output.txt", "owned worktree write\n", {
       encoding: "utf8",
@@ -279,7 +281,7 @@ function validTurnStart(params: JsonRecord): boolean {
   );
 }
 
-function emitAllowedToolItems(): void {
+function emitAllowedToolItems(absoluteFileChangePath = false): void {
   sendItemLifecycle({
     type: "commandExecution",
     id: "write-command-1",
@@ -293,7 +295,9 @@ function emitAllowedToolItems(): void {
     id: "write-file-1",
     changes: [
       {
-        path: "owned-output.txt",
+        path: absoluteFileChangePath
+          ? join(process.cwd(), "owned-output.txt")
+          : "owned-output.txt",
         diff: "synthetic diff not retained",
         kind: { type: "add" },
       },
@@ -496,6 +500,7 @@ function readScenario(): Scenario {
     .find((argument) => argument.startsWith("--scenario="))
     ?.slice("--scenario=".length);
   const allowed: readonly Scenario[] = [
+    "absolute-file-change-path-success",
     "approval",
     "hardlink-during-turn",
     "head-drift-during-turn",

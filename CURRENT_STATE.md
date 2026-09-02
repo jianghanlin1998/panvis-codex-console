@@ -269,7 +269,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real target writes for the Step 6 repair: 0
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
-- Step 7 Backend Dogfood #1: BLOCKED / HUMAN_REQUIRED after Attempt #3; Attempt #4 not spent
+- Step 7 Backend Dogfood #1: IN_PROGRESS — disposable replay reproduced Attempt #3, Cycle 2 repair verified, Attempt #4 not spent
 - Step 7 original shared-root `0755` blocker: CLOSED; first repair SHA `cf7dfee62defc8d4c198f70dc7c7d740611162f8`
 - First shared-root repair Fresh Focused Re-QA: FAIL
 - CTC-STEP7-ROOT-REQA-001 root cause: the installer could create `Codex Task Console` through a noncanonical symlinked `Application Support` parent before detecting the mismatch
@@ -305,8 +305,13 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 Attempt #3 durable ExecutionRun: `run_49deed3d39bae04acd9eed0037521d68` / `FAILED`; provider run `01a0600d-8236-71c2-ab16-4cc8047ab61f`; model `gpt-5.6-sol`
 - Step 7 Attempt #3 normalized usage: 28,111 input / 13,056 cached input / 416 output / 145 reasoning / 28,527 total tokens; terminal turn status absent
 - Step 7 Attempt #3 failure-safety: PASS — App Server child and transient runtime cleaned; target source and exact ACTIVE owned worktree remain clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no provider-produced files or HEAD drift; no unresolved attempt
-- Step 7 Cycle 2: NOT STARTED — the ephemeral exact-runtime stream was not retained, the sanitized failure has no protocol-stage discriminator, and repo/schema comparison cannot identify which valid event triggered rejection; safe repair semantics are therefore indeterminate
-- Step 7 hard stop: HUMAN_REQUIRED under the approved sweep; no speculative protocol normalization, provider/version change, thread resume/recovery, or Attempt #4
+- Step 7 disposable setup correction: 1/3 — synthetic ownership ID corrected to the accepted `wt_` plus 32 lowercase-hex form; no provider turn or canonical state was consumed by setup
+- Step 7 disposable diagnostic: REPRODUCED with 1/1 model turn — first rejection was a correlated `item/started` `fileChange` / `inProgress` event with seven changes at the provider-path containment predicate; no raw protocol content retained
+- Step 7 diagnostic schema result: VALID for exact `codex-cli 0.148.0-alpha.9` — `FileChangeThreadItem` requires `changes`, `id`, `status`, and `type`; each `FileUpdateChange.path` is a string
+- Step 7 diagnostic authority result: UNCHANGED — thread/turn identities matched, tool lifecycle was new/active, approvals remained `never`, network remained disabled, and the disposable source/owned worktree remained clean
+- Step 7 Cycle 2: REPAIRED / VERIFIED — schema-valid absolute file-change paths are accepted only through canonical real ancestors inside the exact owned worktree; outside-root, traversal, directory, and symlink paths remain rejected
+- Step 7 Cycle 2 verification: focused 60/60; adapter/durable/worktree 652/652; full suite 107 files / 3,526 tests PASS; lint/typecheck/build/public hygiene PASS; the sandbox-only loopback `EPERM` full run was rerun unchanged with local-listener permission
+- Step 7 canonical Attempt #4: NOT SPENT pending repair commit/push and canonical gate reread
 - Step 7 final verification: idle-timeout fixture determinism focused regression PASS; lint/typecheck/build/diff-check PASS; full suite reached 105/107 files and 3,521/3,525 tests PASS, with four host-load-only 5-second timeouts persisting after the one permitted controlled-worker recovery; no further same-cause recovery authorized
 - Step 7 mechanical recovery: episode 1 closed sandbox loopback `EPERM` by rerunning with loopback permission; episode 2 exhausted the two-attempt same-cause ceiling for host-load-only timeouts
 - Step 7 cleanup: App Server child and transient runtime cleaned; daemon stopped cleanly; no lock/session authority
