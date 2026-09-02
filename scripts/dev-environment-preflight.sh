@@ -55,6 +55,9 @@ _ctc_dev_environment_main() {
     return 1
   fi
 
+  pnpm_config_offline=true
+  pnpm_config_pm_on_fail=ignore
+  export pnpm_config_offline pnpm_config_pm_on_fail
   CTC_DEV_ENVIRONMENT_READY=$_ctc_dev_repo_root
   export CTC_DEV_ENVIRONMENT_READY
   printf 'dev-environment-preflight: READY: offline installed toolchain at %s.\n' \

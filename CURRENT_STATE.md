@@ -8,7 +8,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Branch: `main`
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 - Public-repository hygiene guard: enabled
-- Development verification: offline fail-closed preflight; finite direct-local-tool checks; full suite bounded to four workers
+- Development verification: offline fail-closed preflight; explicit stable pnpm settings; full suite bounded to four workers
 
 ## Maturity
 - S0A Domain foundation: ACCEPTED

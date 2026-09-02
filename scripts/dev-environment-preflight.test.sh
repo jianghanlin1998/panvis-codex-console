@@ -46,10 +46,7 @@ make_fake_runtime() {
 make_fake_tool() {
   _tool_path=$1
   mkdir -p "${_tool_path%/*}"
-  printf '%s\n' \
-    '#!/bin/sh' \
-    "printf '%s|%s\\n' \"\${0##*/}\" \"\$*\" >>\"\$CTC_TEST_TOOL_LOG\"" \
-    'exit 0' >"$_tool_path"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$_tool_path"
   chmod +x "$_tool_path"
 }
 
@@ -58,7 +55,6 @@ make_fixture() {
   mkdir -p "$_fixture/scripts" "$_fixture/node_modules/.pnpm" "$_fixture/node_modules/.bin"
   cp "$_test_repo_root/scripts/runtime-preflight.sh" "$_fixture/scripts/"
   cp "$_test_repo_root/scripts/dev-environment-preflight.sh" "$_fixture/scripts/"
-  cp "$_test_repo_root/scripts/run-repo-check.sh" "$_fixture/scripts/"
   printf '%s\n' '{"name":"fixture","private":true}' >"$_fixture/package.json"
   printf '%s\n' "lockfileVersion: '9.0'" >"$_fixture/pnpm-lock.yaml"
   cp "$_fixture/pnpm-lock.yaml" "$_fixture/node_modules/.pnpm/lock.yaml"
@@ -66,9 +62,6 @@ make_fixture() {
   for _fixture_tool in vitest eslint tsc; do
     make_fake_tool "$_fixture/node_modules/.bin/$_fixture_tool"
   done
-  printf '%s\n' '#!/bin/sh' "printf '%s\\n' 'public' >>\"\$CTC_TEST_TOOL_LOG\"" \
-    >"$_fixture/scripts/check-public-repo-hygiene.sh"
-  chmod +x "$_fixture/scripts/check-public-repo-hygiene.sh"
 }
 
 assert_fixture_pass() {
@@ -79,7 +72,6 @@ assert_fixture_pass() {
     cd "$_fixture"
     CI="$_case_ci" PATH="$_test_fake_bin:/bin:/usr/bin" \
       CTC_TEST_PNPM_LOG="$_test_pnpm_log" \
-      CTC_TEST_TOOL_LOG="$_test_tool_log" \
       /bin/sh -c '. ./scripts/dev-environment-preflight.sh >/dev/null'
   ); then
     fail "$_case_name"
@@ -89,9 +81,7 @@ assert_fixture_pass() {
 
 _test_fake_bin="$_test_tmp/fake-bin"
 _test_pnpm_log="$_test_tmp/pnpm.log"
-_test_tool_log="$_test_tmp/tools.log"
 : >"$_test_pnpm_log"
-: >"$_test_tool_log"
 make_fake_runtime "$_test_fake_bin"
 
 # Prepared workspaces pass in normal and CI-like environments.
@@ -107,8 +97,7 @@ if ! (
   cd "$_test_prepared"
   PATH="$_test_fake_bin:/bin:/usr/bin" \
     CTC_TEST_PNPM_LOG="$_test_pnpm_log" \
-    CTC_TEST_TOOL_LOG="$_test_tool_log" \
-    /bin/sh -c '. ./scripts/dev-environment-preflight.sh >/dev/null; . ./scripts/dev-environment-preflight.sh >/dev/null; [ "$CTC_DEV_ENVIRONMENT_READY" = "$(pwd -P)" ]'
+    /bin/sh -c '. ./scripts/dev-environment-preflight.sh >/dev/null; . ./scripts/dev-environment-preflight.sh >/dev/null; [ "$CTC_DEV_ENVIRONMENT_READY" = "$(pwd -P)" ] && [ "$pnpm_config_offline" = true ] && [ "$pnpm_config_pm_on_fail" = ignore ]'
 ); then
   fail 'repeated preflight failed'
 fi
@@ -125,7 +114,7 @@ rm -rf -- "$_test_missing_modules/node_modules"
 if _test_output=$(
   cd "$_test_missing_modules"
   PATH="$_test_fake_bin:/bin:/usr/bin" CTC_TEST_PNPM_LOG="$_test_pnpm_log" \
-    CTC_TEST_TOOL_LOG="$_test_tool_log" /bin/sh -c '. ./scripts/dev-environment-preflight.sh' 2>&1
+    /bin/sh -c '. ./scripts/dev-environment-preflight.sh' 2>&1
 ); then
   fail 'missing node_modules unexpectedly passed'
 fi
@@ -141,7 +130,7 @@ rm -- "$_test_missing_binary/node_modules/.bin/vitest"
 if _test_output=$(
   cd "$_test_missing_binary"
   PATH="$_test_fake_bin:/bin:/usr/bin" CTC_TEST_PNPM_LOG="$_test_pnpm_log" \
-    CTC_TEST_TOOL_LOG="$_test_tool_log" /bin/sh -c '. ./scripts/dev-environment-preflight.sh' 2>&1
+    /bin/sh -c '. ./scripts/dev-environment-preflight.sh' 2>&1
 ); then
   fail 'missing local binary unexpectedly passed'
 fi
@@ -157,7 +146,7 @@ printf '%s\n' "lockfileVersion: '8.0'" >"$_test_stale_lock/pnpm-lock.yaml"
 if _test_output=$(
   cd "$_test_stale_lock"
   PATH="$_test_fake_bin:/bin:/usr/bin" CTC_TEST_PNPM_LOG="$_test_pnpm_log" \
-    CTC_TEST_TOOL_LOG="$_test_tool_log" /bin/sh -c '. ./scripts/dev-environment-preflight.sh' 2>&1
+    /bin/sh -c '. ./scripts/dev-environment-preflight.sh' 2>&1
 ); then
   fail 'stale installed lock snapshot unexpectedly passed'
 fi
@@ -172,7 +161,7 @@ make_fixture "$_test_status_failure"
 if _test_output=$(
   cd "$_test_status_failure"
   PATH="$_test_fake_bin:/bin:/usr/bin" CTC_TEST_PNPM_FAIL=1 \
-    CTC_TEST_PNPM_LOG="$_test_pnpm_log" CTC_TEST_TOOL_LOG="$_test_tool_log" \
+    CTC_TEST_PNPM_LOG="$_test_pnpm_log" \
     /bin/sh -c '. ./scripts/dev-environment-preflight.sh' 2>&1
 ); then
   fail 'pnpm dependency-status failure unexpectedly passed'
@@ -184,31 +173,6 @@ case "$_test_output" in
   *'DEPENDENCIES_NOT_PREPARED: installed dependencies do not match the manifests, lockfile, or workspace settings'*) ;;
   *) fail 'pnpm dependency-status failure did not return the actionable condition' ;;
 esac
-_test_count=$((_test_count + 1))
-
-# The repository helper is finite, requires preflight, and invokes only local tools.
-_test_ready_root=$(CDPATH= cd -- "$_test_prepared" && pwd -P)
-_test_pnpm_calls_before=$(wc -l <"$_test_pnpm_log")
-for _test_check in public lint typecheck test build; do
-  CTC_DEV_ENVIRONMENT_READY="$_test_ready_root" CTC_TEST_TOOL_LOG="$_test_tool_log" \
-    "$_test_prepared/scripts/run-repo-check.sh" "$_test_check" || \
-    fail "repository helper failed for $_test_check"
-done
-[ "$_test_pnpm_calls_before" -eq "$(wc -l <"$_test_pnpm_log")" ] || \
-  fail 'repository helper invoked pnpm after preflight'
-grep -F 'vitest|run --maxWorkers=4' "$_test_tool_log" >/dev/null || \
-  fail 'canonical test path did not use four workers'
-if CTC_DEV_ENVIRONMENT_READY="$_test_ready_root" \
-  "$_test_prepared/scripts/run-repo-check.sh" arbitrary >/dev/null 2>&1; then
-  fail 'repository helper accepted an arbitrary command'
-fi
-if CTC_DEV_ENVIRONMENT_READY="$_test_ready_root" \
-  "$_test_prepared/scripts/run-repo-check.sh" lint extra >/dev/null 2>&1; then
-  fail 'repository helper accepted extra arguments'
-fi
-if "$_test_prepared/scripts/run-repo-check.sh" lint >/dev/null 2>&1; then
-  fail 'repository helper ran without established preflight state'
-fi
 _test_count=$((_test_count + 1))
 
 # Real pnpm 11.19 validates the prepared snapshot without registry access and
@@ -259,7 +223,7 @@ for _test_ci in '' true; do
   if ! (
     cd "$_test_real_fixture"
     CI="$_test_ci" pnpm_config_registry='http://127.0.0.1:9' \
-      /bin/sh -c '. ./scripts/dev-environment-preflight.sh >/dev/null'
+      /bin/sh -c '. ./scripts/dev-environment-preflight.sh >/dev/null; [ "$(pnpm config get enableGlobalVirtualStore)" = false ]; [ "$(pnpm config get verifyDepsBeforeRun)" = false ]; pnpm run >/dev/null'
   ); then
     fail "real pnpm prepared-workspace check failed for CI=$_test_ci"
   fi
@@ -268,6 +232,10 @@ done
   fail 'real pnpm preflight changed .modules.yaml'
 [ "$_test_real_lock_before" = "$(cksum "$_test_real_fixture/node_modules/.pnpm/lock.yaml")" ] || \
   fail 'real pnpm preflight changed the installed lockfile snapshot'
+_test_count=$((_test_count + 1))
+
+grep -F '"test": "vitest run --maxWorkers=4"' "$_test_repo_root/package.json" >/dev/null || \
+  fail 'canonical package test script did not use four workers'
 _test_count=$((_test_count + 1))
 
 node -e '
