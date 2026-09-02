@@ -345,15 +345,17 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-ORCH-HARD-005: CLOSED — impossible completion maturity cannot claim eligibility
 - CTC-ORCH-HARD-006: CLOSED — public results and constants are deeply immutable
 - CTC-ORCH-HARD-007: CLOSED — dependency tuple ordering is delimiter-safe and deterministic
-- Step 8A Fresh Independent QA: PENDING
+- Step 8A Fresh Independent QA on `70d8b6ddcf310f3178b226bf1af11fb837ce1a49`: FAIL
+- CTC-ORCH-FQA-001: REPAIRED on `9d2030d815d40d51be0b79489f3185ed7bc450bd`; Focused Fresh Re-QA pending
+- Step 8A ACCEPTED: NO / PENDING RE-QA
 - Orchestration persistence: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Step 8B: NOT STARTED
+- Step 8B: NOT STARTED / BLOCKED on Step 8A ACCEPTED
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Independent no-write QA of Roadmap Step 8A. Do not begin Step 8B yet.
+**Next safe task:** NEW CHAT Focused Fresh Independent Re-QA of CTC-ORCH-FQA-001. Do not begin Step 8B yet.
 
 ## Not operational yet
 - browser Console UI
