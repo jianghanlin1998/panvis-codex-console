@@ -354,7 +354,15 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8A ACCEPTED: YES
 - Step 8A accepted evidence SHA: `addc44200662cdddd69095065bee27eaeac43ddb`
 - Step 8B: STARTED / overall NOT COMPLETE
-- Step 8B1 Durable Orchestration Planning State V0: IMPLEMENTED
+- Step 8B1 implementation SHA: `6d1add21949d7bf03f287ed2a709c03ba99858fc`
+- Step 8B1 Comprehensive Hardening: PASS
+- Step 8B1 Durable Orchestration Planning State V0 maturity: HARDENED
+- CTC-ORCH-B1-HARD-001: CLOSED — durable review preserves accepted Step 8A graph-validation order
+- CTC-ORCH-B1-HARD-002: CLOSED — historical replay is isolated from later mutable status and proposed-ID collisions
+- CTC-ORCH-B1-HARD-003: CLOSED — nested planning mutations use savepoint-equivalent rollback isolation
+- CTC-ORCH-B1-HARD-004: CLOSED — durable artifact chronology and regressing clocks fail closed atomically
+- CTC-ORCH-B1-HARD-005: CLOSED — decisions and materializations require an exact candidate revision FK
+- Step 8B1 Fresh Independent QA: PENDING
 - Durable Plan Candidate / Reviewer Decision artifact persistence and deterministic review-state replay: IMPLEMENTED
 - Durable materialization authority and approved graph replay: IMPLEMENTED
 - Durable orchestration text policy: well-formed Unicode preserved exactly without normalization; C0/C1 controls and unpaired surrogates rejected
@@ -363,12 +371,11 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - IMPLEMENTED -> HARDENED -> ACCEPTED public durable mutations: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Step 8B2: NOT STARTED
-- Step 8B dependency gate: Step 8A ACCEPTED satisfied
+- Step 8B2: NOT STARTED / BLOCKED on Step 8B1 ACCEPTED
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT comprehensive write-enabled hardening of Step 8B1. Do not begin Step 8B2.
+**Next safe task:** NEW CHAT Fresh Independent no-write QA of Step 8B1. Do not begin Step 8B2.
 
 ## Not operational yet
 - browser Console UI

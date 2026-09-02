@@ -11,7 +11,6 @@ import {
   beginPlanReview,
   materializeApprovedPlan,
   submitPlannerRevision,
-  validatePlanCandidateGraph,
 } from "@codex-task-console/orchestration";
 import type {
   MaterializedGraph,
@@ -133,16 +132,13 @@ const parseStoredCandidate = (row: CandidateRow): DurablePlanCandidateArtifact =
   } catch {
     throw malformedStoredData();
   }
-  const validation = validatePlanCandidateGraph(input);
-  if (!validation.valid || !candidateHasDurableText(validation.candidate)) {
-    throw malformedStoredData();
-  }
-  const started = beginPlanReview(validation.candidate);
+  const started = beginPlanReview(input as PlanCandidate);
   if (started.kind !== "REVIEW_STATE") {
     throw malformedStoredData();
   }
-  const candidate = validation.candidate;
+  const candidate = started.state.candidate;
   if (
+    !candidateHasDurableText(candidate) ||
     !isCanonicalTimestamp(row.createdAt) ||
     canonicalCandidatePayload(candidate) !== row.candidatePayload ||
     candidate.projectId !== row.projectId ||
@@ -217,6 +213,7 @@ const parseStoredDecision = (row: DecisionRow): DurableReviewDecisionArtifact =>
 interface ReplayedPlanning {
   readonly snapshot: DurableOrchestrationPlanningSnapshot;
   readonly materializationRow: MaterializationRow | null;
+  readonly lastArtifactAt: string;
 }
 
 export class DurableOrchestrationPlanningStore {
@@ -236,7 +233,7 @@ export class DurableOrchestrationPlanningStore {
       if (this.#getTrack(candidate.bigTaskId) !== undefined) {
         throw planningConflict();
       }
-      this.#validateCandidateHierarchy(candidate, false);
+      this.#validateMutationEligibility(candidate);
       const started = beginPlanReview(candidate);
       if (started.kind !== "REVIEW_STATE") {
         throw invalidPlanningInput();
@@ -265,6 +262,7 @@ export class DurableOrchestrationPlanningStore {
       if (replayed.materializationRow !== null) {
         throw planningConflict();
       }
+      this.#validateMutationEligibility(replayed.snapshot.reviewState.candidate);
       const result = applyReviewerDecision(replayed.snapshot.reviewState, decisionInput);
       if (result.kind !== "REVIEW_STATE" || !decisionHasDurableText(decisionInput)) {
         throw invalidPlanningInput();
@@ -281,7 +279,7 @@ export class DurableOrchestrationPlanningStore {
             decision.outcome === "REJECT"
               ? JSON.stringify(decision.revisionRequirements)
               : null,
-          createdAt: this.#timestamp(),
+          createdAt: this.#timestampAtOrAfter(replayed.lastArtifactAt),
         })
         .run();
       const next = this.#requireReplay(bigTaskId).snapshot;
@@ -302,12 +300,16 @@ export class DurableOrchestrationPlanningStore {
       if (replayed.materializationRow !== null) {
         throw planningConflict();
       }
-      this.#validateCandidateHierarchy(candidate, false);
+      this.#validateMutationEligibility(candidate);
       const result = submitPlannerRevision(replayed.snapshot.reviewState, candidate);
       if (result.kind !== "REVIEW_STATE") {
         throw invalidPlanningInput();
       }
-      this.#insertCandidate(candidate, result.state.candidateBinding, this.#timestamp());
+      this.#insertCandidate(
+        candidate,
+        result.state.candidateBinding,
+        this.#timestampAtOrAfter(replayed.lastArtifactAt),
+      );
       const next = this.#requireReplay(candidate.bigTaskId).snapshot;
       if (JSON.stringify(next.reviewState) !== JSON.stringify(result.state)) {
         throw new TaskStorageError(
@@ -326,7 +328,15 @@ export class DurableOrchestrationPlanningStore {
       if (replayed.materializationRow !== null) {
         return replayed.snapshot;
       }
+      this.#validateMutationEligibility(replayed.snapshot.reviewState.candidate);
       const result = materializeApprovedPlan(replayed.snapshot.reviewState);
+      if (result.kind === "GRAPH_INVALID") {
+        throw new TaskStorageError(
+          "DEPENDENCY_VALIDATION_FAILED",
+          "The approved plan graph is invalid.",
+          result.validation.errors.map(({ code }) => code),
+        );
+      }
       if (result.kind !== "MATERIALIZED") {
         throw invalidPlanningInput();
       }
@@ -337,7 +347,7 @@ export class DurableOrchestrationPlanningStore {
           projectId: result.graph.projectId,
           planRevision: result.graph.planRevision,
           candidateBinding: result.graph.candidateBinding,
-          materializedAt: this.#timestamp(),
+          materializedAt: this.#timestampAtOrAfter(replayed.lastArtifactAt),
         })
         .run();
       return this.#requireReplay(bigTaskId).snapshot;
@@ -350,14 +360,17 @@ export class DurableOrchestrationPlanningStore {
   }
 
   #validateCandidateInput(candidateInput: PlanCandidate): PlanCandidate {
-    const validation = validatePlanCandidateGraph(candidateInput);
-    if (!validation.valid || !candidateHasDurableText(validation.candidate)) {
+    const started = beginPlanReview(candidateInput);
+    if (
+      started.kind !== "REVIEW_STATE" ||
+      !candidateHasDurableText(started.state.candidate)
+    ) {
       throw invalidPlanningInput();
     }
-    return validation.candidate;
+    return started.state.candidate;
   }
 
-  #validateCandidateHierarchy(candidate: PlanCandidate, stored: boolean): void {
+  #validateHistoricalHierarchy(candidate: PlanCandidate): void {
     const project = this.#database
       .select({ id: projectsTable.id })
       .from(projectsTable)
@@ -372,17 +385,49 @@ export class DurableOrchestrationPlanningStore {
       .from(bigTasksTable)
       .where(eq(bigTasksTable.id, candidate.bigTaskId))
       .get();
-    const validIdentity =
+    const parsedProjectId = ProjectIdSchema.safeParse(project?.id);
+    const parsedBigTaskId = BigTaskIdSchema.safeParse(bigTask?.id);
+    if (
       project !== undefined &&
       bigTask !== undefined &&
-      ProjectIdSchema.safeParse(project.id).success &&
-      BigTaskIdSchema.safeParse(bigTask.id).success &&
-      bigTask.projectId === candidate.projectId &&
-      bigTask.status === "IN_PROGRESS";
-    if (!validIdentity) {
-      if (stored) {
-        throw malformedStoredData();
-      }
+      parsedProjectId.success &&
+      parsedProjectId.data === project.id &&
+      parsedBigTaskId.success &&
+      parsedBigTaskId.data === bigTask.id &&
+      bigTask.projectId === candidate.projectId
+    ) {
+      return;
+    }
+    throw malformedStoredData();
+  }
+
+  #validateMutationEligibility(candidate: PlanCandidate): void {
+    const project = this.#database
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(eq(projectsTable.id, candidate.projectId))
+      .get();
+    const bigTask = this.#database
+      .select({
+        id: bigTasksTable.id,
+        projectId: bigTasksTable.projectId,
+        status: bigTasksTable.status,
+      })
+      .from(bigTasksTable)
+      .where(eq(bigTasksTable.id, candidate.bigTaskId))
+      .get();
+    const parsedProjectId = ProjectIdSchema.safeParse(project?.id);
+    const parsedBigTaskId = BigTaskIdSchema.safeParse(bigTask?.id);
+    if (
+      project === undefined ||
+      bigTask === undefined ||
+      !parsedProjectId.success ||
+      parsedProjectId.data !== project.id ||
+      !parsedBigTaskId.success ||
+      parsedBigTaskId.data !== bigTask.id ||
+      bigTask.projectId !== candidate.projectId ||
+      bigTask.status !== "IN_PROGRESS"
+    ) {
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
         "The eligible Project and Big Task hierarchy does not exist.",
@@ -392,7 +437,7 @@ export class DurableOrchestrationPlanningStore {
     for (const proposedSubtask of candidate.subtasks) {
       const parsedId = SubtaskIdSchema.safeParse(proposedSubtask.id);
       if (!parsedId.success || parsedId.data !== proposedSubtask.id) {
-        throw stored ? malformedStoredData() : invalidPlanningInput();
+        throw invalidPlanningInput();
       }
       const existing = this.#database
         .select({ bigTaskId: subtasksTable.bigTaskId })
@@ -400,7 +445,7 @@ export class DurableOrchestrationPlanningStore {
         .where(eq(subtasksTable.id, proposedSubtask.id))
         .get();
       if (existing !== undefined && existing.bigTaskId !== candidate.bigTaskId) {
-        throw stored ? malformedStoredData() : planningConflict();
+        throw planningConflict();
       }
     }
   }
@@ -482,23 +527,27 @@ export class DurableOrchestrationPlanningStore {
     if (first.candidate.projectId !== track.projectId || first.candidate.bigTaskId !== track.bigTaskId) {
       throw malformedStoredData();
     }
-    this.#validateCandidateHierarchy(first.candidate, true);
+    this.#validateHistoricalHierarchy(first.candidate);
     const started = beginPlanReview(first.candidate);
     if (started.kind !== "REVIEW_STATE") {
       throw malformedStoredData();
     }
     let state = started.state;
     let decisionIndex = 0;
+    let lastArtifactAt = track.createdAt;
     for (let candidateIndex = 0; candidateIndex < candidateHistory.length; candidateIndex += 1) {
       const artifact = candidateHistory[candidateIndex]!;
+      const candidateRow = candidateRows[candidateIndex]!;
       if (
         artifact.candidate.projectId !== track.projectId ||
         artifact.candidate.bigTaskId !== track.bigTaskId ||
-        artifact.candidate.revision !== first.candidate.revision + candidateIndex
+        artifact.candidate.revision !== first.candidate.revision + candidateIndex ||
+        new Date(candidateRow.createdAt).getTime() < new Date(lastArtifactAt).getTime()
       ) {
         throw malformedStoredData();
       }
-      this.#validateCandidateHierarchy(artifact.candidate, true);
+      lastArtifactAt = candidateRow.createdAt;
+      this.#validateHistoricalHierarchy(artifact.candidate);
       if (candidateIndex > 0) {
         const revised = submitPlannerRevision(state, artifact.candidate);
         if (revised.kind !== "REVIEW_STATE") {
@@ -508,11 +557,19 @@ export class DurableOrchestrationPlanningStore {
       }
       const decisionArtifact = reviewDecisions[decisionIndex];
       if (decisionArtifact?.decision.planRevision === artifact.candidate.revision) {
+        const decisionRow = decisionRows[decisionIndex]!;
+        if (
+          new Date(decisionRow.createdAt).getTime() <
+          new Date(lastArtifactAt).getTime()
+        ) {
+          throw malformedStoredData();
+        }
         const decided = applyReviewerDecision(state, decisionArtifact.decision);
         if (decided.kind !== "REVIEW_STATE") {
           throw malformedStoredData();
         }
         state = decided.state;
+        lastArtifactAt = decisionRow.createdAt;
         decisionIndex += 1;
       }
     }
@@ -534,11 +591,14 @@ export class DurableOrchestrationPlanningStore {
         materializationRow.bigTaskId !== track.bigTaskId ||
         materializationRow.projectId !== track.projectId ||
         materializationRow.planRevision !== materialized.graph.planRevision ||
-        materializationRow.candidateBinding !== materialized.graph.candidateBinding
+        materializationRow.candidateBinding !== materialized.graph.candidateBinding ||
+        new Date(materializationRow.materializedAt).getTime() <
+          new Date(lastArtifactAt).getTime()
       ) {
         throw malformedStoredData();
       }
       materializedGraph = materialized.graph;
+      lastArtifactAt = materializationRow.materializedAt;
     }
 
     return {
@@ -551,6 +611,7 @@ export class DurableOrchestrationPlanningStore {
         materializedGraph,
       }),
       materializationRow,
+      lastArtifactAt,
     };
   }
 
@@ -569,26 +630,49 @@ export class DurableOrchestrationPlanningStore {
   }
 
   #timestamp(): string {
-    const timestamp = this.#clock().toISOString();
-    if (Number.isNaN(new Date(timestamp).getTime())) {
+    const timestamp = this.#clock();
+    if (!(timestamp instanceof Date) || Number.isNaN(timestamp.getTime())) {
       throw new TaskStorageError("STORAGE_OPERATION_FAILED", "The storage clock is invalid.");
+    }
+    return timestamp.toISOString();
+  }
+
+  #timestampAtOrAfter(previousTimestamp: string): string {
+    const timestamp = this.#timestamp();
+    if (new Date(timestamp).getTime() < new Date(previousTimestamp).getTime()) {
+      throw new TaskStorageError(
+        "STORAGE_OPERATION_FAILED",
+        "The storage clock cannot precede durable orchestration state.",
+      );
     }
     return timestamp;
   }
 
   #atomic<T>(operation: () => T): T {
     const ownsTransaction = !this.#sqlite.isTransaction;
+    const savepoint = "durable_orchestration_planning_operation";
     if (ownsTransaction) {
       try {
         this.#sqlite.exec("BEGIN IMMEDIATE");
       } catch {
         throw new TaskStorageError("TRANSACTION_FAILED", "The transaction could not start.");
       }
+    } else {
+      try {
+        this.#sqlite.exec(`SAVEPOINT ${savepoint}`);
+      } catch {
+        throw new TaskStorageError(
+          "TRANSACTION_FAILED",
+          "The durable orchestration transaction could not start.",
+        );
+      }
     }
     try {
       const result = operation();
       if (ownsTransaction) {
         this.#sqlite.exec("COMMIT");
+      } else {
+        this.#sqlite.exec(`RELEASE ${savepoint}`);
       }
       return result;
     } catch (error) {
@@ -597,6 +681,16 @@ export class DurableOrchestrationPlanningStore {
           this.#sqlite.exec("ROLLBACK");
         } catch {
           throw new TaskStorageError("TRANSACTION_FAILED", "The transaction rollback failed.");
+        }
+      } else if (this.#sqlite.isTransaction) {
+        try {
+          this.#sqlite.exec(`ROLLBACK TO ${savepoint}`);
+          this.#sqlite.exec(`RELEASE ${savepoint}`);
+        } catch {
+          throw new TaskStorageError(
+            "TRANSACTION_FAILED",
+            "The durable orchestration transaction rollback failed.",
+          );
         }
       }
       if (error instanceof TaskStorageError) {

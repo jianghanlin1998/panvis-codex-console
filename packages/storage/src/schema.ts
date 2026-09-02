@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   check,
+  foreignKey,
   index,
   integer,
   primaryKey,
@@ -173,6 +174,16 @@ export const orchestrationReviewDecisionsTable = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.bigTaskId, table.planRevision] }),
+    foreignKey({
+      name: "orchestration_review_decisions_candidate_fk",
+      columns: [table.bigTaskId, table.planRevision],
+      foreignColumns: [
+        orchestrationPlanCandidatesTable.bigTaskId,
+        orchestrationPlanCandidatesTable.revision,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("cascade"),
     check(
       "orchestration_review_decisions_revision_check",
       sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
@@ -210,6 +221,16 @@ export const orchestrationMaterializationsTable = sqliteTable(
     materializedAt: text("materialized_at").notNull(),
   },
   (table) => [
+    foreignKey({
+      name: "orchestration_materializations_candidate_fk",
+      columns: [table.bigTaskId, table.planRevision],
+      foreignColumns: [
+        orchestrationPlanCandidatesTable.bigTaskId,
+        orchestrationPlanCandidatesTable.revision,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("cascade"),
     check(
       "orchestration_materializations_revision_check",
       sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
