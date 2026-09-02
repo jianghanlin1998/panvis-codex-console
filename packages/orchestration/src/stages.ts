@@ -94,16 +94,22 @@ const parseInput = (input: unknown): Readonly<ParsedStageTransitionInput> | null
     graph === null ||
     typeof input.subtaskId !== "string" ||
     !isRecord(input.evidence) ||
-    Object.keys(input.evidence).length !== 2 ||
+    Object.keys(input.evidence).length !== 3 ||
     !Object.hasOwn(input.evidence, "candidateBinding") ||
+    !Object.hasOwn(input.evidence, "subtaskId") ||
     !Object.hasOwn(input.evidence, "facts") ||
-    input.evidence.candidateBinding !== graph.candidateBinding
+    input.evidence.candidateBinding !== graph.candidateBinding ||
+    typeof input.evidence.subtaskId !== "string"
   ) {
     return null;
   }
   const subtask = graph.subtasks.find(({ id }) => id === input.subtaskId);
   const evidence = parseEvidenceFacts(input.evidence.facts);
-  if (subtask === undefined || evidence === null) {
+  if (
+    subtask === undefined ||
+    input.evidence.subtaskId !== subtask.id ||
+    evidence === null
+  ) {
     return null;
   }
   return Object.freeze({

@@ -1,6 +1,6 @@
 # Deterministic Orchestration Kernel V0
 
-Status: Roadmap Step 8A HARDENED. Fresh Independent QA is pending. This is a pure control-plane kernel; Roadmap Step 8 overall is not complete.
+Status: Roadmap Step 8A HARDENED. Acceptance is pending Focused Fresh Re-QA. This is a pure control-plane kernel; Roadmap Step 8 overall is not complete.
 
 ## Authority boundary
 
@@ -13,14 +13,14 @@ Status: Roadmap Step 8A HARDENED. Fresh Independent QA is pending. This is a pur
 - Two automatic Planner revisions are allowed after rejection. A third rejection returns `HUMAN_REQUIRED / PLAN_REVIEW_EXHAUSTED`; escalation returns `HUMAN_REQUIRED / REVIEW_ESCALATED` immediately.
 - Approved plans are validated against canonical ownership and Domain dependency rules before materialization. Materialization freezes approved plan order, canonical dependency order, and the exact candidate binding.
 - A materialized graph is immutable. Any add, remove, split, merge, replacement, or dependency-structure change returns `HUMAN_REQUIRED / REPLAN_REQUIRED` without changing the graph.
-- Stage evidence, dispatch state/facts, and completion state snapshots must carry the exact materialized candidate binding. Stage profiles are derived from the bound graph rather than supplied independently. Evidence from unrelated or future stages fails closed.
+- Stage evidence snapshots must carry both the exact materialized candidate binding and the exact target Subtask ID; both must match the transition request before any evidence fact can authorize it. Dispatch state/facts and completion state snapshots carry the exact materialized candidate binding. Stage profiles are derived from the bound graph rather than supplied independently. Evidence from sibling Subtasks, unrelated candidates, or unrelated or future stages fails closed.
 - Write-enabled dispatch is serial: at most one Subtask is selected, approved-plan order wins, and dependency readiness uses existing `HARDENED` / `ACCEPTED` semantics. Project capacity is an exact Project-scoped snapshot with zero or one active write ID. Typed repository, context, budget, capacity, worktree, and human-authority facts gate execution.
 - High-risk Fresh QA may enter exactly one Repair and one Focused Re-QA. A blocking Focused Re-QA returns `HUMAN_REQUIRED / REPAIR_REQA_EXHAUSTED`; impossible repair-counter/stage combinations fail closed.
 - Completion evaluation returns `BIG_TASK_COMPLETION_ELIGIBLE` only for an exact bound snapshot in which every graph Subtask reports `COMPLETE` and no completed Subtask remains `NOT_STARTED`. It does not prove transition history, mutate Big Task status, or infer persisted acceptance.
 
 ## Trusted producer boundary
 
-Step 8A operations validate exact immutable shapes, graph ownership, candidate bindings, evidence relevance, dependency readiness, and local transition rules. They do not persist or prove historical traversal. Step 8B must preserve the candidate binding and Project scope when producing authoritative stage, execution, capacity, and completion snapshots; it must not relabel stale evidence or reconstruct arbitrary `COMPLETE` history. Proposal-only `taskContractRef` and revision-requirement text retain the existing bounded trim/length policy; no new durable Unicode-normalization or control-character policy is introduced by Step 8A.
+Step 8A operations validate exact immutable shapes, graph ownership, candidate and stage-evidence Subtask bindings, evidence relevance, dependency readiness, and local transition rules. They do not persist or prove historical traversal. Step 8B trusted producers must preserve both the candidate binding and target Subtask binding for stage evidence, as well as Project scope when producing execution, capacity, and completion snapshots; they must not relabel stale evidence or reconstruct arbitrary `COMPLETE` history. Proposal-only `taskContractRef` and revision-requirement text retain the existing bounded trim/length policy; no new durable Unicode-normalization or control-character policy is introduced by Step 8A.
 
 ## Deferred to Step 8B or later
 

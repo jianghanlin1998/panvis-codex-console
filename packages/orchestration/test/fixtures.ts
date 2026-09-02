@@ -170,7 +170,9 @@ export const projectWriteCapacityFor = (
 export const stageEvidenceFor = (
   graph: MaterializedGraph,
   facts: Readonly<StageEvidenceFacts>,
+  subtaskId = graph.subtasks[0]!.id,
 ): StageEvidenceSnapshot => ({
   candidateBinding: graph.candidateBinding,
+  subtaskId,
   facts,
 });

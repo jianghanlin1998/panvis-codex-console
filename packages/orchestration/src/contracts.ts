@@ -249,6 +249,7 @@ export interface StageEvidenceFacts {
 
 export interface StageEvidenceSnapshot {
   readonly candidateBinding: PlanCandidateBinding;
+  readonly subtaskId: SubtaskId;
   readonly facts: Readonly<StageEvidenceFacts>;
 }
 
