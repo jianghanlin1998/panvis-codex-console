@@ -86,6 +86,12 @@ handshake; create or resume a thread; start, interrupt, or stream a turn; handle
 live approvals; access credentials; call a model/provider; implement transport,
 persistence, orchestration, worktrees, UI, or another provider.
 
+C-lite proves generated schema and consumed contract compatibility, not the
+runtime's behavioral normalization of a real `thread/start` response. The Step
+7 `writableRoots: []` response exposed that boundary. Fresh exact-runtime
+no-model Re-QA verifies the repaired interpretation; a bounded semantic probe
+for future runtime upgrades remains a separate task.
+
 C-lite remains the fail-closed compatibility gate for both the accepted
 read-only execution path and the hardened write-enabled owned-worktree path.
 The write entrypoint additionally starts the exact tested runtime with its

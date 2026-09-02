@@ -219,6 +219,7 @@ interface OwnedWorktreeThreadPolicy {
   readonly cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE";
   readonly ephemeral: true;
   readonly sandbox: "workspaceWrite";
+  /** Exact root count from the accepted turn/start policy, not thread/start. */
   readonly writableRootCount: 1;
   readonly networkAccess: false;
 }
@@ -1419,14 +1420,6 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     );
     evidence.providerThread = mapCodexThreadReference(thread.threadId);
     evidence.model = mapCodexModelReference(thread.model);
-    evidence.threadPolicy = {
-      approvalPolicy: "never",
-      cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE",
-      ephemeral: true,
-      sandbox: "workspaceWrite",
-      writableRootCount: 1,
-      networkAccess: false,
-    };
     try {
       dependencies.beforeDurableOperation?.("BIND_THREAD");
       storage.bindChatThreadProviderReference({
@@ -1487,6 +1480,14 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     if (eventTracker.turnId !== turnId) {
       throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     }
+    evidence.threadPolicy = {
+      approvalPolicy: "never",
+      cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE",
+      ephemeral: true,
+      sandbox: "workspaceWrite",
+      writableRootCount: 1,
+      networkAccess: false,
+    };
     evidence.providerRun = mapCodexTurnReference(thread.threadId, turnId);
     try {
       dependencies.beforeDurableOperation?.("START_RUN");
@@ -2288,20 +2289,26 @@ function parseOwnedWorktreeThreadStartResult(
   if (thread.ephemeral !== true) {
     throw new LiveExecutionError("EPHEMERAL_THREAD_REQUIRED");
   }
-  if (record.cwd !== worktreePath || record.approvalPolicy !== "never") {
-    throw new LiveExecutionError("WRITE_POLICY_REQUIRED");
-  }
-  const sandbox = requireRecord(record.sandbox);
   if (
-    sandbox.type !== "workspaceWrite" ||
-    sandbox.networkAccess !== false ||
-    !Array.isArray(sandbox.writableRoots) ||
-    sandbox.writableRoots.length !== 1 ||
-    sandbox.writableRoots[0] !== worktreePath
+    record.cwd !== worktreePath ||
+    thread.cwd !== worktreePath ||
+    record.approvalPolicy !== "never" ||
+    record.approvalsReviewer !== "user"
   ) {
     throw new LiveExecutionError("WRITE_POLICY_REQUIRED");
   }
-  if (record.approvalsReviewer !== "user") {
+  const sandbox = requireRecordForCode(
+    record.sandbox,
+    "WRITE_POLICY_REQUIRED",
+  );
+  if (
+    sandbox.type !== "workspaceWrite" ||
+    sandbox.networkAccess !== false ||
+    sandbox.excludeSlashTmp !== false ||
+    sandbox.excludeTmpdirEnvVar !== false ||
+    !Array.isArray(sandbox.writableRoots) ||
+    sandbox.writableRoots.length !== 0
+  ) {
     throw new LiveExecutionError("WRITE_POLICY_REQUIRED");
   }
   return {

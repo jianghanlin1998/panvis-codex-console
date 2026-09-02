@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-09-01
+Last reconciled: 2026-09-02
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -280,26 +280,26 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 resume gate: SATISFIED
 - Active owned runtime continuity: PASS
 - Step 7 operator invocation recovery: MECHANICAL episode 1 PASS — supported `pnpm ctc:operator <command>` form used; documented extra-`--` mismatch remains a non-blocking follow-up
-- Step 7 target source: AI Update Board `main` remains clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no remotes and no product edits
-- Step 7 canonical hierarchy: `prj_ai_update_board` / `bt_ai_update_board` / `st_ai_update_board_ui` CREATED and exact readback PASS
-- Step 7 Subtask state: `IN_PROGRESS` / `NOT_STARTED`
-- Step 7 dependency readiness: PASS — valid, ready, zero blockers, zero edges
-- Step 7 Local Control ping/status/provision: PASS
-- Step 7 ACTIVE ownership: `wt_d71afbd8e735b2246feb3fec3ae39d46`; clean at bootstrap HEAD on retained `ctc/worktree/wt_d71afbd8e735b2246feb3fec3ae39d46`
-- Step 7 provider/model execution: 1 turn attempted / allowance exhausted; FAILED closed before provider thread/run start with `WRITE_POLICY_REQUIRED`
-- Step 7 durable ChatThread: `thr_f37fa708f14dee1ebeac06bcf62fbfaf` / `CLOSED`; provider thread reference absent
-- Step 7 durable ExecutionRun: `run_7f98fffe838a2d52545c782770901484` / `FAILED` / never started; provider run/model and usage absent
+- Step 7 target source: AI Update Board `main` remains clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no product edits
+- Step 7 hierarchy/readiness/provision: PASS — `prj_ai_update_board` / `bt_ai_update_board` / `st_ai_update_board_ui`; Subtask `IN_PROGRESS` / `NOT_STARTED`; zero dependency edges
+- Step 7 ACTIVE ownership: `wt_d71afbd8e735b2246feb3fec3ae39d46`; retained worktree clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`
+- Step 7 first execution attempt: `FAILED` / terminal with `WRITE_POLICY_REQUIRED`; no provider thread/run/model reference and no provider/model turn started
+- Step 7 independent exact-runtime diagnostic: `RESPONSE_REPRESENTATION_MISMATCH` — `.9` normalized `thread/start` as `writableRoots: []` while the validator incorrectly required `[worktreePath]`
+- Step 7 blocker repair: REPAIRED — thread-level mode confirmation and turn-level exact-root authority are distinct; exact turn-start writable-root policy UNCHANGED; mock realism gap REPAIRED
+- Step 7 actual provider/model turns: still 0
+- Step 7 durable ChatThread: `thr_f37fa708f14dee1ebeac06bcf62fbfaf` / `CLOSED`; preserved terminal
+- Step 7 durable ExecutionRun: `run_7f98fffe838a2d52545c782770901484` / `FAILED` / never started; preserved terminal
 - Step 7 cleanup: App Server child and transient runtime cleaned; daemon stopped cleanly; no lock/session authority
 - Step 7 product verification/commit/checkpoint/release: NOT PERFORMED after hard-stop failure; ACTIVE clean owned worktree preserved
-- Step 7 automatic retry/repair: NONE
-- Step 7 Console verification: lint/typecheck/build/public hygiene/diff checks PASS; normal full suite PASS — 107 files / 3,506 tests
-- Hanlin manual UI QA: NOT READY — no UI implementation exists
+- Step 7 automatic provider retry: NONE
+- Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
+- Step 7 replacement provider attempt: NOT AUTHORIZED YET
+- Step 7 blocker-repair Fresh Focused Re-QA: PENDING
+- Hanlin manual QA: NOT REQUIRED / NOT READY
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** ChatGPT audit of the Step 7 `WRITE_POLICY_REQUIRED` failure and preserved durable state; do not retry the provider run automatically.
-
-Hanlin manual QA: NOT REQUIRED
+**Next safe task:** NEW CHAT Fresh Focused Re-QA of the Step 7 `WRITE_POLICY_REQUIRED` repair; do not retry the provider run.
 
 ## Not operational yet
 - browser Console UI

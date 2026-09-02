@@ -58,6 +58,21 @@ type Scenario =
   | "tools-before-response"
   | "wait-for-authority-mutation"
   | "wait-for-interrupt";
+type ThreadStartVariant =
+  | "approval-policy-on-request"
+  | "approvals-reviewer-auto"
+  | "ephemeral-false"
+  | "exact"
+  | "exclude-slash-tmp-true"
+  | "exclude-tmpdir-env-true"
+  | "network-enabled"
+  | "sandbox-type-read-only"
+  | "thread-cwd-mismatch"
+  | "top-level-cwd-mismatch"
+  | "writable-roots-duplicate"
+  | "writable-roots-malformed"
+  | "writable-roots-other"
+  | "writable-roots-worktree";
 
 const SUBTASK_ID = SubtaskIdSchema.parse("st_write_execution");
 const UPSTREAM_SUBTASK_ID = SubtaskIdSchema.parse("st_write_upstream");
@@ -124,7 +139,7 @@ afterEach(() => {
 });
 
 describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
-  it("binds the exact ACTIVE worktree, workspaceWrite policy, durable records, and synthetic writes", async () => {
+  it("accepts the exact .9 thread mode response and binds the exact turn root", async () => {
     const fixture = createFixture(true);
     try {
       const sourceBefore = sourceEvidence(fixture.sourcePath);
@@ -258,6 +273,102 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
   it("exposes only storage and Subtask authority and fixes the standard profile internally", async () => {
     const module = await import("../src/index.js");
     expect(module.executeSingleSubtaskOwnedWorktreeCodex).toHaveLength(2);
+  });
+
+  it.each([
+    "approval-policy-on-request",
+    "approvals-reviewer-auto",
+    "exclude-slash-tmp-true",
+    "exclude-tmpdir-env-true",
+    "network-enabled",
+    "sandbox-type-read-only",
+    "thread-cwd-mismatch",
+    "top-level-cwd-mismatch",
+  ] as const)(
+    "fails closed before turn/start for thread policy mismatch %s",
+    async (threadStartVariant) => {
+      const fixture = createFixture(true);
+      try {
+        const harness = makeHarness(fixture, "success", {
+          threadStartVariant,
+        });
+        const result =
+          await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+            fixture.storage,
+            SUBTASK_ID,
+            harness.dependencies,
+          );
+        expect(result).toMatchObject({
+          success: false,
+          failureCode: "WRITE_POLICY_REQUIRED",
+          providerThread: null,
+          threadPolicy: null,
+          diagnostics: { turnStartRequests: 0 },
+        });
+        expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)?.status).toBe(
+          "FAILED",
+        );
+        expect(fixture.storage.getChatThreadById(CHAT_THREAD_ID)?.status).toBe(
+          "CLOSED",
+        );
+      } finally {
+        cleanupFixture(fixture);
+      }
+    },
+  );
+
+  it.each([
+    "writable-roots-worktree",
+    "writable-roots-other",
+    "writable-roots-duplicate",
+    "writable-roots-malformed",
+  ] as const)(
+    "rejects nonempty thread-level writableRoots variant %s",
+    async (threadStartVariant) => {
+      const fixture = createFixture(true);
+      try {
+        const harness = makeHarness(fixture, "success", {
+          threadStartVariant,
+        });
+        const result =
+          await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+            fixture.storage,
+            SUBTASK_ID,
+            harness.dependencies,
+          );
+        expect(result).toMatchObject({
+          success: false,
+          failureCode: "WRITE_POLICY_REQUIRED",
+          threadPolicy: null,
+          diagnostics: { turnStartRequests: 0 },
+        });
+      } finally {
+        cleanupFixture(fixture);
+      }
+    },
+  );
+
+  it("preserves the existing ephemeral invariant for thread/start", async () => {
+    const fixture = createFixture(true);
+    try {
+      const harness = makeHarness(fixture, "success", {
+        threadStartVariant: "ephemeral-false",
+      });
+      const result =
+        await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
+          fixture.storage,
+          SUBTASK_ID,
+          harness.dependencies,
+        );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "EPHEMERAL_THREAD_REQUIRED",
+        threadPolicy: null,
+        diagnostics: { turnStartRequests: 0 },
+      });
+    } finally {
+      cleanupFixture(fixture);
+    }
   });
 
   it.each(["DONE", "DROPPED", "ARCHIVED"] as const)(
@@ -824,6 +935,7 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
       expect(result).toMatchObject({
         success: false,
         providerRun: null,
+        threadPolicy: null,
         diagnostics: { turnStartRequests: 1 },
       });
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)).toMatchObject({
@@ -1119,6 +1231,7 @@ describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
       expect(result).toMatchObject({
         success: false,
         providerRun: null,
+        threadPolicy: null,
         diagnostics: { turnStartRequests: 1 },
       });
       expect(fixture.storage.getExecutionRunById(EXECUTION_RUN_ID)).toMatchObject({
@@ -1254,6 +1367,7 @@ function makeHarness(
     >;
     readonly failResolveCall?: number;
     readonly removeWorkspaceThrows?: boolean;
+    readonly threadStartVariant?: ThreadStartVariant;
     readonly beforeWorktreeAuthorityGate?: NonNullable<
       TestDependencies["beforeWorktreeAuthorityGate"]
     >;
@@ -1309,7 +1423,11 @@ function makeHarness(
       });
       const child = spawn(
         process.execPath,
-        [MOCK_WRITE_FIXTURE_PATH, `--scenario=${scenario}`],
+        [
+          MOCK_WRITE_FIXTURE_PATH,
+          `--scenario=${scenario}`,
+          `--thread-start-variant=${options.threadStartVariant ?? "exact"}`,
+        ],
         spawnOptions,
       );
       children.push(child);

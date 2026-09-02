@@ -19,10 +19,26 @@ type Scenario =
   | "tools-before-response"
   | "wait-for-authority-mutation"
   | "wait-for-interrupt";
+type ThreadStartVariant =
+  | "approval-policy-on-request"
+  | "approvals-reviewer-auto"
+  | "ephemeral-false"
+  | "exact"
+  | "exclude-slash-tmp-true"
+  | "exclude-tmpdir-env-true"
+  | "network-enabled"
+  | "sandbox-type-read-only"
+  | "thread-cwd-mismatch"
+  | "top-level-cwd-mismatch"
+  | "writable-roots-duplicate"
+  | "writable-roots-malformed"
+  | "writable-roots-other"
+  | "writable-roots-worktree";
 
 const THREAD_ID = "thread-write-mock-77";
 const TURN_ID = "turn-write-mock-88";
 const scenario = readScenario();
+const threadStartVariant = readThreadStartVariant();
 const lines = createInterface({
   input: process.stdin,
   crlfDelay: Number.POSITIVE_INFINITY,
@@ -82,22 +98,11 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
       return;
     }
     threadStarted = true;
-    const thread = fixtureThread();
+    const result = fixtureThreadStartResult();
+    const thread = recordOf(result.thread);
     send({
       id,
-      result: {
-        thread,
-        model: "fixture-write-model",
-        modelProvider: "fixture",
-        cwd: process.cwd(),
-        approvalPolicy: "never",
-        approvalsReviewer: "user",
-        sandbox: {
-          type: "workspaceWrite",
-          writableRoots: [process.cwd()],
-          networkAccess: false,
-        },
-      },
+      result,
     });
     send({ method: "thread/started", params: { thread } });
     return;
@@ -350,6 +355,72 @@ function fixtureThread(): JsonRecord {
   };
 }
 
+function fixtureThreadStartResult(): JsonRecord {
+  const thread = fixtureThread();
+  const sandbox: JsonRecord = {
+    type: "workspaceWrite",
+    writableRoots: [],
+    networkAccess: false,
+    excludeSlashTmp: false,
+    excludeTmpdirEnvVar: false,
+  };
+  const result: JsonRecord = {
+    thread,
+    model: "fixture-write-model",
+    modelProvider: "fixture",
+    cwd: process.cwd(),
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox,
+  };
+
+  switch (threadStartVariant) {
+    case "approval-policy-on-request":
+      result.approvalPolicy = "on-request";
+      break;
+    case "approvals-reviewer-auto":
+      result.approvalsReviewer = "auto";
+      break;
+    case "ephemeral-false":
+      thread.ephemeral = false;
+      break;
+    case "exclude-slash-tmp-true":
+      sandbox.excludeSlashTmp = true;
+      break;
+    case "exclude-tmpdir-env-true":
+      sandbox.excludeTmpdirEnvVar = true;
+      break;
+    case "network-enabled":
+      sandbox.networkAccess = true;
+      break;
+    case "sandbox-type-read-only":
+      sandbox.type = "readOnly";
+      break;
+    case "thread-cwd-mismatch":
+      thread.cwd = `${process.cwd()}-other`;
+      break;
+    case "top-level-cwd-mismatch":
+      result.cwd = `${process.cwd()}-other`;
+      break;
+    case "writable-roots-duplicate":
+      sandbox.writableRoots = [process.cwd(), process.cwd()];
+      break;
+    case "writable-roots-malformed":
+      sandbox.writableRoots = [7];
+      break;
+    case "writable-roots-other":
+      sandbox.writableRoots = [`${process.cwd()}-other`];
+      break;
+    case "writable-roots-worktree":
+      sandbox.writableRoots = [process.cwd()];
+      break;
+    case "exact":
+      break;
+  }
+
+  return result;
+}
+
 function fixtureTurn(
   status: "completed" | "failed" | "inProgress" | "interrupted",
 ): JsonRecord {
@@ -380,6 +451,33 @@ function readScenario(): Scenario {
     process.exit(2);
   }
   return value as Scenario;
+}
+
+function readThreadStartVariant(): ThreadStartVariant {
+  const value =
+    process.argv
+      .find((argument) => argument.startsWith("--thread-start-variant="))
+      ?.slice("--thread-start-variant=".length) ?? "exact";
+  const allowed: readonly ThreadStartVariant[] = [
+    "approval-policy-on-request",
+    "approvals-reviewer-auto",
+    "ephemeral-false",
+    "exact",
+    "exclude-slash-tmp-true",
+    "exclude-tmpdir-env-true",
+    "network-enabled",
+    "sandbox-type-read-only",
+    "thread-cwd-mismatch",
+    "top-level-cwd-mismatch",
+    "writable-roots-duplicate",
+    "writable-roots-malformed",
+    "writable-roots-other",
+    "writable-roots-worktree",
+  ];
+  if (!allowed.includes(value as ThreadStartVariant)) {
+    process.exit(2);
+  }
+  return value as ThreadStartVariant;
 }
 
 function completeSyntheticSuccessfulTurn(): void {
