@@ -8,6 +8,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Branch: `main`
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 - Public-repository hygiene guard: enabled
+- Development verification: offline fail-closed preflight; finite direct-local-tool checks; full suite bounded to four workers
 
 ## Maturity
 - S0A Domain foundation: ACCEPTED
@@ -337,7 +338,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Roadmap Step 8: explicitly authorized by Hanlin; overall step NOT COMPLETE
 - Step 8A implementation SHA: `0a15fcb5953a42593741d6afa5ff7ef48de6fff5`
 - Step 8A Comprehensive Hardening: PASS
-- Step 8A Deterministic Orchestration Kernel V0 maturity: HARDENED
+- Step 8A Deterministic Orchestration Kernel V0 maturity: ACCEPTED
 - CTC-ORCH-HARD-001: CLOSED — review decisions bind the exact canonical Plan Candidate value
 - CTC-ORCH-HARD-002: CLOSED — revision ceiling, terminal states, and requirements fail closed
 - CTC-ORCH-HARD-003: CLOSED — stage/dispatch/completion snapshots and Project capacity are scoped and bound
@@ -345,17 +346,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-ORCH-HARD-005: CLOSED — impossible completion maturity cannot claim eligibility
 - CTC-ORCH-HARD-006: CLOSED — public results and constants are deeply immutable
 - CTC-ORCH-HARD-007: CLOSED — dependency tuple ordering is delimiter-safe and deterministic
-- Step 8A Fresh Independent QA on `70d8b6ddcf310f3178b226bf1af11fb837ce1a49`: FAIL
-- CTC-ORCH-FQA-001: REPAIRED on `9d2030d815d40d51be0b79489f3185ed7bc450bd`; Focused Fresh Re-QA pending
-- Step 8A ACCEPTED: NO / PENDING RE-QA
+- Step 8A Fresh Independent QA on `70d8b6ddcf310f3178b226bf1af11fb837ce1a49`: FAIL — historical result
+- CTC-ORCH-FQA-001: CLOSED — repaired on `9d2030d815d40d51be0b79489f3185ed7bc450bd`
+- Step 8A Focused Fresh Independent Re-QA: PASS
+- Step 8A final controlled-worker regression: 112 / 112 files; 3,620 / 3,620 tests PASS
+- Step 8A ACCEPTED: YES
+- Step 8A accepted evidence SHA: `addc44200662cdddd69095065bee27eaeac43ddb`
 - Orchestration persistence: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Step 8B: NOT STARTED / BLOCKED on Step 8A ACCEPTED
+- Step 8B: NOT STARTED
+- Step 8B dependency gate: Step 8A ACCEPTED satisfied
+- Step 8B design requirement: define and test durable well-formed-Unicode and control-character policy before persisting proposal-only orchestration text
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Focused Fresh Independent Re-QA of CTC-ORCH-FQA-001. Do not begin Step 8B yet.
+**Next safe task:** Return to Hanlin/ChatGPT for Roadmap Step 8B scope and implementation authorization. Do not begin Step 8B automatically.
 
 ## Not operational yet
 - browser Console UI

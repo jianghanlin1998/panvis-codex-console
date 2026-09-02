@@ -16,7 +16,7 @@
     "codex:schema:generate": "tsc -p packages/codex-adapter/tsconfig.build.json --pretty false && node packages/codex-adapter/dist/generate-schema-cli.js",
     "lint": "eslint . --max-warnings 0",
     "public:check": "./scripts/check-public-repo-hygiene.sh",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=4",
     "test:local-control:e2e": "node packages/local-control/test/executable-e2e.mjs",
     "typecheck": "tsc --noEmit --pretty false"
   },

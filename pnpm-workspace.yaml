@@ -1,5 +1,8 @@
 packages:
   - "packages/*"
 
+enableGlobalVirtualStore: false
+verifyDepsBeforeRun: false
+
 allowBuilds:
   esbuild: true

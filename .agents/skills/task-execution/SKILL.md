@@ -5,8 +5,8 @@ description: Execute an approved repository Task Contract with scoped implementa
 
 # Execute a Task Contract
 
-1. Read the supplied Task Contract and repository instructions. Before any Node-dependent install, baseline, or test command, inspect `command -v node`, `node --version` when available, `command -v pnpm`, and `pnpm --version` when available. If the direct runtime is missing or incompatible, source `scripts/runtime-preflight.sh` once in the task shell, re-run those four checks, and stop with a concise environment blocker if the declared repository versions still cannot be established. A missing direct runtime is an environment preflight condition, not a repository test failure; do not repeatedly rediscover the runtime during the task.
-2. Read current repository truth. Verify the repository root, branch, HEAD, remotes, and worktree state before editing. Reconcile current main when applicable without discarding legitimate work.
+1. Read the supplied Task Contract and repository instructions. Before Node-dependent work, inspect `command -v node`, `node --version` when available, `command -v pnpm`, and `pnpm --version` when available.
+2. Read current repository truth. Verify the repository root, branch, HEAD, remotes, and worktree state before editing. Reconcile current main when applicable without discarding legitimate work. Then source `scripts/dev-environment-preflight.sh` once from the repository root and use `scripts/run-repo-check.sh` for canonical checks. Treat its runtime or `DEPENDENCIES_NOT_PREPARED` result as an environment blocker; do not install, refresh, or repeatedly rediscover the toolchain.
 3. Treat explicit scope and untouched areas as hard boundaries. Make the smallest safe change, preserve public contracts unless authorized, and do not invent product or architecture decisions.
 4. Stop only for a real product, architecture, security, privacy, ownership, scope, or unresolved environment blocker that available evidence cannot resolve.
 5. Implement with deterministic tests. Never weaken, delete, skip, or bypass meaningful tests to obtain a pass. Never expose secrets, sensitive user data, or raw provider and internal errors.
@@ -22,9 +22,9 @@ Classify a failure as `KNOWN_MECHANICAL_ENVIRONMENT` only when it exactly matche
 
 When an already-authorized ordinary fetch, reconciliation, checkout, commit, or push operation against the approved current repository first fails specifically because the sandbox denies repository-metadata writes, retry the same operation once with the available repository-write permission mechanism. Do so only when there is no evidence of corruption, conflict, unexpected remote movement, ownership mismatch, or a destructive operation. Never force-push, destructively reset, discard work, retry a Git semantic error, or treat divergence or a merge conflict as a sandbox failure.
 
-### Workspace-link / pnpm refresh
+### Intentional manifest-change offline refresh
 
-After an approved intentional package or workspace manifest change, first establish that a Node command failed because local workspace links or `node_modules` metadata need refresh, rather than because of a source, type, or build assertion. Perform at most one smallest repository-supported non-interactive offline refresh using the existing pnpm store, without contacting the network or downloading dependencies unless the Task Contract separately authorizes them. After a successful refresh, rerun only the affected verification command. Stop if the offline store is insufficient, lockfile or package state is unexpectedly inconsistent, or another refresh would be needed. `scripts/runtime-preflight.sh` remains authoritative; do not rediscover or reinstall the runtime during this correction.
+Only after an approved intentional package or workspace manifest change, establish that a failure is limited to local workspace links or `node_modules` metadata. Perform at most one smallest repository-supported non-interactive offline refresh from the existing store, then rerun only the affected check. The normal development preflight never performs this refresh. Stop if the store is insufficient, package or lock state is inconsistent, or another refresh would be needed.
 
 ### Loopback-listener sandbox
 
