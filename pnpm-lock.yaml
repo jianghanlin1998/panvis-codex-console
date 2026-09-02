@@ -57,6 +57,12 @@ importers:
         specifier: workspace:*
         version: link:../storage
 
+  packages/orchestration:
+    dependencies:
+      '@codex-task-console/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/shared: {}
 
   packages/storage:

@@ -140,7 +140,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Execution Input Preflight binding: PASS
 - Live persistence: NOT IMPLEMENTED
 - Worktree execution: NOT IMPLEMENTED
-- Lifecycle orchestration: NOT IMPLEMENTED
+- Lifecycle orchestration integration: NOT IMPLEMENTED
 - Comprehensive Hardening: PASS under approved local single-user V1 boundary
 - CTC-LIVE-HARD-001: ACCEPTED_V1_LIMITATION — no OS-enforced same-user read confinement
 - CTC-LIVE-HARD-002: ACCEPTED_V1_LIMITATION — ambient Codex config/context not fully clean-room isolated
@@ -241,7 +241,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-LOCAL-HARD-006: CLOSED — phased shutdown cleanup remains retryable after partial authority cleanup
 - Generic shell/RPC: NONE
 - Browser UI: NOT IMPLEMENTED
-- Orchestration: NOT IMPLEMENTED
+- Operational orchestration service: NOT IMPLEMENTED
 - Roadmap Step 7 real backend dogfood: PASS
 - Provider/model turns for Step 6: 0
 - Real target writes for Step 6 hardening: 0
@@ -334,14 +334,19 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
 - Hanlin manual UI QA: PASS — explicit human product/workflow acceptance of implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
-- Step 8: NOT STARTED / NOT AUTHORIZED
+- Roadmap Step 8: explicitly authorized by Hanlin; overall step NOT COMPLETE
+- Step 8A Deterministic Orchestration Kernel V0: IMPLEMENTED
+- Orchestration persistence: NOT IMPLEMENTED
+- Real orchestration role execution: NOT IMPLEMENTED
+- Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
+- Roadmap Step 9: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** Roadmap Step 7 is complete from engineering, Fresh Independent QA, and Hanlin manual UI QA evidence. Further work requires a new explicit Hanlin decision: either approve or update the validated Master candidate for provider-turn liveness, or scope and authorize Roadmap Step 8. Neither is authorized by this state sync; Step 8 remains not started and not authorized.
+**Next safe task:** In a new chat, comprehensive write-enabled hardening of Roadmap Step 8A. Do not begin Step 8B yet.
 
 ## Not operational yet
 - browser Console UI
-- TODO -> IN_PROGRESS start orchestration, repair/re-entry, or later maturity mutation
+- operational TODO -> IN_PROGRESS dispatch, repair/re-entry, or later maturity mutation
 - scheduling, concurrency control, or `WHEN_READY` execution
 - Focused Re-QA operational assembly
 - trusted locked-invariant source
