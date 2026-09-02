@@ -18,13 +18,20 @@ import type {
   beginPlanReview,
 } from "../src/index.js";
 import {
+  approvalFor,
   blockingDependency,
   dispatchState,
   executionFacts,
+  executionFactsSnapshotFor,
+  escalationFor,
   materializedGraphFor,
   planCandidate,
   proposedSubtask,
+  projectWriteCapacityFor,
+  rejectionFor,
   reviewStateFor,
+  stageEvidenceFor,
+  stateSnapshotFor,
 } from "./fixtures.js";
 
 const expectReviewState = (
@@ -44,12 +51,19 @@ const transition = (
   repairCyclesUsed: 0 | 1 = 0,
 ) =>
   evaluateStageTransition({
-    profile: "HIGH_RISK_FOUNDATION",
+    graph: highRiskGraph,
+    subtaskId: highRiskGraph.subtasks[0]!.id,
     currentStage,
     requestedNextStage,
-    evidence,
+    evidence: stageEvidenceFor(highRiskGraph, evidence),
     repairCyclesUsed,
   });
+
+const highRiskGraph = materializedGraphFor(
+  planCandidate({
+    subtasks: [proposedSubtask("st_high", "HIGH_RISK_FOUNDATION")],
+  }),
+);
 
 describe("Step 8A synthetic end-to-end oracle", () => {
   it("A. runs a rejected-then-approved Standard plan through serial dispatch to completion", () => {
@@ -61,11 +75,10 @@ describe("Step 8A synthetic end-to-end oracle", () => {
     });
     let review = reviewStateFor(firstPlan);
 
-    const rejected = applyReviewerDecision(review, {
-      outcome: "REJECT",
-      planRevision: 1,
-      revisionRequirements: ["Bind both Subtasks to explicit Task Contracts."],
-    });
+    const rejected = applyReviewerDecision(
+      review,
+      rejectionFor(review, ["Bind both Subtasks to explicit Task Contracts."]),
+    );
     review = expectReviewState(rejected);
     const revisedPlan = planCandidate({
       revision: 2,
@@ -74,10 +87,7 @@ describe("Step 8A synthetic end-to-end oracle", () => {
     });
     const revised = submitPlannerRevision(review, revisedPlan);
     review = expectReviewState(revised);
-    const approved = applyReviewerDecision(review, {
-      outcome: "APPROVE",
-      planRevision: 2,
-    });
+    const approved = applyReviewerDecision(review, approvalFor(review));
     review = expectReviewState(approved);
     expect(review.phase).toBe("APPROVED");
 
@@ -90,9 +100,15 @@ describe("Step 8A synthetic end-to-end oracle", () => {
 
     const firstDispatch = selectSerialWriteDispatch({
       graph: materialized.graph,
-      subtaskStates: [dispatchState("st_a"), dispatchState("st_b")],
-      executionFacts: [executionFacts("st_a"), executionFacts("st_b")],
-      activeProjectWriteSubtaskIds: [],
+      subtaskStateSnapshot: stateSnapshotFor(materialized.graph, [
+        dispatchState("st_a"),
+        dispatchState("st_b"),
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(materialized.graph, [
+        executionFacts("st_a"),
+        executionFacts("st_b"),
+      ]),
+      projectWriteCapacity: projectWriteCapacityFor(materialized.graph),
     });
     expect(firstDispatch).toMatchObject({
       kind: "DISPATCH_SELECTED",
@@ -101,12 +117,15 @@ describe("Step 8A synthetic end-to-end oracle", () => {
 
     const secondDispatch = selectSerialWriteDispatch({
       graph: materialized.graph,
-      subtaskStates: [
+      subtaskStateSnapshot: stateSnapshotFor(materialized.graph, [
         dispatchState("st_a", "HARDENED", "COMPLETE"),
         dispatchState("st_b"),
-      ],
-      executionFacts: [executionFacts("st_a"), executionFacts("st_b")],
-      activeProjectWriteSubtaskIds: [],
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(materialized.graph, [
+        executionFacts("st_a"),
+        executionFacts("st_b"),
+      ]),
+      projectWriteCapacity: projectWriteCapacityFor(materialized.graph),
     });
     expect(secondDispatch).toMatchObject({
       kind: "DISPATCH_SELECTED",
@@ -114,10 +133,13 @@ describe("Step 8A synthetic end-to-end oracle", () => {
     });
 
     expect(
-      evaluateBigTaskCompletion(materialized.graph, [
-        dispatchState("st_b", "IMPLEMENTED", "COMPLETE"),
-        dispatchState("st_a", "HARDENED", "COMPLETE"),
-      ]),
+      evaluateBigTaskCompletion(
+        materialized.graph,
+        stateSnapshotFor(materialized.graph, [
+          dispatchState("st_b", "IMPLEMENTED", "COMPLETE"),
+          dispatchState("st_a", "HARDENED", "COMPLETE"),
+        ]),
+      ),
     ).toEqual({
       kind: "BIG_TASK_COMPLETION_ELIGIBLE",
       bigTaskId: "bt_orchestration",
@@ -128,11 +150,10 @@ describe("Step 8A synthetic end-to-end oracle", () => {
     let state = reviewStateFor(planCandidate({ revision: 1 }));
 
     for (const nextRevision of [2, 3] as const) {
-      const rejection = applyReviewerDecision(state, {
-        outcome: "REJECT",
-        planRevision: state.candidate.revision,
-        revisionRequirements: [`Produce revision ${nextRevision}.`],
-      });
+      const rejection = applyReviewerDecision(
+        state,
+        rejectionFor(state, [`Produce revision ${nextRevision}.`]),
+      );
       state = expectReviewState(rejection);
       const revision = submitPlannerRevision(
         state,
@@ -141,11 +162,10 @@ describe("Step 8A synthetic end-to-end oracle", () => {
       state = expectReviewState(revision);
     }
 
-    const exhausted = applyReviewerDecision(state, {
-      outcome: "REJECT",
-      planRevision: 3,
-      revisionRequirements: ["A third automatic revision would be required."],
-    });
+    const exhausted = applyReviewerDecision(
+      state,
+      rejectionFor(state, ["A third automatic revision would be required."]),
+    );
     state = expectReviewState(exhausted);
     expect(state).toMatchObject({
       phase: "HUMAN_REQUIRED",
@@ -161,7 +181,7 @@ describe("Step 8A synthetic end-to-end oracle", () => {
   it("C. escalates a Reviewer decision immediately", () => {
     const state = reviewStateFor(planCandidate());
     expect(
-      applyReviewerDecision(state, { outcome: "ESCALATE", planRevision: 1 }),
+      applyReviewerDecision(state, escalationFor(state)),
     ).toMatchObject({
       kind: "REVIEW_STATE",
       state: { phase: "HUMAN_REQUIRED", humanReason: "REVIEW_ESCALATED" },
@@ -176,9 +196,15 @@ describe("Step 8A synthetic end-to-end oracle", () => {
     );
     const input = {
       graph,
-      subtaskStates: [dispatchState("st_a"), dispatchState("st_b")],
-      executionFacts: [executionFacts("st_a"), executionFacts("st_b")],
-      activeProjectWriteSubtaskIds: [],
+      subtaskStateSnapshot: stateSnapshotFor(graph, [
+        dispatchState("st_a"),
+        dispatchState("st_b"),
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(graph, [
+        executionFacts("st_a"),
+        executionFacts("st_b"),
+      ]),
+      projectWriteCapacity: projectWriteCapacityFor(graph),
     } as const;
 
     const first = selectSerialWriteDispatch(input);
@@ -193,7 +219,9 @@ describe("Step 8A synthetic end-to-end oracle", () => {
     expect(
       selectSerialWriteDispatch({
         ...input,
-        activeProjectWriteSubtaskIds: [dispatchState("st_a").subtaskId],
+        projectWriteCapacity: projectWriteCapacityFor(graph, [
+          dispatchState("st_a").subtaskId,
+        ]),
       }),
     ).toEqual({
       kind: "BLOCKED",
@@ -220,13 +248,13 @@ describe("Step 8A synthetic end-to-end oracle", () => {
 
     const hardened = selectSerialWriteDispatch({
       graph,
-      subtaskStates: [
+      subtaskStateSnapshot: stateSnapshotFor(graph, [
         dispatchState("st_a", "HARDENED", "COMPLETE"),
         dispatchState("st_b"),
         dispatchState("st_c"),
-      ],
-      executionFacts: facts,
-      activeProjectWriteSubtaskIds: [],
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(graph, facts),
+      projectWriteCapacity: projectWriteCapacityFor(graph),
     });
     expect(hardened).toMatchObject({
       kind: "DISPATCH_SELECTED",
@@ -236,13 +264,13 @@ describe("Step 8A synthetic end-to-end oracle", () => {
 
     const accepted = selectSerialWriteDispatch({
       graph,
-      subtaskStates: [
+      subtaskStateSnapshot: stateSnapshotFor(graph, [
         dispatchState("st_a", "ACCEPTED", "COMPLETE"),
         dispatchState("st_b", "IMPLEMENTED", "COMPLETE"),
         dispatchState("st_c"),
-      ],
-      executionFacts: facts,
-      activeProjectWriteSubtaskIds: [],
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(graph, facts),
+      projectWriteCapacity: projectWriteCapacityFor(graph),
     });
     expect(accepted).toMatchObject({
       kind: "DISPATCH_SELECTED",
@@ -268,9 +296,12 @@ describe("Step 8A synthetic end-to-end oracle", () => {
       }),
     );
     expect(
-      evaluateBigTaskCompletion(graph, [
-        dispatchState("st_high", "ACCEPTED", "COMPLETE"),
-      ]),
+      evaluateBigTaskCompletion(
+        graph,
+        stateSnapshotFor(graph, [
+          dispatchState("st_high", "ACCEPTED", "COMPLETE"),
+        ]),
+      ),
     ).toMatchObject({ kind: "BIG_TASK_COMPLETION_ELIGIBLE" });
   });
 
@@ -300,9 +331,12 @@ describe("Step 8A synthetic end-to-end oracle", () => {
       }),
     );
     expect(
-      evaluateBigTaskCompletion(graph, [
-        dispatchState("st_repaired", "ACCEPTED", "COMPLETE"),
-      ]),
+      evaluateBigTaskCompletion(
+        graph,
+        stateSnapshotFor(graph, [
+          dispatchState("st_repaired", "ACCEPTED", "COMPLETE"),
+        ]),
+      ),
     ).toMatchObject({ kind: "BIG_TASK_COMPLETION_ELIGIBLE" });
   });
 
@@ -370,15 +404,27 @@ describe("Step 8A synthetic end-to-end oracle", () => {
     );
     const canonical = selectSerialWriteDispatch({
       graph,
-      subtaskStates: [dispatchState("st_a"), dispatchState("st_b")],
-      executionFacts: [executionFacts("st_a"), executionFacts("st_b")],
-      activeProjectWriteSubtaskIds: [],
+      subtaskStateSnapshot: stateSnapshotFor(graph, [
+        dispatchState("st_a"),
+        dispatchState("st_b"),
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(graph, [
+        executionFacts("st_a"),
+        executionFacts("st_b"),
+      ]),
+      projectWriteCapacity: projectWriteCapacityFor(graph),
     });
     const reordered = selectSerialWriteDispatch({
       graph,
-      subtaskStates: [dispatchState("st_b"), dispatchState("st_a")],
-      executionFacts: [executionFacts("st_b"), executionFacts("st_a")],
-      activeProjectWriteSubtaskIds: [],
+      subtaskStateSnapshot: stateSnapshotFor(graph, [
+        dispatchState("st_b"),
+        dispatchState("st_a"),
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(graph, [
+        executionFacts("st_b"),
+        executionFacts("st_a"),
+      ]),
+      projectWriteCapacity: projectWriteCapacityFor(graph),
     });
     expect(reordered).toEqual(canonical);
   });

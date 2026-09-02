@@ -11,11 +11,17 @@ import type {
 } from "@codex-task-console/domain";
 import type {
   DispatchExecutionFacts,
+  DispatchExecutionFactsSnapshot,
   DispatchSubtaskState,
+  DispatchSubtaskStateSnapshot,
   MaterializedGraph,
   PlanCandidate,
   PlanReviewState,
+  ProjectWriteCapacitySnapshot,
   ProposedSubtask,
+  ReviewDecision,
+  StageEvidenceFacts,
+  StageEvidenceSnapshot,
   WorkflowProfile,
   WorkflowStage,
 } from "../src/index.js";
@@ -79,12 +85,35 @@ export const reviewStateFor = (candidate: PlanCandidate): PlanReviewState => {
   return result.state;
 };
 
+export const approvalFor = (
+  state: PlanReviewState,
+): Extract<ReviewDecision, { readonly outcome: "APPROVE" }> => ({
+  outcome: "APPROVE",
+  planRevision: state.candidate.revision,
+  candidateBinding: state.candidateBinding,
+});
+
+export const rejectionFor = (
+  state: PlanReviewState,
+  revisionRequirements: readonly string[],
+): Extract<ReviewDecision, { readonly outcome: "REJECT" }> => ({
+  outcome: "REJECT",
+  planRevision: state.candidate.revision,
+  candidateBinding: state.candidateBinding,
+  revisionRequirements,
+});
+
+export const escalationFor = (
+  state: PlanReviewState,
+): Extract<ReviewDecision, { readonly outcome: "ESCALATE" }> => ({
+  outcome: "ESCALATE",
+  planRevision: state.candidate.revision,
+  candidateBinding: state.candidateBinding,
+});
+
 export const materializedGraphFor = (candidate: PlanCandidate): MaterializedGraph => {
   const started = reviewStateFor(candidate);
-  const approved = applyReviewerDecision(started, {
-    outcome: "APPROVE",
-    planRevision: candidate.revision,
-  });
+  const approved = applyReviewerDecision(started, approvalFor(started));
   if (approved.kind !== "REVIEW_STATE" || approved.state.phase !== "APPROVED") {
     throw new Error("Expected an approved review state fixture.");
   }
@@ -112,4 +141,36 @@ export const executionFacts = (subtaskId: string): DispatchExecutionFacts => ({
   budgetAvailable: true,
   worktreeOwnershipAvailable: true,
   humanApprovalSatisfied: true,
+});
+
+export const stateSnapshotFor = (
+  graph: MaterializedGraph,
+  subtaskStates: readonly DispatchSubtaskState[],
+): DispatchSubtaskStateSnapshot => ({
+  candidateBinding: graph.candidateBinding,
+  subtaskStates,
+});
+
+export const executionFactsSnapshotFor = (
+  graph: MaterializedGraph,
+  facts: readonly DispatchExecutionFacts[],
+): DispatchExecutionFactsSnapshot => ({
+  candidateBinding: graph.candidateBinding,
+  executionFacts: facts,
+});
+
+export const projectWriteCapacityFor = (
+  graph: MaterializedGraph,
+  activeWriteSubtaskIds: ProjectWriteCapacitySnapshot["activeWriteSubtaskIds"] = [],
+): ProjectWriteCapacitySnapshot => ({
+  projectId: graph.projectId,
+  activeWriteSubtaskIds,
+});
+
+export const stageEvidenceFor = (
+  graph: MaterializedGraph,
+  facts: Readonly<StageEvidenceFacts>,
+): StageEvidenceSnapshot => ({
+  candidateBinding: graph.candidateBinding,
+  facts,
 });

@@ -6,15 +6,15 @@ import type {
   SubtaskMaturity,
 } from "@codex-task-console/domain";
 
-export const WORKFLOW_PROFILES = [
+export const WORKFLOW_PROFILES = Object.freeze([
   "LOW",
   "STANDARD",
   "HIGH_RISK_FOUNDATION",
-] as const;
+] as const);
 
 export type WorkflowProfile = (typeof WORKFLOW_PROFILES)[number];
 
-export const WORKFLOW_STAGES = [
+export const WORKFLOW_STAGES = Object.freeze([
   "PLAN",
   "REVIEW",
   "MATERIALIZE",
@@ -25,11 +25,11 @@ export const WORKFLOW_STAGES = [
   "REPAIR",
   "FOCUSED_RE_QA",
   "COMPLETE",
-] as const;
+] as const);
 
 export type WorkflowStage = (typeof WORKFLOW_STAGES)[number];
 
-export const HUMAN_REQUIRED_REASONS = [
+export const HUMAN_REQUIRED_REASONS = Object.freeze([
   "PLAN_REVIEW_EXHAUSTED",
   "REVIEW_ESCALATED",
   "REPLAN_REQUIRED",
@@ -38,7 +38,7 @@ export const HUMAN_REQUIRED_REASONS = [
   "BUDGET_BLOCKED",
   "CONCURRENCY_BLOCKED",
   "AUTHORITY_BLOCKED",
-] as const;
+] as const);
 
 export type HumanRequiredReason = (typeof HUMAN_REQUIRED_REASONS)[number];
 
@@ -59,23 +59,29 @@ export interface PlanCandidate {
   readonly dependencies: readonly SubtaskDependency[];
 }
 
+export type PlanCandidateBinding = string;
+
 export type ReviewDecision =
   | {
       readonly outcome: "APPROVE";
       readonly planRevision: number;
+      readonly candidateBinding: PlanCandidateBinding;
     }
   | {
       readonly outcome: "REJECT";
       readonly planRevision: number;
+      readonly candidateBinding: PlanCandidateBinding;
       readonly revisionRequirements: readonly string[];
     }
   | {
       readonly outcome: "ESCALATE";
       readonly planRevision: number;
+      readonly candidateBinding: PlanCandidateBinding;
     };
 
 interface PlanReviewStateBase {
   readonly candidate: PlanCandidate;
+  readonly candidateBinding: PlanCandidateBinding;
   readonly initialPlanRevision: number;
   readonly automaticRevisionsUsed: 0 | 1 | 2;
 }
@@ -119,7 +125,7 @@ export type PlanReviewOperationResult =
       readonly reason: PlanReviewInvalidReason;
     };
 
-export const GRAPH_VALIDATION_ERROR_CODES = [
+export const GRAPH_VALIDATION_ERROR_CODES = Object.freeze([
   "INVALID_PLAN_CANDIDATE",
   "DUPLICATE_SUBTASK_ID",
   "BIG_TASK_OWNERSHIP_MISMATCH",
@@ -130,7 +136,7 @@ export const GRAPH_VALIDATION_ERROR_CODES = [
   "MISSING_DOWNSTREAM_SUBTASK",
   "CROSS_BIG_TASK_DEPENDENCY",
   "DEPENDENCY_CYCLE",
-] as const;
+] as const);
 
 export type GraphValidationErrorCode =
   (typeof GRAPH_VALIDATION_ERROR_CODES)[number];
@@ -157,6 +163,7 @@ export interface MaterializedGraph {
   readonly projectId: ProjectId;
   readonly bigTaskId: BigTaskId;
   readonly planRevision: number;
+  readonly candidateBinding: PlanCandidateBinding;
   readonly subtasks: readonly ProposedSubtask[];
   readonly dependencies: readonly SubtaskDependency[];
 }
@@ -175,14 +182,14 @@ export type MaterializationResult =
       readonly reason: "AUTHORITY_BLOCKED";
     };
 
-export const MATERIALIZED_GRAPH_CHANGE_KINDS = [
+export const MATERIALIZED_GRAPH_CHANGE_KINDS = Object.freeze([
   "ADD_SUBTASK",
   "REMOVE_SUBTASK",
   "SPLIT_SUBTASK",
   "MERGE_SUBTASKS",
   "REPLACE_SUBTASK",
   "CHANGE_DEPENDENCIES",
-] as const;
+] as const);
 
 export type MaterializedGraphChangeKind =
   (typeof MATERIALIZED_GRAPH_CHANGE_KINDS)[number];
@@ -198,7 +205,7 @@ export type MaterializedGraphChangeResult =
       readonly reason: "INVALID_MATERIALIZED_GRAPH" | "INVALID_CHANGE_KIND";
     };
 
-export const STAGE_EVIDENCE_CODES = [
+export const STAGE_EVIDENCE_CODES = Object.freeze([
   "PLAN_CANDIDATE_PRESENT",
   "PLAN_REVIEW_SATISFIED",
   "GRAPH_MATERIALIZED",
@@ -215,7 +222,7 @@ export const STAGE_EVIDENCE_CODES = [
   "FRESH_QA_OUTCOME_RECORDED",
   "REPAIR_EVIDENCE_PASSED",
   "FOCUSED_RE_QA_OUTCOME_RECORDED",
-] as const;
+] as const);
 
 export type StageEvidenceCode = (typeof STAGE_EVIDENCE_CODES)[number];
 
@@ -240,11 +247,17 @@ export interface StageEvidenceFacts {
   readonly focusedReQaOutcome?: QaOutcome;
 }
 
+export interface StageEvidenceSnapshot {
+  readonly candidateBinding: PlanCandidateBinding;
+  readonly facts: Readonly<StageEvidenceFacts>;
+}
+
 export interface StageTransitionInput {
-  readonly profile: WorkflowProfile;
+  readonly graph: MaterializedGraph;
+  readonly subtaskId: SubtaskId;
   readonly currentStage: WorkflowStage;
   readonly requestedNextStage: WorkflowStage;
-  readonly evidence: Readonly<StageEvidenceFacts>;
+  readonly evidence: Readonly<StageEvidenceSnapshot>;
   readonly repairCyclesUsed: 0 | 1;
 }
 
@@ -300,11 +313,26 @@ export interface DispatchExecutionFacts {
   readonly humanApprovalSatisfied: boolean;
 }
 
+export interface DispatchSubtaskStateSnapshot {
+  readonly candidateBinding: PlanCandidateBinding;
+  readonly subtaskStates: readonly DispatchSubtaskState[];
+}
+
+export interface DispatchExecutionFactsSnapshot {
+  readonly candidateBinding: PlanCandidateBinding;
+  readonly executionFacts: readonly DispatchExecutionFacts[];
+}
+
+export interface ProjectWriteCapacitySnapshot {
+  readonly projectId: ProjectId;
+  readonly activeWriteSubtaskIds: readonly SubtaskId[];
+}
+
 export interface SerialDispatchInput {
   readonly graph: MaterializedGraph;
-  readonly subtaskStates: readonly DispatchSubtaskState[];
-  readonly executionFacts: readonly DispatchExecutionFacts[];
-  readonly activeProjectWriteSubtaskIds: readonly SubtaskId[];
+  readonly subtaskStateSnapshot: Readonly<DispatchSubtaskStateSnapshot>;
+  readonly executionFactsSnapshot: Readonly<DispatchExecutionFactsSnapshot>;
+  readonly projectWriteCapacity: Readonly<ProjectWriteCapacitySnapshot>;
 }
 
 export type DispatchBlockReason =
@@ -344,3 +372,8 @@ export type BigTaskCompletionResult =
       readonly reason: "INVALID_INPUT" | "REQUIRED_WORK_INCOMPLETE";
       readonly incompleteSubtaskIds: readonly SubtaskId[];
     };
+
+export interface BigTaskCompletionSnapshot {
+  readonly candidateBinding: PlanCandidateBinding;
+  readonly subtaskStates: readonly DispatchSubtaskState[];
+}

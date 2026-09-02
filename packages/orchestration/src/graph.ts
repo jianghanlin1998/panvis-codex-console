@@ -24,6 +24,7 @@ import type {
   MaterializedGraphChangeKind,
   MaterializedGraphChangeResult,
   PlanCandidate,
+  PlanCandidateBinding,
   ProposedSubtask,
   WorkflowProfile,
 } from "./contracts.js";
@@ -186,23 +187,48 @@ export const parsePlanCandidate = (input: unknown): CandidateParseResult => {
   };
 };
 
-const dependencyKey = (dependency: SubtaskDependency): string =>
-  [
-    dependency.upstreamSubtaskId,
-    dependency.downstreamSubtaskId,
-    dependency.dependencyType,
-    dependency.requiredGate,
-    dependency.reason,
-  ].join("\u0000");
+const compareDependencies = (
+  left: SubtaskDependency,
+  right: SubtaskDependency,
+): number =>
+  compareCodeUnits(left.upstreamSubtaskId, right.upstreamSubtaskId) ||
+  compareCodeUnits(left.downstreamSubtaskId, right.downstreamSubtaskId) ||
+  compareCodeUnits(left.dependencyType, right.dependencyType) ||
+  compareCodeUnits(left.requiredGate, right.requiredGate) ||
+  compareCodeUnits(left.reason, right.reason);
 
 const sortDependencies = (
   dependencies: readonly SubtaskDependency[],
 ): readonly SubtaskDependency[] =>
   Object.freeze(
     [...dependencies]
-      .sort((left, right) => compareCodeUnits(dependencyKey(left), dependencyKey(right)))
+      .sort(compareDependencies)
       .map(freezeDependency),
   );
+
+export const createPlanCandidateBinding = (
+  candidate: PlanCandidate,
+): PlanCandidateBinding =>
+  JSON.stringify([
+    "PLAN_CANDIDATE_BINDING_V1",
+    candidate.projectId,
+    candidate.bigTaskId,
+    candidate.revision,
+    candidate.subtasks.map((subtask) => [
+      subtask.id,
+      subtask.bigTaskId,
+      subtask.profile,
+      subtask.taskContractRef,
+      subtask.writeEnabled,
+    ]),
+    sortDependencies(candidate.dependencies).map((dependency) => [
+      dependency.upstreamSubtaskId,
+      dependency.downstreamSubtaskId,
+      dependency.dependencyType,
+      dependency.requiredGate,
+      dependency.reason,
+    ]),
+  ]);
 
 const freezeGraphValidationErrors = (
   errors: readonly GraphValidationError[],
@@ -219,12 +245,12 @@ const freezeGraphValidationErrors = (
 export const validatePlanCandidateGraph = (input: unknown): GraphValidationResult => {
   const parsed = parsePlanCandidate(input);
   if (!parsed.valid) {
-    return {
+    return Object.freeze({
       valid: false,
       errors: freezeGraphValidationErrors([
         { code: parsed.code, subtaskIds: [] },
       ]),
-    };
+    });
   }
 
   const { candidate } = parsed;
@@ -256,7 +282,10 @@ export const validatePlanCandidateGraph = (input: unknown): GraphValidationResul
   }
 
   if (errors.length > 0) {
-    return { valid: false, errors: freezeGraphValidationErrors(errors) };
+    return Object.freeze({
+      valid: false,
+      errors: freezeGraphValidationErrors(errors),
+    });
   }
 
   const normalizedCandidate = freezeCandidate({
@@ -287,9 +316,11 @@ export const parseMaterializedGraph = (input: unknown): MaterializedGraph | null
       "kind",
       "planRevision",
       "projectId",
+      "candidateBinding",
       "subtasks",
     ]) ||
-    input.kind !== "MATERIALIZED_GRAPH"
+    input.kind !== "MATERIALIZED_GRAPH" ||
+    typeof input.candidateBinding !== "string"
   ) {
     return null;
   }
@@ -304,11 +335,16 @@ export const parseMaterializedGraph = (input: unknown): MaterializedGraph | null
   if (!validation.valid) {
     return null;
   }
+  const candidateBinding = createPlanCandidateBinding(validation.candidate);
+  if (input.candidateBinding !== candidateBinding) {
+    return null;
+  }
   return freezeMaterializedGraph({
     kind: "MATERIALIZED_GRAPH",
     projectId: validation.candidate.projectId,
     bigTaskId: validation.candidate.bigTaskId,
     planRevision: validation.candidate.revision,
+    candidateBinding,
     subtasks: validation.candidate.subtasks,
     dependencies: validation.dependencies,
   });

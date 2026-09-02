@@ -335,14 +335,25 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
 - Hanlin manual UI QA: PASS — explicit human product/workflow acceptance of implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
 - Roadmap Step 8: explicitly authorized by Hanlin; overall step NOT COMPLETE
-- Step 8A Deterministic Orchestration Kernel V0: IMPLEMENTED
+- Step 8A implementation SHA: `0a15fcb5953a42593741d6afa5ff7ef48de6fff5`
+- Step 8A Comprehensive Hardening: PASS
+- Step 8A Deterministic Orchestration Kernel V0 maturity: HARDENED
+- CTC-ORCH-HARD-001: CLOSED — review decisions bind the exact canonical Plan Candidate value
+- CTC-ORCH-HARD-002: CLOSED — revision ceiling, terminal states, and requirements fail closed
+- CTC-ORCH-HARD-003: CLOSED — stage/dispatch/completion snapshots and Project capacity are scoped and bound
+- CTC-ORCH-HARD-004: CLOSED — stage evidence and repair-counter composition are isolated
+- CTC-ORCH-HARD-005: CLOSED — impossible completion maturity cannot claim eligibility
+- CTC-ORCH-HARD-006: CLOSED — public results and constants are deeply immutable
+- CTC-ORCH-HARD-007: CLOSED — dependency tuple ordering is delimiter-safe and deterministic
+- Step 8A Fresh Independent QA: PENDING
 - Orchestration persistence: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Roadmap Step 9: NOT STARTED / NOT AUTHORIZED
+- Step 8B: NOT STARTED
+- Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** In a new chat, comprehensive write-enabled hardening of Roadmap Step 8A. Do not begin Step 8B yet.
+**Next safe task:** NEW CHAT Fresh Independent no-write QA of Roadmap Step 8A. Do not begin Step 8B yet.
 
 ## Not operational yet
 - browser Console UI

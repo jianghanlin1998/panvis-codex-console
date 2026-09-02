@@ -1,4 +1,5 @@
 import {
+  createPlanCandidateBinding,
   parsePlanCandidate,
 } from "./graph.js";
 import type {
@@ -31,45 +32,66 @@ const parseRequirements = (input: unknown): readonly string[] | null => {
     return null;
   }
   const requirements: string[] = [];
+  const seenRequirements = new Set<string>();
   for (const requirement of input) {
     if (
       typeof requirement !== "string" ||
       requirement.length === 0 ||
       requirement.length > 1_000 ||
-      requirement.trim() !== requirement
+      requirement.trim() !== requirement ||
+      seenRequirements.has(requirement)
     ) {
       return null;
     }
+    seenRequirements.add(requirement);
     requirements.push(requirement);
   }
   return Object.freeze(requirements);
 };
 
 const parseReviewDecision = (input: unknown): ReviewDecision | null => {
-  if (!isRecord(input) || !Number.isSafeInteger(input.planRevision)) {
+  if (
+    !isRecord(input) ||
+    !Number.isSafeInteger(input.planRevision) ||
+    typeof input.candidateBinding !== "string"
+  ) {
     return null;
   }
   if (
     input.outcome === "APPROVE" &&
-    hasExactKeys(input, ["outcome", "planRevision"])
+    hasExactKeys(input, ["candidateBinding", "outcome", "planRevision"])
   ) {
-    return Object.freeze({ outcome: "APPROVE", planRevision: input.planRevision as number });
+    return Object.freeze({
+      outcome: "APPROVE",
+      planRevision: input.planRevision as number,
+      candidateBinding: input.candidateBinding,
+    });
   }
   if (
     input.outcome === "ESCALATE" &&
-    hasExactKeys(input, ["outcome", "planRevision"])
+    hasExactKeys(input, ["candidateBinding", "outcome", "planRevision"])
   ) {
-    return Object.freeze({ outcome: "ESCALATE", planRevision: input.planRevision as number });
+    return Object.freeze({
+      outcome: "ESCALATE",
+      planRevision: input.planRevision as number,
+      candidateBinding: input.candidateBinding,
+    });
   }
   if (
     input.outcome === "REJECT" &&
-    hasExactKeys(input, ["outcome", "planRevision", "revisionRequirements"])
+    hasExactKeys(input, [
+      "candidateBinding",
+      "outcome",
+      "planRevision",
+      "revisionRequirements",
+    ])
   ) {
     const revisionRequirements = parseRequirements(input.revisionRequirements);
     if (revisionRequirements !== null) {
       return Object.freeze({
         outcome: "REJECT",
         planRevision: input.planRevision as number,
+        candidateBinding: input.candidateBinding,
         revisionRequirements,
       });
     }
@@ -100,14 +122,21 @@ export const parsePlanReviewState = (input: unknown): PlanReviewState | null => 
     (input.automaticRevisionsUsed !== 0 &&
       input.automaticRevisionsUsed !== 1 &&
       input.automaticRevisionsUsed !== 2) ||
+    input.initialPlanRevision >
+      Number.MAX_SAFE_INTEGER - input.automaticRevisionsUsed ||
     parsedCandidate.candidate.revision !==
       input.initialPlanRevision + input.automaticRevisionsUsed
   ) {
     return null;
   }
+  const candidateBinding = createPlanCandidateBinding(parsedCandidate.candidate);
+  if (input.candidateBinding !== candidateBinding) {
+    return null;
+  }
 
   const base = {
     candidate: parsedCandidate.candidate,
+    candidateBinding,
     initialPlanRevision: input.initialPlanRevision,
     automaticRevisionsUsed: input.automaticRevisionsUsed,
   } as const;
@@ -117,6 +146,7 @@ export const parsePlanReviewState = (input: unknown): PlanReviewState | null => 
     hasExactKeys(input, [
       "automaticRevisionsUsed",
       "candidate",
+      "candidateBinding",
       "initialPlanRevision",
       "phase",
     ])
@@ -126,9 +156,11 @@ export const parsePlanReviewState = (input: unknown): PlanReviewState | null => 
   if (
     input.phase === "AWAITING_REVISION" &&
     input.automaticRevisionsUsed < 2 &&
+    parsedCandidate.candidate.revision < Number.MAX_SAFE_INTEGER &&
     hasExactKeys(input, [
       "automaticRevisionsUsed",
       "candidate",
+      "candidateBinding",
       "initialPlanRevision",
       "phase",
       "revisionRequirements",
@@ -148,6 +180,7 @@ export const parsePlanReviewState = (input: unknown): PlanReviewState | null => 
     hasExactKeys(input, [
       "automaticRevisionsUsed",
       "candidate",
+      "candidateBinding",
       "initialPlanRevision",
       "phase",
     ])
@@ -158,9 +191,13 @@ export const parsePlanReviewState = (input: unknown): PlanReviewState | null => 
     input.phase === "HUMAN_REQUIRED" &&
     (input.humanReason === "PLAN_REVIEW_EXHAUSTED" ||
       input.humanReason === "REVIEW_ESCALATED") &&
+    (input.humanReason !== "PLAN_REVIEW_EXHAUSTED" ||
+      input.automaticRevisionsUsed === 2 ||
+      parsedCandidate.candidate.revision === Number.MAX_SAFE_INTEGER) &&
     hasExactKeys(input, [
       "automaticRevisionsUsed",
       "candidate",
+      "candidateBinding",
       "humanReason",
       "initialPlanRevision",
       "phase",
@@ -188,6 +225,7 @@ export const beginPlanReview = (candidateInput: PlanCandidate): PlanReviewOperat
     state: freezeState({
       phase: "AWAITING_REVIEW",
       candidate: parsed.candidate,
+      candidateBinding: createPlanCandidateBinding(parsed.candidate),
       initialPlanRevision: parsed.candidate.revision,
       automaticRevisionsUsed: 0,
     }),
@@ -212,7 +250,10 @@ export const applyReviewerDecision = (
       reason: "INVALID_REVIEW_DECISION",
     });
   }
-  if (decision.planRevision !== state.candidate.revision) {
+  if (
+    decision.planRevision !== state.candidate.revision ||
+    decision.candidateBinding !== state.candidateBinding
+  ) {
     return Object.freeze({
       kind: "INVALID_OPERATION",
       reason: "STALE_REVIEW_DECISION",
@@ -235,7 +276,10 @@ export const applyReviewerDecision = (
       }),
     });
   }
-  if (state.automaticRevisionsUsed === 2) {
+  if (
+    state.automaticRevisionsUsed === 2 ||
+    state.candidate.revision === Number.MAX_SAFE_INTEGER
+  ) {
     return Object.freeze({
       kind: "REVIEW_STATE",
       state: freezeState({
@@ -297,6 +341,7 @@ export const submitPlannerRevision = (
     state: freezeState({
       phase: "AWAITING_REVIEW",
       candidate: parsed.candidate,
+      candidateBinding: createPlanCandidateBinding(parsed.candidate),
       initialPlanRevision: state.initialPlanRevision,
       automaticRevisionsUsed: nextAutomaticRevisionsUsed,
     }),

@@ -4,6 +4,7 @@ import type {
   PlanReviewState,
 } from "./contracts.js";
 import {
+  createPlanCandidateBinding,
   parseMaterializedGraph,
   validatePlanCandidateGraph,
 } from "./graph.js";
@@ -27,11 +28,12 @@ export const materializeApprovedPlan = (
     projectId: validation.candidate.projectId,
     bigTaskId: validation.candidate.bigTaskId,
     planRevision: validation.candidate.revision,
+    candidateBinding: createPlanCandidateBinding(validation.candidate),
     subtasks: validation.candidate.subtasks,
     dependencies: validation.dependencies,
   });
   if (graph === null) {
-    const validationFailure: Extract<GraphValidationResult, { readonly valid: false }> = {
+    const validationFailure: Extract<GraphValidationResult, { readonly valid: false }> = Object.freeze({
       valid: false,
       errors: Object.freeze([
         Object.freeze({
@@ -39,7 +41,7 @@ export const materializeApprovedPlan = (
           subtaskIds: Object.freeze([]),
         }),
       ]),
-    };
+    });
     return Object.freeze({
       kind: "GRAPH_INVALID",
       validation: validationFailure,

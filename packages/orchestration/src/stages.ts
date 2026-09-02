@@ -13,6 +13,7 @@ import type {
   WorkflowProfile,
   WorkflowStage,
 } from "./contracts.js";
+import { parseMaterializedGraph } from "./graph.js";
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -44,7 +45,7 @@ const evidenceKeys = [
   "worktreeOwnershipAvailable",
 ] as const satisfies readonly (keyof StageEvidenceFacts)[];
 
-const parseEvidence = (input: unknown): Readonly<StageEvidenceFacts> | null => {
+const parseEvidenceFacts = (input: unknown): Readonly<StageEvidenceFacts> | null => {
   if (!isRecord(input) || Object.keys(input).some((key) => !evidenceKeys.includes(key as never))) {
     return null;
   }
@@ -64,28 +65,49 @@ const parseEvidence = (input: unknown): Readonly<StageEvidenceFacts> | null => {
   return Object.freeze({ ...input }) as Readonly<StageEvidenceFacts>;
 };
 
-const parseInput = (input: unknown): Readonly<StageTransitionInput> | null => {
+interface ParsedStageTransitionInput {
+  readonly profile: WorkflowProfile;
+  readonly currentStage: WorkflowStage;
+  readonly requestedNextStage: WorkflowStage;
+  readonly evidence: Readonly<StageEvidenceFacts>;
+  readonly repairCyclesUsed: 0 | 1;
+}
+
+const parseInput = (input: unknown): Readonly<ParsedStageTransitionInput> | null => {
   if (
     !isRecord(input) ||
-    Object.keys(input).length !== 5 ||
-    !Object.hasOwn(input, "profile") ||
+    Object.keys(input).length !== 6 ||
+    !Object.hasOwn(input, "graph") ||
+    !Object.hasOwn(input, "subtaskId") ||
     !Object.hasOwn(input, "currentStage") ||
     !Object.hasOwn(input, "requestedNextStage") ||
     !Object.hasOwn(input, "evidence") ||
     !Object.hasOwn(input, "repairCyclesUsed") ||
-    !isWorkflowProfile(input.profile) ||
     !isWorkflowStage(input.currentStage) ||
     !isWorkflowStage(input.requestedNextStage) ||
     (input.repairCyclesUsed !== 0 && input.repairCyclesUsed !== 1)
   ) {
     return null;
   }
-  const evidence = parseEvidence(input.evidence);
-  if (evidence === null) {
+  const graph = parseMaterializedGraph(input.graph);
+  if (
+    graph === null ||
+    typeof input.subtaskId !== "string" ||
+    !isRecord(input.evidence) ||
+    Object.keys(input.evidence).length !== 2 ||
+    !Object.hasOwn(input.evidence, "candidateBinding") ||
+    !Object.hasOwn(input.evidence, "facts") ||
+    input.evidence.candidateBinding !== graph.candidateBinding
+  ) {
+    return null;
+  }
+  const subtask = graph.subtasks.find(({ id }) => id === input.subtaskId);
+  const evidence = parseEvidenceFacts(input.evidence.facts);
+  if (subtask === undefined || evidence === null) {
     return null;
   }
   return Object.freeze({
-    profile: input.profile,
+    profile: subtask.profile,
     currentStage: input.currentStage,
     requestedNextStage: input.requestedNextStage,
     evidence,
@@ -96,6 +118,9 @@ const parseInput = (input: unknown): Readonly<StageTransitionInput> | null => {
 export const getWorkflowStagePath = (
   profile: WorkflowProfile,
 ): readonly WorkflowStage[] => {
+  if (!isWorkflowProfile(profile)) {
+    return Object.freeze([]);
+  }
   switch (profile) {
     case "LOW":
       return Object.freeze(["EXECUTE", "VERIFY", "COMPLETE"]);
@@ -213,6 +238,55 @@ const evidenceValue = (
   }
 };
 
+const evidenceKeyForCode = (
+  code: StageEvidenceCode,
+): keyof StageEvidenceFacts => {
+  switch (code) {
+    case "PLAN_CANDIDATE_PRESENT":
+      return "planCandidatePresent";
+    case "PLAN_REVIEW_SATISFIED":
+      return "planReviewSatisfied";
+    case "GRAPH_MATERIALIZED":
+      return "graphMaterialized";
+    case "DEPENDENCIES_READY":
+      return "dependenciesReady";
+    case "REPOSITORY_PREFLIGHT_PASSED":
+      return "repositoryPreflightPassed";
+    case "CONTEXT_PREFLIGHT_PASSED":
+      return "contextPreflightPassed";
+    case "BUDGET_AVAILABLE":
+      return "budgetAvailable";
+    case "CONCURRENCY_AVAILABLE":
+      return "concurrencyAvailable";
+    case "WORKTREE_OWNERSHIP_AVAILABLE":
+      return "worktreeOwnershipAvailable";
+    case "HUMAN_APPROVAL_SATISFIED":
+      return "humanApprovalSatisfied";
+    case "EXECUTION_EVIDENCE_PASSED":
+      return "executionEvidencePassed";
+    case "VERIFICATION_EVIDENCE_PASSED":
+      return "verificationEvidencePassed";
+    case "HARDENING_EVIDENCE_PASSED":
+      return "hardeningEvidencePassed";
+    case "FRESH_QA_OUTCOME_RECORDED":
+      return "freshQaOutcome";
+    case "REPAIR_EVIDENCE_PASSED":
+      return "repairEvidencePassed";
+    case "FOCUSED_RE_QA_OUTCOME_RECORDED":
+      return "focusedReQaOutcome";
+  }
+};
+
+const hasOnlyRelevantEvidence = (
+  evidence: Readonly<StageEvidenceFacts>,
+  requiredEvidence: readonly StageEvidenceCode[],
+): boolean => {
+  const relevantKeys = new Set(requiredEvidence.map(evidenceKeyForCode));
+  return Object.keys(evidence).every((key) =>
+    relevantKeys.has(key as keyof StageEvidenceFacts),
+  );
+};
+
 const reasonForMissingEvidence = (
   missingEvidence: readonly StageEvidenceCode[],
 ): StageBlockReason => {
@@ -257,33 +331,43 @@ export const evaluateStageTransition = (
     return blocked("INVALID_INPUT", null, null);
   }
 
+  if (
+    (input.profile !== "HIGH_RISK_FOUNDATION" && input.repairCyclesUsed !== 0) ||
+    (input.profile === "HIGH_RISK_FOUNDATION" &&
+      (input.currentStage === "REPAIR" || input.currentStage === "FOCUSED_RE_QA") &&
+      input.repairCyclesUsed !== 1) ||
+    (input.profile === "HIGH_RISK_FOUNDATION" &&
+      input.currentStage !== "REPAIR" &&
+      input.currentStage !== "FOCUSED_RE_QA" &&
+      input.currentStage !== "COMPLETE" &&
+      input.repairCyclesUsed !== 0)
+  ) {
+    return blocked(
+      "INVALID_INPUT",
+      input.currentStage,
+      null,
+      [],
+      [],
+      input.repairCyclesUsed,
+    );
+  }
+
   let expectedNextStage = nextStageFor(input.profile, input.currentStage);
   let requiredEvidence: readonly StageEvidenceCode[] = [];
   let nextRepairCyclesUsed = input.repairCyclesUsed;
 
   if (input.profile === "HIGH_RISK_FOUNDATION" && input.currentStage === "FRESH_QA") {
-    if (input.repairCyclesUsed !== 0) {
-      if (input.evidence.freshQaOutcome === "BLOCKING_FAIL") {
-        return Object.freeze({
-          kind: "HUMAN_REQUIRED",
-          reason: "REPAIR_REQA_EXHAUSTED",
-          currentStage: input.currentStage,
-          nextStage: null,
-          requiredEvidence: Object.freeze(["FRESH_QA_OUTCOME_RECORDED"] as const),
-          missingEvidence: Object.freeze([]),
-          repairCyclesUsed: 1,
-        });
-      }
+    requiredEvidence = Object.freeze(["FRESH_QA_OUTCOME_RECORDED"]);
+    if (!hasOnlyRelevantEvidence(input.evidence, requiredEvidence)) {
       return blocked(
         "INVALID_INPUT",
         input.currentStage,
         null,
         [],
         [],
-        input.repairCyclesUsed,
+        0,
       );
     }
-    requiredEvidence = Object.freeze(["FRESH_QA_OUTCOME_RECORDED"]);
     if (!evidenceValue(input.evidence, "FRESH_QA_OUTCOME_RECORDED")) {
       return blocked(
         "EVIDENCE_BLOCKED",
@@ -331,6 +415,16 @@ export const evaluateStageTransition = (
       );
     }
     requiredEvidence = Object.freeze(["FOCUSED_RE_QA_OUTCOME_RECORDED"]);
+    if (!hasOnlyRelevantEvidence(input.evidence, requiredEvidence)) {
+      return blocked(
+        "INVALID_INPUT",
+        input.currentStage,
+        null,
+        [],
+        [],
+        input.repairCyclesUsed,
+      );
+    }
     if (!evidenceValue(input.evidence, "FOCUSED_RE_QA_OUTCOME_RECORDED")) {
       return blocked(
         "EVIDENCE_BLOCKED",
@@ -355,6 +449,17 @@ export const evaluateStageTransition = (
     expectedNextStage = "COMPLETE";
   } else if (expectedNextStage !== null) {
     requiredEvidence = standardRequirements(input.currentStage, expectedNextStage);
+  }
+
+  if (!hasOnlyRelevantEvidence(input.evidence, requiredEvidence)) {
+    return blocked(
+      "INVALID_INPUT",
+      input.currentStage,
+      expectedNextStage,
+      requiredEvidence,
+      [],
+      input.repairCyclesUsed,
+    );
   }
 
   if (

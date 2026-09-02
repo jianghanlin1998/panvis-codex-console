@@ -3,6 +3,7 @@ import type { SubtaskId } from "@codex-task-console/domain";
 
 import { WORKFLOW_STAGES } from "./contracts.js";
 import type {
+  BigTaskCompletionSnapshot,
   BigTaskCompletionResult,
   DispatchSubtaskState,
   MaterializedGraph,
@@ -53,15 +54,23 @@ const invalid = (): BigTaskCompletionResult =>
 
 export const evaluateBigTaskCompletion = (
   graphInput: Readonly<MaterializedGraph>,
-  stateInputs: readonly DispatchSubtaskState[],
+  snapshotInput: Readonly<BigTaskCompletionSnapshot>,
 ): BigTaskCompletionResult => {
   const graph = parseMaterializedGraph(graphInput);
-  if (graph === null || !Array.isArray(stateInputs)) {
+  if (
+    graph === null ||
+    !isRecord(snapshotInput) ||
+    Object.keys(snapshotInput).length !== 2 ||
+    !Object.hasOwn(snapshotInput, "candidateBinding") ||
+    !Object.hasOwn(snapshotInput, "subtaskStates") ||
+    snapshotInput.candidateBinding !== graph.candidateBinding ||
+    !Array.isArray(snapshotInput.subtaskStates)
+  ) {
     return invalid();
   }
 
   const statesById = new Map<SubtaskId, DispatchSubtaskState>();
-  for (const stateInput of stateInputs) {
+  for (const stateInput of snapshotInput.subtaskStates) {
     const state = parseState(stateInput);
     if (state === null || statesById.has(state.subtaskId)) {
       return invalid();
@@ -71,7 +80,10 @@ export const evaluateBigTaskCompletion = (
   const graphIds = new Set(graph.subtasks.map(({ id }) => id));
   if (
     statesById.size !== graph.subtasks.length ||
-    [...statesById.keys()].some((id) => !graphIds.has(id))
+    [...statesById.keys()].some((id) => !graphIds.has(id)) ||
+    [...statesById.values()].some(
+      ({ stage, maturity }) => stage === "COMPLETE" && maturity === "NOT_STARTED",
+    )
   ) {
     return invalid();
   }

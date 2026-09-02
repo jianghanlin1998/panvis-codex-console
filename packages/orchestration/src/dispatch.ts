@@ -1,4 +1,5 @@
 import {
+  ProjectIdSchema,
   SubtaskIdSchema,
   SubtaskMaturitySchema,
   evaluateSubtaskDependencyReadiness,
@@ -12,6 +13,7 @@ import type {
   DispatchSubtaskState,
   SerialDispatchInput,
   SerialDispatchResult,
+  WorkflowProfile,
   WorkflowStage,
 } from "./contracts.js";
 import { parseMaterializedGraph } from "./graph.js";
@@ -36,8 +38,46 @@ const isCanonicalSubtaskId = (value: unknown): value is SubtaskId => {
   return parsed.success && parsed.data === value;
 };
 
+const isCanonicalProjectId = (value: unknown): boolean => {
+  const parsed = ProjectIdSchema.safeParse(value);
+  return parsed.success && parsed.data === value;
+};
+
 const isWorkflowStage = (value: unknown): value is WorkflowStage =>
   typeof value === "string" && WORKFLOW_STAGES.some((stage) => stage === value);
+
+const isStageAllowedForProfile = (
+  profile: WorkflowProfile,
+  stage: WorkflowStage,
+): boolean => {
+  switch (profile) {
+    case "LOW":
+      return stage === "EXECUTE" || stage === "VERIFY" || stage === "COMPLETE";
+    case "STANDARD":
+      return (
+        stage === "PLAN" ||
+        stage === "REVIEW" ||
+        stage === "MATERIALIZE" ||
+        stage === "EXECUTE" ||
+        stage === "VERIFY" ||
+        stage === "COMPLETE"
+      );
+    case "HIGH_RISK_FOUNDATION":
+      return stage !== "VERIFY";
+  }
+};
+
+const isMaturityCompatibleWithStage = (
+  stage: WorkflowStage,
+  maturity: DispatchSubtaskState["maturity"],
+): boolean => {
+  if (stage === "PLAN" || stage === "REVIEW" || stage === "MATERIALIZE") {
+    return true;
+  }
+  return stage === "EXECUTE"
+    ? maturity === "NOT_STARTED"
+    : maturity !== "NOT_STARTED";
+};
 
 const parseSubtaskState = (input: unknown): DispatchSubtaskState | null => {
   if (
@@ -126,14 +166,29 @@ export const selectSerialWriteDispatch = (
   if (
     !isRecord(inputValue) ||
     !hasExactKeys(inputValue, [
-      "activeProjectWriteSubtaskIds",
-      "executionFacts",
+      "executionFactsSnapshot",
       "graph",
+      "projectWriteCapacity",
+      "subtaskStateSnapshot",
+    ]) ||
+    !isRecord(inputValue.subtaskStateSnapshot) ||
+    !hasExactKeys(inputValue.subtaskStateSnapshot, [
+      "candidateBinding",
       "subtaskStates",
     ]) ||
-    !Array.isArray(inputValue.subtaskStates) ||
-    !Array.isArray(inputValue.executionFacts) ||
-    !Array.isArray(inputValue.activeProjectWriteSubtaskIds)
+    !isRecord(inputValue.executionFactsSnapshot) ||
+    !hasExactKeys(inputValue.executionFactsSnapshot, [
+      "candidateBinding",
+      "executionFacts",
+    ]) ||
+    !isRecord(inputValue.projectWriteCapacity) ||
+    !hasExactKeys(inputValue.projectWriteCapacity, [
+      "activeWriteSubtaskIds",
+      "projectId",
+    ]) ||
+    !Array.isArray(inputValue.subtaskStateSnapshot.subtaskStates) ||
+    !Array.isArray(inputValue.executionFactsSnapshot.executionFacts) ||
+    !Array.isArray(inputValue.projectWriteCapacity.activeWriteSubtaskIds)
   ) {
     return blocked("INVALID_INPUT");
   }
@@ -141,9 +196,17 @@ export const selectSerialWriteDispatch = (
   if (graph === null) {
     return blocked("INVALID_INPUT");
   }
+  if (
+    inputValue.subtaskStateSnapshot.candidateBinding !== graph.candidateBinding ||
+    inputValue.executionFactsSnapshot.candidateBinding !== graph.candidateBinding ||
+    !isCanonicalProjectId(inputValue.projectWriteCapacity.projectId) ||
+    inputValue.projectWriteCapacity.projectId !== graph.projectId
+  ) {
+    return blocked("INVALID_INPUT");
+  }
 
   const stateById = new Map<SubtaskId, DispatchSubtaskState>();
-  for (const stateInput of inputValue.subtaskStates) {
+  for (const stateInput of inputValue.subtaskStateSnapshot.subtaskStates) {
     const state = parseSubtaskState(stateInput);
     if (state === null || stateById.has(state.subtaskId)) {
       return blocked("INVALID_INPUT");
@@ -152,7 +215,7 @@ export const selectSerialWriteDispatch = (
   }
 
   const factsById = new Map<SubtaskId, DispatchExecutionFacts>();
-  for (const factsInput of inputValue.executionFacts) {
+  for (const factsInput of inputValue.executionFactsSnapshot.executionFacts) {
     const facts = parseExecutionFacts(factsInput);
     if (facts === null || factsById.has(facts.subtaskId)) {
       return blocked("INVALID_INPUT");
@@ -169,13 +232,26 @@ export const selectSerialWriteDispatch = (
   ) {
     return blocked("INVALID_INPUT");
   }
+  for (const subtask of graph.subtasks) {
+    const state = stateById.get(subtask.id);
+    if (
+      state === undefined ||
+      !isStageAllowedForProfile(subtask.profile, state.stage) ||
+      !isMaturityCompatibleWithStage(state.stage, state.maturity)
+    ) {
+      return blocked("INVALID_INPUT");
+    }
+  }
 
   const activeWriteIds = new Set<SubtaskId>();
-  for (const activeId of inputValue.activeProjectWriteSubtaskIds) {
+  for (const activeId of inputValue.projectWriteCapacity.activeWriteSubtaskIds) {
     if (!isCanonicalSubtaskId(activeId) || activeWriteIds.has(activeId)) {
       return blocked("INVALID_INPUT");
     }
     activeWriteIds.add(activeId);
+  }
+  if (activeWriteIds.size > 1) {
+    return blocked("INVALID_INPUT");
   }
 
   const readinessSubtasks = graph.subtasks.map((subtask) => {

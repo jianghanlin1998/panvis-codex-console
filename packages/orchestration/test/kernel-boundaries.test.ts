@@ -19,13 +19,19 @@ import type {
   StageTransitionInput,
 } from "../src/index.js";
 import {
+  approvalFor,
   blockingDependency,
   dispatchState,
   executionFacts,
+  executionFactsSnapshotFor,
   materializedGraphFor,
   planCandidate,
   proposedSubtask,
+  projectWriteCapacityFor,
+  rejectionFor,
   reviewStateFor,
+  stageEvidenceFor,
+  stateSnapshotFor,
 } from "./fixtures.js";
 
 const invalidGraphCodes = (input: unknown): readonly string[] => {
@@ -128,7 +134,11 @@ describe("review authority boundaries", () => {
   it("binds approval to the exact current plan revision", () => {
     const state = reviewStateFor(planCandidate({ revision: 4 }));
     expect(
-      applyReviewerDecision(state, { outcome: "APPROVE", planRevision: 3 }),
+      applyReviewerDecision(state, {
+        outcome: "APPROVE",
+        planRevision: 3,
+        candidateBinding: state.candidateBinding,
+      }),
     ).toEqual({ kind: "INVALID_OPERATION", reason: "STALE_REVIEW_DECISION" });
   });
 
@@ -137,6 +147,7 @@ describe("review authority boundaries", () => {
     const invalidDecision = {
       outcome: "APPROVE",
       planRevision: 1,
+      candidateBinding: state.candidateBinding,
       replacementPlan: planCandidate({ revision: 2 }),
     } as unknown as ReviewDecision;
     expect(applyReviewerDecision(state, invalidDecision)).toEqual({
@@ -147,11 +158,10 @@ describe("review authority boundaries", () => {
 
   it("rejects stale or skipped planner revisions and preserves the automatic count", () => {
     const initial = reviewStateFor(planCandidate({ revision: 7 }));
-    const rejection = applyReviewerDecision(initial, {
-      outcome: "REJECT",
-      planRevision: 7,
-      revisionRequirements: ["Revise the bounded graph."],
-    });
+    const rejection = applyReviewerDecision(
+      initial,
+      rejectionFor(initial, ["Revise the bounded graph."]),
+    );
     expect(rejection.kind).toBe("REVIEW_STATE");
     if (rejection.kind !== "REVIEW_STATE") {
       throw new Error("Expected a rejected review state.");
@@ -178,10 +188,8 @@ describe("review authority boundaries", () => {
     const candidate = planCandidate({
       dependencies: [blockingDependency("st_missing", "st_a")],
     });
-    const approved = applyReviewerDecision(reviewStateFor(candidate), {
-      outcome: "APPROVE",
-      planRevision: 1,
-    });
+    const started = reviewStateFor(candidate);
+    const approved = applyReviewerDecision(started, approvalFor(started));
     expect(approved.kind).toBe("REVIEW_STATE");
     if (approved.kind !== "REVIEW_STATE") {
       throw new Error("Expected approval state.");
@@ -197,11 +205,13 @@ describe("review authority boundaries", () => {
 });
 
 describe("stage, dispatch, and completion boundaries", () => {
+  const standardGraph = materializedGraphFor(planCandidate());
   const stageInput = {
-    profile: "STANDARD",
+    graph: standardGraph,
+    subtaskId: standardGraph.subtasks[0]!.id,
     currentStage: "MATERIALIZE",
     requestedNextStage: "EXECUTE",
-    evidence: {
+    evidence: stageEvidenceFor(standardGraph, {
       graphMaterialized: true,
       dependenciesReady: true,
       repositoryPreflightPassed: true,
@@ -210,7 +220,7 @@ describe("stage, dispatch, and completion boundaries", () => {
       concurrencyAvailable: true,
       worktreeOwnershipAvailable: true,
       humanApprovalSatisfied: true,
-    },
+    }),
     repairCyclesUsed: 0,
   } as const satisfies StageTransitionInput;
 
@@ -219,7 +229,10 @@ describe("stage, dispatch, and completion boundaries", () => {
     expect(
       evaluateStageTransition({
         ...stageInput,
-        evidence: { ...stageInput.evidence, budgetAvailable: false },
+        evidence: stageEvidenceFor(standardGraph, {
+          ...stageInput.evidence.facts,
+          budgetAvailable: false,
+        }),
       }),
     ).toMatchObject({
       kind: "BLOCKED",
@@ -232,7 +245,7 @@ describe("stage, dispatch, and completion boundaries", () => {
     expect(
       evaluateStageTransition({
         ...stageInput,
-        profile: "CUSTOM",
+        subtaskId: "st_missing",
       } as unknown as StageTransitionInput),
     ).toMatchObject({ kind: "BLOCKED", reason: "INVALID_INPUT" });
     expect(
@@ -246,23 +259,29 @@ describe("stage, dispatch, and completion boundaries", () => {
         ...stageInput,
         currentStage: "COMPLETE",
         requestedNextStage: "EXECUTE",
-        evidence: {},
+        evidence: stageEvidenceFor(standardGraph, {}),
       }),
     ).toMatchObject({ kind: "BLOCKED", reason: "INVALID_STAGE_TRANSITION" });
   });
 
   it("does not allow a used repair counter to enter a second repair", () => {
+    const graph = materializedGraphFor(
+      planCandidate({
+        subtasks: [proposedSubtask("st_high", "HIGH_RISK_FOUNDATION")],
+      }),
+    );
     expect(
       evaluateStageTransition({
-        profile: "HIGH_RISK_FOUNDATION",
+        graph,
+        subtaskId: graph.subtasks[0]!.id,
         currentStage: "FRESH_QA",
         requestedNextStage: "REPAIR",
-        evidence: { freshQaOutcome: "BLOCKING_FAIL" },
+        evidence: stageEvidenceFor(graph, { freshQaOutcome: "BLOCKING_FAIL" }),
         repairCyclesUsed: 1,
       }),
     ).toMatchObject({
-      kind: "HUMAN_REQUIRED",
-      reason: "REPAIR_REQA_EXHAUSTED",
+      kind: "BLOCKED",
+      reason: "INVALID_INPUT",
       repairCyclesUsed: 1,
     });
   });
@@ -278,46 +297,54 @@ describe("stage, dispatch, and completion boundaries", () => {
     const factsB = executionFacts("st_b");
     const dependencyBlocked = selectSerialWriteDispatch({
       graph,
-      subtaskStates: [
+      subtaskStateSnapshot: stateSnapshotFor(graph, [
         dispatchState("st_a", "IMPLEMENTED", "COMPLETE"),
         dispatchState("st_b"),
-      ],
-      executionFacts: [factsA, factsB],
-      activeProjectWriteSubtaskIds: [],
+      ]),
+      executionFactsSnapshot: executionFactsSnapshotFor(graph, [factsA, factsB]),
+      projectWriteCapacity: projectWriteCapacityFor(graph),
     });
     expect(dependencyBlocked).toMatchObject({ kind: "BLOCKED", reason: "DEPENDENCY_BLOCKED" });
 
     expect(
       selectSerialWriteDispatch({
         graph,
-        subtaskStates: [
+        subtaskStateSnapshot: stateSnapshotFor(graph, [
           dispatchState("st_a", "ACCEPTED", "COMPLETE"),
           dispatchState("st_b"),
-        ],
-        executionFacts: [factsA, { ...factsB, budgetAvailable: false }],
-        activeProjectWriteSubtaskIds: [],
+        ]),
+        executionFactsSnapshot: executionFactsSnapshotFor(graph, [
+          factsA,
+          { ...factsB, budgetAvailable: false },
+        ]),
+        projectWriteCapacity: projectWriteCapacityFor(graph),
       }),
     ).toMatchObject({ kind: "BLOCKED", reason: "BUDGET_BLOCKED" });
     expect(
       selectSerialWriteDispatch({
         graph,
-        subtaskStates: [
+        subtaskStateSnapshot: stateSnapshotFor(graph, [
           dispatchState("st_a", "ACCEPTED", "COMPLETE"),
           dispatchState("st_b"),
-        ],
-        executionFacts: [factsA, { ...factsB, humanApprovalSatisfied: false }],
-        activeProjectWriteSubtaskIds: [],
+        ]),
+        executionFactsSnapshot: executionFactsSnapshotFor(graph, [
+          factsA,
+          { ...factsB, humanApprovalSatisfied: false },
+        ]),
+        projectWriteCapacity: projectWriteCapacityFor(graph),
       }),
     ).toMatchObject({ kind: "HUMAN_REQUIRED", reason: "AUTHORITY_BLOCKED" });
     expect(
       selectSerialWriteDispatch({
         graph,
-        subtaskStates: [
+        subtaskStateSnapshot: stateSnapshotFor(graph, [
           dispatchState("st_a", "ACCEPTED", "COMPLETE"),
           dispatchState("st_b"),
-        ],
-        executionFacts: [factsA, factsB],
-        activeProjectWriteSubtaskIds: [dispatchState("st_active").subtaskId],
+        ]),
+        executionFactsSnapshot: executionFactsSnapshotFor(graph, [factsA, factsB]),
+        projectWriteCapacity: projectWriteCapacityFor(graph, [
+          dispatchState("st_active").subtaskId,
+        ]),
       }),
     ).toMatchObject({ kind: "BLOCKED", reason: "CONCURRENCY_BLOCKED" });
   });
@@ -327,12 +354,20 @@ describe("stage, dispatch, and completion boundaries", () => {
     expect(
       selectSerialWriteDispatch({
         graph,
-        subtaskStates: [dispatchState("st_a"), dispatchState("st_a")],
-        executionFacts: [executionFacts("st_a")],
-        activeProjectWriteSubtaskIds: [],
+        subtaskStateSnapshot: stateSnapshotFor(graph, [
+          dispatchState("st_a"),
+          dispatchState("st_a"),
+        ]),
+        executionFactsSnapshot: executionFactsSnapshotFor(graph, [executionFacts("st_a")]),
+        projectWriteCapacity: projectWriteCapacityFor(graph),
       }),
     ).toMatchObject({ kind: "BLOCKED", reason: "INVALID_INPUT" });
-    expect(evaluateBigTaskCompletion(graph, [dispatchState("st_a")])).toEqual({
+    expect(
+      evaluateBigTaskCompletion(
+        graph,
+        stateSnapshotFor(graph, [dispatchState("st_a")]),
+      ),
+    ).toEqual({
       kind: "BLOCKED",
       reason: "REQUIRED_WORK_INCOMPLETE",
       incompleteSubtaskIds: ["st_a"],
