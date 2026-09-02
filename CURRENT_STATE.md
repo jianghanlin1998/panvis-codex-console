@@ -269,7 +269,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real target writes for the Step 6 repair: 0
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
-- Step 7 Backend Dogfood #1: IN_PROGRESS — disposable replay reproduced Attempt #3, Cycle 2 repair verified, Attempt #4 not spent
+- Step 7 Backend Dogfood #1: PASS — Cycle 2 repaired the reproduced `.9` path representation, Attempt #4 succeeded, product verification/checkpoint/release completed
 - Step 7 original shared-root `0755` blocker: CLOSED; first repair SHA `cf7dfee62defc8d4c198f70dc7c7d740611162f8`
 - First shared-root repair Fresh Focused Re-QA: FAIL
 - CTC-STEP7-ROOT-REQA-001 root cause: the installer could create `Codex Task Console` through a noncanonical symlinked `Application Support` parent before detecting the mismatch
@@ -281,8 +281,8 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Active owned runtime continuity: PASS — exact owned release `codex-cli 0.148.0-alpha.9`
 - Step 7 operator invocation recovery: MECHANICAL episode 1 PASS — supported `pnpm ctc:operator <command>` form used; documented extra-`--` mismatch remains a non-blocking follow-up
 - Step 7 target source: AI Update Board `main` remains clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no product edits
-- Step 7 hierarchy/readiness/provision: PASS — `prj_ai_update_board` / `bt_ai_update_board` / `st_ai_update_board_ui`; Subtask `IN_PROGRESS` / `NOT_STARTED`; zero dependency edges
-- Step 7 ACTIVE ownership: `wt_d71afbd8e735b2246feb3fec3ae39d46`; retained worktree clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`
+- Step 7 hierarchy/readiness/provision: PASS — `prj_ai_update_board` / `bt_ai_update_board` / `st_ai_update_board_ui`; final Subtask `QA_DEBUG` / `IMPLEMENTED`; zero dependency blockers
+- Step 7 ownership: `wt_d71afbd8e735b2246feb3fec3ae39d46`; final `RELEASED` from `dc4ceb0c8726e30f37800ec7280b8b8c7b078513` at release HEAD `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
 - Step 7 first execution attempt: `FAILED` / terminal with `WRITE_POLICY_REQUIRED`; no provider thread/run/model reference and no provider/model turn started
 - Step 7 independent exact-runtime diagnostic: `RESPONSE_REPRESENTATION_MISMATCH` — `.9` normalized `thread/start` as `writableRoots: []` while the validator incorrectly required `[worktreePath]`
 - Step 7 blocker repair: REPAIRED — thread-level mode confirmation and turn-level exact-root authority are distinct; exact turn-start writable-root policy UNCHANGED; mock realism gap REPAIRED
@@ -296,7 +296,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 replacement durable ChatThread: `thr_d62f34803922633261403abcede08b8f` / `CLOSED`; provider thread `01a05fed-17e2-7db2-b24d-17c8987f2f11`
 - Step 7 replacement durable ExecutionRun: `run_655320be3f9fe709669d1394f56971a8` / `FAILED`; provider run `01a05fed-18a6-7523-a891-7fc937fab0db`; model `gpt-5.6-sol`
 - Step 7 replacement normalized usage: 28,084 input / 13,056 cached input / 410 output / 125 reasoning / 28,494 total tokens
-- Step 7 integrated hardening sweep: repair cycles 1/3; additional provider runs 1/2; mechanical recovery episodes 2/3
+- Step 7 integrated hardening sweep: repair cycles 2/3; additional provider runs 2/2; mechanical recovery episodes 2/3
 - Step 7 Repair Cycle 1: candidate hardened — fixed-total 120-second wait replaced by validated-progress idle timeout 300,000 ms plus non-refreshable absolute ceiling 1,200,000 ms; public timeout code, one interrupt, zero retry, cleanup, durable terminalization, and ACTIVE ownership preservation unchanged
 - Step 7 Cycle 1 regressions: focused liveness 119 tests PASS; Codex-adapter corpus 20 files / 497 tests PASS; full suite 107 files / 3,525 tests PASS; lint/typecheck/build/diff-check PASS
 - Step 7 Cycle 1 acceptance: write-enabled hardening evidence only; Fresh Independent QA NOT PERFORMED
@@ -311,16 +311,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 diagnostic authority result: UNCHANGED — thread/turn identities matched, tool lifecycle was new/active, approvals remained `never`, network remained disabled, and the disposable source/owned worktree remained clean
 - Step 7 Cycle 2: REPAIRED / VERIFIED — schema-valid absolute file-change paths are accepted only through canonical real ancestors inside the exact owned worktree; outside-root, traversal, directory, and symlink paths remain rejected
 - Step 7 Cycle 2 verification: focused 60/60; adapter/durable/worktree 652/652; full suite 107 files / 3,526 tests PASS; lint/typecheck/build/public hygiene PASS; the sandbox-only loopback `EPERM` full run was rerun unchanged with local-listener permission
-- Step 7 canonical Attempt #4: NOT SPENT pending repair commit/push and canonical gate reread
-- Step 7 final verification: idle-timeout fixture determinism focused regression PASS; lint/typecheck/build/diff-check PASS; full suite reached 105/107 files and 3,521/3,525 tests PASS, with four host-load-only 5-second timeouts persisting after the one permitted controlled-worker recovery; no further same-cause recovery authorized
+- Step 7 Cycle 2 Console repair: `8db748b65dfba68c7ec089cba6a78924a8e152b9`, pushed to `origin/main`
+- Step 7 canonical Attempt #4: 1/1 issued once; operator client reached its bounded wait, while the same daemon-side attempt completed terminally without retry
+- Step 7 Attempt #4 durable ChatThread: `thr_e373565f7dae376e1fa77bba60a92d11` / `CLOSED`; provider thread `01a06087-7de9-78a0-a389-dc1d8ddbcaba`
+- Step 7 Attempt #4 durable ExecutionRun: `run_fa43ea9fe5138a9073db4190d5f60b4f` / `SUCCEEDED`; provider run `01a06087-7ea3-7401-a94a-947406ab3a6e`; model `gpt-5.6-sol`
+- Step 7 Attempt #4 normalized usage: 175,499 input / 119,552 cached input / 13,192 output / 2,826 reasoning / 188,691 total tokens
+- Step 7 Attempt #4 final durable state: four total ChatThreads, all `CLOSED`; four total ExecutionRuns, three `FAILED` and one `SUCCEEDED`; unresolved attempts 0
 - Step 7 mechanical recovery: episode 1 closed sandbox loopback `EPERM` by rerunning with loopback permission; episode 2 exhausted the two-attempt same-cause ceiling for host-load-only timeouts
-- Step 7 cleanup: App Server child and transient runtime cleaned; daemon stopped cleanly; no lock/session authority
-- Step 7 target result: provider made no file or commit change; source `main` and ACTIVE owned branch both remain clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; no remote exists
-- Step 7 product verification/implementation commit/checkpoint/release: NOT PERFORMED after the required hard-stop; ACTIVE clean owned worktree preserved
+- Step 7 cleanup: disposable harness removed; canonical App Server child/transient runtime cleaned; daemon stopped cleanly; no lock/session authority
+- Step 7 target result: source `main` remains clean at `dc4ceb0c8726e30f37800ec7280b8b8c7b078513`; retained branch `ctc/worktree/wt_d71afbd8e735b2246feb3fec3ae39d46` points to `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`; no remote, push, merge, or extra registered worktree
+- Step 7 product verification: `npm test` 6/6 PASS; JavaScript syntax checks and `git diff --check` PASS; no dependency, `node_modules`, runtime fetch/CDN, or credential material
+- Step 7 implementation checkpoint: `icp_ai_update_board_ui_step7` persisted through public TaskStorage and bound to Attempt #4 provider run plus implementation commit `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
+- Step 7 release: PASS — normal non-force release, exact release HEAD `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`, generated branch retained
 - Step 7 automatic provider retry: NONE
 - Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
-- Hanlin manual QA: NOT REQUIRED / NOT READY
+- Hanlin manual QA: REQUIRED / PENDING
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
