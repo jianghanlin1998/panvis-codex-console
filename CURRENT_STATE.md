@@ -242,7 +242,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Generic shell/RPC: NONE
 - Browser UI: NOT IMPLEMENTED
 - Orchestration: NOT IMPLEMENTED
-- Real backend dogfood: NOT RUN
+- Roadmap Step 7 real backend dogfood: PASS
 - Provider/model turns for Step 6: 0
 - Real target writes for Step 6 hardening: 0
 - Fresh Independent QA on `bcb4652823f663ee9ef4ffb7caaa1c1ea981e7d8`: FAIL — PARTIAL execution but conclusive blocking evidence
@@ -269,7 +269,13 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Real target writes for the Step 6 repair: 0
 - Step 6 ACCEPTED: YES
 - Roadmap Step 6: ACCEPTED / COMPLETE
-- Step 7 Backend Dogfood #1: PASS — Cycle 2 repaired the reproduced `.9` path representation, Attempt #4 succeeded, product verification/checkpoint/release completed
+- Roadmap Step 7 Backend Dogfood #1: engineering dogfood PASS — Cycle 2 repaired the reproduced `.9` path representation, Attempt #4 succeeded, and product verification/checkpoint/release completed
+- Step 7 Fresh Independent QA on `20932e5438c14d6d0a82c00967de0fee00b8378e`: PASS; target implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`; blocking findings NONE
+- Step 7 acceptance evidence: PASS
+- Step 7 Cycle 1 validated-progress idle liveness: independently PASS
+- Step 7 Cycle 2 contained absolute file-change representation: independently PASS
+- CTC-STEP7-FINAL-QA-001: CLOSED — explicit `OPERATOR_TIMEOUT` reconciliation documented
+- CTC-STEP7-FINAL-QA-002: CLOSED — stale execution-authority and local-control contract documentation reconciled
 - Step 7 original shared-root `0755` blocker: CLOSED; first repair SHA `cf7dfee62defc8d4c198f70dc7c7d740611162f8`
 - First shared-root repair Fresh Focused Re-QA: FAIL
 - CTC-STEP7-ROOT-REQA-001 root cause: the installer could create `Codex Task Console` through a noncanonical symlinked `Application Support` parent before detecting the mismatch
@@ -299,7 +305,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 integrated hardening sweep: repair cycles 2/3; additional provider runs 2/2; mechanical recovery episodes 2/3
 - Step 7 Repair Cycle 1: candidate hardened — fixed-total 120-second wait replaced by validated-progress idle timeout 300,000 ms plus non-refreshable absolute ceiling 1,200,000 ms; public timeout code, one interrupt, zero retry, cleanup, durable terminalization, and ACTIVE ownership preservation unchanged
 - Step 7 Cycle 1 regressions: focused liveness 119 tests PASS; Codex-adapter corpus 20 files / 497 tests PASS; full suite 107 files / 3,525 tests PASS; lint/typecheck/build/diff-check PASS
-- Step 7 Cycle 1 acceptance: write-enabled hardening evidence only; Fresh Independent QA NOT PERFORMED
+- Step 7 Cycle 1 acceptance: write-enabled hardening evidence independently verified by final Step 7 Fresh Independent QA
 - Step 7 Attempt #3: additional provider run 1/2 issued exactly once; terminal durable `FAILED` / `CLOSED` with distinct `APP_SERVER_PROTOCOL_ERROR`; former 120-second timeout did not reproduce
 - Step 7 Attempt #3 durable ChatThread: `thr_eadb95f9b548af1845283cac2cb110a1` / `CLOSED`; provider thread `01a0600d-816a-73c3-b4de-85ccc28cb988`
 - Step 7 Attempt #3 durable ExecutionRun: `run_49deed3d39bae04acd9eed0037521d68` / `FAILED`; provider run `01a0600d-8236-71c2-ab16-4cc8047ab61f`; model `gpt-5.6-sol`
@@ -323,6 +329,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 product verification: `npm test` 6/6 PASS; JavaScript syntax checks and `git diff --check` PASS; no dependency, `node_modules`, runtime fetch/CDN, or credential material
 - Step 7 implementation checkpoint: `icp_ai_update_board_ui_step7` persisted through public TaskStorage and bound to Attempt #4 provider run plus implementation commit `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
 - Step 7 release: PASS — normal non-force release, exact release HEAD `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`, generated branch retained
+- Step 7 canonical Subtask: `st_ai_update_board_ui` remains `QA_DEBUG` / `IMPLEMENTED`; Fresh Independent QA acceptance evidence is recorded separately because no supported public later-maturity/status mutation exists
 - Step 7 automatic provider retry: NONE
 - Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
@@ -330,7 +337,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8: NOT STARTED / NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** Hanlin must decide whether to authorize a separately scoped diagnostic-evidence repair and later provider revalidation. Do not issue Attempt #4 or begin Step 8 under the current sweep.
+**Next safe task:** Hanlin manual UI QA of AI Update Board. If it passes, Step 8 remains a separate Hanlin decision; reconcile the manual-QA result in the next write-enabled task if one follows soon, and use a tiny state-sync only if leaving this file stale would materially mislead future work. Do not authorize or begin Step 8 here.
 
 ## Not operational yet
 - browser Console UI

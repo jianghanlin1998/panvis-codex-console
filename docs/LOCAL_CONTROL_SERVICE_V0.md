@@ -1,6 +1,6 @@
 # Local Control Service & Operator Harness V0
 
-Status: HARDENED. The additional bounded strict UTF-8 repair is complete; Fresh Focused Re-QA is pending and this boundary is not yet accepted.
+Status: ACCEPTED. Roadmap Step 6 is complete, Roadmap Step 7 backend dogfood completed successfully, and Fresh Independent QA passed on `20932e5438c14d6d0a82c00967de0fee00b8378e`.
 
 ## Purpose and composition
 
@@ -59,14 +59,16 @@ The built-in Node HTTP boundary caps request bodies at 16 KiB, responses at 64 K
 The thin operator reads only the canonical local session descriptor and has no arbitrary URL or path mode:
 
 ```text
-pnpm ctc:operator -- ping
-pnpm ctc:operator -- status <subtask-id>
-pnpm ctc:operator -- provision <subtask-id>
-pnpm ctc:operator -- run <subtask-id>
-pnpm ctc:operator -- release <subtask-id>
+pnpm ctc:operator ping
+pnpm ctc:operator status <subtask-id>
+pnpm ctc:operator provision <subtask-id>
+pnpm ctc:operator run <subtask-id>
+pnpm ctc:operator release <subtask-id>
 ```
 
 It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and 64 KiB response limit, and handles resets/aborted responses without hanging. Before parsing, it requires the bounded response bytes to be valid UTF-8, structurally validates the resulting JSON text, and rejects duplicate decoded object keys at every nesting level. It then validates the exact route-specific result shape using canonical Domain schemas and the canonical Step 5B failure-code vocabulary. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
+
+`OPERATOR_TIMEOUT` is an indeterminate operator observation, not proof that trusted daemon-side execution failed or stopped. After it occurs, the operator must reconcile through authoritative `status` before any later run decision: if the execution is `CREATED` or `RUNNING`, no new run is allowed; if it terminalized, that durable terminal result is authoritative. The timeout grants no retry. Any later execution is a distinct attempt requiring normal higher-level authority and retry budget, with no automatic retry.
 
 ## Lifecycle, privacy, and limitations
 
@@ -74,6 +76,6 @@ Graceful SIGINT/SIGTERM handling stops new work, lets already-started trusted op
 
 Unexpected process crashes can leave lock/session evidence or accepted Step 5B durable residue. V0 intentionally fails closed on stale authority files and provides no automatic stale-process recovery, provider-thread recovery, crash repair, or supervisor. This is a deterministic local-single-user V1 guard, not protection against a malicious same-user host actor.
 
-There is no generic shell, command, SQL, filesystem-write, provider-request, or raw App Server endpoint. There is no task authoring, generic CRUD, streaming/WebSocket/SSE, orchestration, planner/reviewer/dispatcher, queue, scheduling, retry, maturity automation, browser UI, or real backend dogfood in this slice. Tests use synthetic disposable repositories only and make zero provider/model turns.
+There is no generic shell, command, SQL, filesystem-write, provider-request, or raw App Server endpoint. There is no task authoring, generic CRUD, streaming/WebSocket/SSE, orchestration, planner/reviewer/dispatcher, queue, scheduling, retry, maturity automation, or browser UI in this slice. Tests use synthetic disposable repositories only and make zero provider/model turns.
 
-The next maturity gate is a new-chat Fresh Focused Re-QA for CTC-LOCAL-FQA-008/009. Real backend dogfood and Roadmap Step 7 remain not started and unauthorized.
+Roadmap Step 7 backend dogfood completed successfully and Fresh Independent QA passed. Browser UI and orchestration remain later roadmap work; Step 8 is not authorized.
