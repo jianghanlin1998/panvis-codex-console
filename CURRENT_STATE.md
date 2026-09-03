@@ -347,16 +347,18 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8C Durable Workflow Control Plane V0: IMPLEMENTED
 - Step 8C typed/source-backed evidence, immutable transition history, history-derived state, bounded Repair / Focused Re-QA, lifecycle/maturity composition, and durable HUMAN_REQUIRED authority: IMPLEMENTED
 - Step 8C implementation verification: focused workflow/migration coverage PASS; full suite 133 files / 4,103 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
-- Step 8C comprehensive hardening: PENDING
-- Step 8C Fresh Independent QA: NOT YET ELIGIBLE / PENDING HARDENING
-- Step 8D Operational Governed Execution V0: NOT STARTED / gated on safe Step 8C maturity
+- Step 8C comprehensive hardening: PASS / HARDENED
+- Step 8C hardening finding `CTC-ORCH-8C-HARD-001`: CLOSED — callers cannot self-attest workflow evidence; accepted evidence now requires immutable source-backed authority provenance
+- Step 8C hardening verification: focused 16 files / 432 tests PASS; full suite 134 files / 4,156 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
+- Step 8C Fresh Independent QA: PENDING / ELIGIBLE
+- Step 8D Operational Governed Execution V0: NOT STARTED / gated on Step 8C ACCEPTED
 - Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / gated on Step 8D
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
 - Operational TODO → IN_PROGRESS dispatch, provider role execution, scheduling, worktree automation, and execution-role/thread/run linkage remain NOT IMPLEMENTED
-- Hanlin manual QA for Step 8C implementation: NOT REQUIRED
+- Hanlin manual QA for Step 8C hardening: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** fresh clean-context comprehensive write-enabled Step 8C hardening. Do not begin Step 8D.
+**Next safe task:** fresh clean-context independent no-write Step 8C QA. Do not begin Step 8D.
 
 ## Not operational yet
 - browser Console UI

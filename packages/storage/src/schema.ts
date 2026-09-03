@@ -498,10 +498,114 @@ export const workflowInitializationReceiptsTable = sqliteTable(
   ],
 );
 
+export const durableWorkflowEvidenceAuthoritiesTable = sqliteTable(
+  "durable_workflow_evidence_authorities",
+  {
+    authorityId: text("authority_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    expectedSequence: integer("expected_sequence").notNull(),
+    observedStage: text("observed_stage").notNull(),
+    observedRepairCyclesUsed: integer("observed_repair_cycles_used").notNull(),
+    sourceType: text("source_type").notNull(),
+    evidenceKind: text("evidence_kind").notNull(),
+    outcome: text("outcome").notNull(),
+    producer: text("producer").notNull(),
+    sourceReference: text("source_reference").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+    recordedAt: text("recorded_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("durable_workflow_evidence_authorities_source_unique").on(
+      table.sourceReference,
+    ),
+    uniqueIndex("durable_workflow_evidence_authorities_semantic_unique").on(
+      table.subtaskId,
+      table.expectedSequence,
+      table.evidenceKind,
+    ),
+    index("durable_workflow_evidence_authorities_workflow_index").on(
+      table.subtaskId,
+      table.expectedSequence,
+      table.authorityId,
+    ),
+    foreignKey({
+      name: "durable_workflow_evidence_authorities_workflow_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+        table.subtaskId,
+      ],
+      foreignColumns: [
+        subtaskWorkflowInstancesTable.projectId,
+        subtaskWorkflowInstancesTable.bigTaskId,
+        subtaskWorkflowInstancesTable.planRevision,
+        subtaskWorkflowInstancesTable.candidateBinding,
+        subtaskWorkflowInstancesTable.subtaskId,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "durable_workflow_evidence_authorities_id_check",
+      sql`length(${table.authorityId}) between 5 and 128 and ${table.authorityId} glob 'wfa_*'`,
+    ),
+    check(
+      "durable_workflow_evidence_authorities_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "durable_workflow_evidence_authorities_sequence_check",
+      sql`typeof(${table.expectedSequence}) = 'integer' and ${table.expectedSequence} >= 1`,
+    ),
+    check(
+      "durable_workflow_evidence_authorities_stage_check",
+      sql`${table.observedStage} in ('MATERIALIZE', 'EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA')`,
+    ),
+    check(
+      "durable_workflow_evidence_authorities_repair_check",
+      sql`typeof(${table.observedRepairCyclesUsed}) = 'integer'
+        and ${table.observedRepairCyclesUsed} in (0, 1)`,
+    ),
+    check(
+      "durable_workflow_evidence_authorities_source_check",
+      sql`(${table.sourceType} = 'REPOSITORY_PREFLIGHT' and ${table.evidenceKind} = 'REPOSITORY_PREFLIGHT_PASSED' and ${table.producer} = 'OPERATIONAL_GATE')
+        or (${table.sourceType} = 'CONTEXT_PREFLIGHT' and ${table.evidenceKind} = 'CONTEXT_PREFLIGHT_PASSED' and ${table.producer} = 'OPERATIONAL_GATE')
+        or (${table.sourceType} = 'BUDGET_GATE' and ${table.evidenceKind} = 'BUDGET_AVAILABLE' and ${table.producer} = 'OPERATIONAL_GATE')
+        or (${table.sourceType} = 'CONCURRENCY_GATE' and ${table.evidenceKind} = 'CONCURRENCY_AVAILABLE' and ${table.producer} = 'OPERATIONAL_GATE')
+        or (${table.sourceType} = 'WORKTREE_OWNERSHIP' and ${table.evidenceKind} = 'WORKTREE_OWNERSHIP_AVAILABLE' and ${table.producer} = 'OPERATIONAL_GATE')
+        or (${table.sourceType} = 'HUMAN_APPROVAL' and ${table.evidenceKind} = 'HUMAN_APPROVAL_SATISFIED' and ${table.producer} = 'HUMAN_AUTHORITY')
+        or (${table.sourceType} = 'VERIFICATION_ROLE' and ${table.evidenceKind} = 'VERIFICATION_EVIDENCE_PASSED' and ${table.producer} = 'WORKFLOW_ROLE')
+        or (${table.sourceType} = 'HARDENING_ROLE' and ${table.evidenceKind} = 'HARDENING_EVIDENCE_PASSED' and ${table.producer} = 'WORKFLOW_ROLE')
+        or (${table.sourceType} = 'FRESH_INDEPENDENT_QA' and ${table.evidenceKind} = 'FRESH_QA_OUTCOME_RECORDED' and ${table.producer} = 'WORKFLOW_ROLE')
+        or (${table.sourceType} = 'REPAIR_ROLE' and ${table.evidenceKind} = 'REPAIR_EVIDENCE_PASSED' and ${table.producer} = 'WORKFLOW_ROLE')
+        or (${table.sourceType} = 'FOCUSED_RE_QA' and ${table.evidenceKind} = 'FOCUSED_RE_QA_OUTCOME_RECORDED' and ${table.producer} = 'WORKFLOW_ROLE')
+        or (${table.sourceType} = 'BLOCKING_FINDING_CONTROL' and ${table.evidenceKind} = 'NO_UNRESOLVED_BLOCKING_FINDING' and ${table.producer} = 'DELIVERY_CONTROL')
+        or (${table.sourceType} = 'HANDOFF_CONTROL' and ${table.evidenceKind} = 'HANDOFF_PRESENT' and ${table.producer} = 'DELIVERY_CONTROL')
+        or (${table.sourceType} = 'PROMOTED_CONTEXT_DISPOSITION' and ${table.evidenceKind} = 'PROMOTED_CONTEXT_DISPOSITION_RECORDED' and ${table.producer} = 'DELIVERY_CONTROL')`,
+    ),
+    check(
+      "durable_workflow_evidence_authorities_outcome_check",
+      sql`${table.outcome} in ('PASS', 'BLOCKING_FAIL')
+        and (${table.evidenceKind} in ('FRESH_QA_OUTCOME_RECORDED', 'FOCUSED_RE_QA_OUTCOME_RECORDED') or ${table.outcome} = 'PASS')`,
+    ),
+    check(
+      "durable_workflow_evidence_authorities_reference_check",
+      sql`length(trim(${table.sourceReference})) between 1 and 2048`,
+    ),
+  ],
+);
+
 export const durableWorkflowEvidenceTable = sqliteTable(
   "durable_workflow_evidence",
   {
     evidenceId: text("evidence_id").primaryKey(),
+    authorityId: text("authority_id"),
     projectId: text("project_id").notNull(),
     bigTaskId: text("big_task_id").notNull(),
     planRevision: integer("plan_revision").notNull(),
@@ -518,6 +622,14 @@ export const durableWorkflowEvidenceTable = sqliteTable(
     acceptedAt: text("accepted_at").notNull(),
   },
   (table) => [
+    uniqueIndex("durable_workflow_evidence_authority_unique").on(
+      table.authorityId,
+    ),
+    uniqueIndex("durable_workflow_evidence_semantic_unique").on(
+      table.subtaskId,
+      table.expectedSequence,
+      table.evidenceKind,
+    ),
     index("durable_workflow_evidence_workflow_index").on(
       table.subtaskId,
       table.expectedSequence,
@@ -547,9 +659,20 @@ export const durableWorkflowEvidenceTable = sqliteTable(
     })
       .onDelete("restrict")
       .onUpdate("restrict"),
+    foreignKey({
+      name: "durable_workflow_evidence_authority_fk",
+      columns: [table.authorityId],
+      foreignColumns: [durableWorkflowEvidenceAuthoritiesTable.authorityId],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
     check(
       "durable_workflow_evidence_id_check",
       sql`length(${table.evidenceId}) between 5 and 128 and ${table.evidenceId} glob 'wfe_*'`,
+    ),
+    check(
+      "durable_workflow_evidence_authority_id_check",
+      sql`${table.authorityId} is null or (length(${table.authorityId}) between 5 and 128 and ${table.authorityId} glob 'wfa_*')`,
     ),
     check(
       "durable_workflow_evidence_revision_check",

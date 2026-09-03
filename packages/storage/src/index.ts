@@ -27,15 +27,16 @@ export {
 } from "./schema.js";
 
 export {
+  DURABLE_WORKFLOW_EVIDENCE_AUTHORITY_SOURCE_TYPES,
   DURABLE_WORKFLOW_EVIDENCE_KINDS,
   DURABLE_WORKFLOW_EVIDENCE_PRODUCERS,
 } from "./workflow-control.js";
 export type {
-  AcceptDurableWorkflowEvidenceInput,
   AdvanceDurableWorkflowInput,
   AdvanceDurableWorkflowResult,
   DurableWorkflowControlView,
   DurableWorkflowEvidence,
+  DurableWorkflowEvidenceAuthoritySourceType,
   DurableWorkflowEvidenceKind,
   DurableWorkflowEvidenceOutcome,
   DurableWorkflowEvidenceProducer,

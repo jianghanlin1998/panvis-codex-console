@@ -46,23 +46,30 @@ export type DurableWorkflowEvidenceProducer =
 
 export type DurableWorkflowEvidenceOutcome = "PASS" | "BLOCKING_FAIL";
 
-export interface AcceptDurableWorkflowEvidenceInput {
-  readonly evidenceId: string;
-  readonly projectId: ProjectId;
-  readonly bigTaskId: BigTaskId;
-  readonly candidateBinding: string;
-  readonly subtaskId: SubtaskId;
-  readonly observedStage: WorkflowStage;
-  readonly observedRepairCyclesUsed: 0 | 1;
-  readonly kind: DurableWorkflowEvidenceKind;
-  readonly outcome: DurableWorkflowEvidenceOutcome;
-  readonly producer: DurableWorkflowEvidenceProducer;
-  readonly sourceReference: string;
-  readonly occurredAt: string;
-}
+export const DURABLE_WORKFLOW_EVIDENCE_AUTHORITY_SOURCE_TYPES = Object.freeze([
+  "REPOSITORY_PREFLIGHT",
+  "CONTEXT_PREFLIGHT",
+  "BUDGET_GATE",
+  "CONCURRENCY_GATE",
+  "WORKTREE_OWNERSHIP",
+  "HUMAN_APPROVAL",
+  "VERIFICATION_ROLE",
+  "HARDENING_ROLE",
+  "FRESH_INDEPENDENT_QA",
+  "REPAIR_ROLE",
+  "FOCUSED_RE_QA",
+  "BLOCKING_FINDING_CONTROL",
+  "HANDOFF_CONTROL",
+  "PROMOTED_CONTEXT_DISPOSITION",
+] as const);
+
+export type DurableWorkflowEvidenceAuthoritySourceType =
+  (typeof DURABLE_WORKFLOW_EVIDENCE_AUTHORITY_SOURCE_TYPES)[number];
 
 export interface DurableWorkflowEvidence {
   readonly evidenceId: string;
+  readonly authorityId: string;
+  readonly authoritySourceType: DurableWorkflowEvidenceAuthoritySourceType;
   readonly projectId: ProjectId;
   readonly bigTaskId: BigTaskId;
   readonly planRevision: number;

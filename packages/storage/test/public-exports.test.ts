@@ -7,6 +7,7 @@ import {
   chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
+  DURABLE_WORKFLOW_EVIDENCE_AUTHORITY_SOURCE_TYPES,
   DURABLE_WORKFLOW_EVIDENCE_KINDS,
   DURABLE_WORKFLOW_EVIDENCE_PRODUCERS,
   durableWorkflowEvidenceTable,
@@ -40,7 +41,6 @@ import type {
   ApprovedTaskContractAuthority,
   ActiveContextItemBucket,
   ActiveContextItemSnapshot,
-  AcceptDurableWorkflowEvidenceInput,
   AdvanceDurableWorkflowInput,
   AdvanceDurableWorkflowResult,
   AllowedRawContextItemBucket,
@@ -62,6 +62,7 @@ import type {
   DurableSubtaskWorkflowInstance,
   DurableWorkflowControlView,
   DurableWorkflowEvidence,
+  DurableWorkflowEvidenceAuthoritySourceType,
   DurableWorkflowEvidenceKind,
   DurableWorkflowEvidenceOutcome,
   DurableWorkflowEvidenceProducer,
@@ -121,13 +122,15 @@ describe("storage package public exports", () => {
     expect(DURABLE_WORKFLOW_EVIDENCE_KINDS).toContain(
       "FRESH_QA_OUTCOME_RECORDED",
     );
+    expect(DURABLE_WORKFLOW_EVIDENCE_AUTHORITY_SOURCE_TYPES).toContain(
+      "FRESH_INDEPENDENT_QA",
+    );
     expect(DURABLE_WORKFLOW_EVIDENCE_PRODUCERS).toEqual([
       "OPERATIONAL_GATE",
       "WORKFLOW_ROLE",
       "HUMAN_AUTHORITY",
       "DELIVERY_CONTROL",
     ]);
-    expectTypeOf<AcceptDurableWorkflowEvidenceInput>().toBeObject();
     expectTypeOf<AdvanceDurableWorkflowInput>().toBeObject();
     expectTypeOf<AdvanceDurableWorkflowResult>().toBeObject();
     expectTypeOf<ApprovedTaskContractAuthority>().toBeObject();
@@ -151,6 +154,7 @@ describe("storage package public exports", () => {
     expectTypeOf<DurableSubtaskWorkflowInstance>().toBeObject();
     expectTypeOf<DurableWorkflowControlView>().toBeObject();
     expectTypeOf<DurableWorkflowEvidence>().toBeObject();
+    expectTypeOf<DurableWorkflowEvidenceAuthoritySourceType>().toBeString();
     expectTypeOf<DurableWorkflowEvidenceKind>().toBeString();
     expectTypeOf<DurableWorkflowEvidenceOutcome>().toBeString();
     expectTypeOf<DurableWorkflowEvidenceProducer>().toBeString();

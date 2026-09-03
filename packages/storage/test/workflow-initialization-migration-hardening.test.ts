@@ -219,7 +219,7 @@ describe("Step 8B3a migration generation hardening", () => {
         expect(sqlite.prepare("SELECT count(*) AS count FROM workflow_initialization_receipts").get())
           .toEqual({ count: 0 });
         expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get())
-          .toEqual({ count: predecessorMigrationNames.length + 2 });
+          .toEqual({ count: predecessorMigrationNames.length + 3 });
         expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         sqlite.close();
 
