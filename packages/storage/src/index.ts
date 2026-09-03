@@ -4,6 +4,7 @@ export type { StorageErrorCode } from "./errors.js";
 export {
   auditEventsTable,
   bigTasksTable,
+  canonicalTaskMaterializationsTable,
   candidateTaskContractBindingsTable,
   chatThreadsTable,
   contextDigestsTable,
@@ -30,6 +31,8 @@ export type {
   BoundedDurableExecutionHistoryOptions,
   BoundedDurableExecutionHistoryThread,
   BindChatThreadProviderReferenceInput,
+  CanonicalMaterializedSubtask,
+  CanonicalTaskMaterialization,
   CompleteSubtaskImplementationInput,
   CompleteSubtaskImplementationResult,
   CreateChatThreadInput,

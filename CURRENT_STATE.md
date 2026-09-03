@@ -375,19 +375,29 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Approved Task Contract authority derivation: IMPLEMENTED
 - Contract-aware Review bundle source: IMPLEMENTED
 - Step 8B2a Comprehensive Hardening: PASS
-- Step 8B2a Immutable Task Contract Authority V0 maturity: HARDENED
+- Step 8B2a Fresh Independent QA: PASS
+- Step 8B2a Fresh Independent QA findings: NONE
+- Step 8B2a Immutable Task Contract Authority V0 maturity: ACCEPTED
+- Step 8B2a accepted evidence SHA: `85be2b47a2f59302c7348877a25d4c613ebed388`
 - CTC-ORCH-B2A-HARD-001: CLOSED — immutable INSERT-conflict guards prevent SQLite replacement writes from retargeting Task Contract artifacts or candidate associations when `recursive_triggers` is disabled
-- Step 8B2a Fresh Independent QA: PENDING
-- Approved graph to canonical executable Subtask / dependency materialization: NOT IMPLEMENTED
+- Step 8B2b Atomic Canonical Subtask and Dependency Materialization V0: IMPLEMENTED
+- Canonical Task Contract → Subtask projection: IMPLEMENTED
+- Atomic approved dependency materialization: IMPLEMENTED
+- Step 8B2b completion evidence: IMPLEMENTED
+- Exact idempotent owned retry: IMPLEMENTED
+- Materialized stable Subtask-set protection: IMPLEMENTED
+- Materialized dependency-graph protection: IMPLEMENTED
+- Step 8B2b Comprehensive Hardening: NOT RUN
+- Step 8B2b Fresh Independent QA: NOT RUN
 - Orchestration stage/evidence persistence: NOT IMPLEMENTED
 - Later orchestration maturity transitions: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Step 8B2b: NOT STARTED / BLOCKED on Step 8B2a ACCEPTED
+- Step 8B downstream stage/evidence/lifecycle work: BLOCKED on Step 8B2b ACCEPTED
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Independent no-write QA of Step 8B2a. Do not begin Step 8B2b.
+**Next safe task:** NEW CHAT Comprehensive Hardening of Step 8B2b. Do not begin the later stage/evidence/lifecycle slice.
 
 ## Not operational yet
 - browser Console UI

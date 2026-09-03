@@ -70,7 +70,12 @@ import type {
   TaskContractV0,
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
-import type { PlanCandidate, ReviewDecision } from "@codex-task-console/orchestration";
+import type {
+  MaterializedGraph,
+  PlanCandidate,
+  ReviewDecision,
+  WorkflowProfile,
+} from "@codex-task-console/orchestration";
 import { and, asc, count, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
@@ -86,10 +91,12 @@ import type {
 import {
   auditEventsTable,
   bigTasksTable,
+  canonicalTaskMaterializationsTable,
   chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
   executionRunsTable,
+  orchestrationMaterializationsTable,
   projectsTable,
   subtaskImplementationCheckpointsTable,
   subtasksTable,
@@ -176,6 +183,26 @@ export interface BoundedDurableExecutionHistoryThread {
 export interface BoundedDurableExecutionHistory {
   readonly chatThreadCount: number;
   readonly recentChatThreads: readonly BoundedDurableExecutionHistoryThread[];
+}
+
+export interface CanonicalMaterializedSubtask {
+  readonly subtaskId: SubtaskId;
+  readonly taskContractRef: string;
+  readonly profile: WorkflowProfile;
+  readonly writeEnabled: boolean;
+  readonly subtask: Subtask;
+}
+
+export interface CanonicalTaskMaterialization {
+  readonly projectId: ProjectId;
+  readonly bigTaskId: BigTaskId;
+  readonly planRevision: number;
+  readonly candidateBinding: string;
+  readonly subtaskCount: number;
+  readonly dependencyCount: number;
+  readonly materializedAt: string;
+  readonly subtasks: readonly CanonicalMaterializedSubtask[];
+  readonly dependencies: readonly SubtaskDependency[];
 }
 
 const MAX_BOUNDED_DURABLE_HISTORY_LIMIT = 64;
@@ -270,6 +297,8 @@ interface CanonicalTaskHierarchy {
 type ProjectRow = typeof projectsTable.$inferSelect;
 type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
+type CanonicalTaskMaterializationRow =
+  typeof canonicalTaskMaterializationsTable.$inferSelect;
 type ChatThreadRow = typeof chatThreadsTable.$inferSelect;
 type ExecutionRunRow = typeof executionRunsTable.$inferSelect;
 type ContextItemRow = typeof contextItemsTable.$inferSelect;
@@ -647,6 +676,16 @@ const parseDependencyInput = (input: SubtaskDependency): SubtaskDependency => {
 
 const malformedStoredData = (): TaskStorageError =>
   new TaskStorageError("MALFORMED_STORED_DATA", "Stored task data is malformed.");
+
+const deepFreeze = <T>(value: T): T => {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value)) {
+    deepFreeze(nested);
+  }
+  return Object.freeze(value);
+};
 
 const EXECUTION_RUN_UNSAFE_USAGE_INTEGER_PREDICATE = `
   (typeof(input_tokens) = 'integer'
@@ -1462,6 +1501,12 @@ export class TaskStorage {
       if (this.#getBigTask(subtask.bigTaskId) === null) {
         throw new TaskStorageError("PARENT_NOT_FOUND", "The parent Big Task does not exist.");
       }
+      if (this.#hasCanonicalTaskMaterialization(subtask.bigTaskId)) {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "The canonical materialized Subtask set is immutable.",
+        );
+      }
       if (this.#getSubtask(subtask.id) !== null) {
         throw new TaskStorageError("CONFLICT", "A Subtask with this ID already exists.");
       }
@@ -1574,6 +1619,133 @@ export class TaskStorage {
   ): ApprovedTaskContractAuthority | null {
     return this.#operation(() =>
       this.#orchestrationPlanning.getApprovedTaskContractAuthority(bigTaskId),
+    );
+  }
+
+  materializeApprovedCanonicalTasks(
+    input: BigTaskId,
+  ): CanonicalTaskMaterialization {
+    const bigTaskId = parseBigTaskId(input);
+    return this.#operation(() =>
+      this.#atomicCanonicalTaskMaterialization(() => {
+        if (this.#hasCanonicalTaskMaterialization(bigTaskId)) {
+          return this.#readCanonicalTaskMaterialization(bigTaskId);
+        }
+
+        const source = this.#readCanonicalTaskMaterializationSource(bigTaskId);
+        const bigTask = this.#getBigTask(bigTaskId);
+        if (
+          bigTask === null ||
+          bigTask.projectId !== source.graph.projectId ||
+          bigTask.status !== "IN_PROGRESS" ||
+          this.#getProject(source.graph.projectId) === null
+        ) {
+          throw new TaskStorageError(
+            "PARENT_NOT_FOUND",
+            "The eligible Project and Big Task hierarchy does not exist.",
+          );
+        }
+
+        const targetIds = source.graph.subtasks.map(({ id }) => id);
+        const existingTarget = targetIds.some((id) => this.#getSubtask(id) !== null);
+        const existingForBigTask = this.#database
+          .select({ id: subtasksTable.id })
+          .from(subtasksTable)
+          .where(eq(subtasksTable.bigTaskId, bigTaskId))
+          .get();
+        if (existingTarget || existingForBigTask !== undefined) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "Canonical task state already exists for this materialization.",
+          );
+        }
+
+        const projected = source.authority.taskContracts.map((contract) =>
+          parseSubtaskInput({
+            recordType: "SUBTASK",
+            id: contract.subtaskId,
+            bigTaskId: contract.bigTaskId,
+            title: contract.title,
+            goal: contract.goal,
+            scopeIn: [...contract.scopeIn],
+            scopeOut: [...contract.scopeOut],
+            acceptanceCriteria: [...contract.acceptanceCriteria],
+            untouchedAreas: [...contract.untouchedAreas],
+            status: "TODO",
+            maturity: "NOT_STARTED",
+            startPolicy: contract.startPolicy,
+            delegationPolicy: contract.delegationPolicy,
+            recommendedReasoningLevel: contract.recommendedReasoningLevel,
+            promptSeed: contract.promptSeed,
+          }),
+        );
+        const dependencyValidation = validateSubtaskDependencies(
+          projected,
+          source.graph.dependencies,
+        );
+        if (!dependencyValidation.valid) {
+          throw new TaskStorageError(
+            "DEPENDENCY_VALIDATION_FAILED",
+            "The approved dependency set is invalid.",
+            dependencyValidation.errors.map(({ code }) => code),
+          );
+        }
+
+        const timestamp = this.#durableTimestampAtOrAfter(source.sourceMaterializedAt);
+        this.#database.insert(subtasksTable).values(
+          projected.map((subtask) => ({
+            id: subtask.id,
+            bigTaskId: subtask.bigTaskId,
+            title: subtask.title,
+            goal: subtask.goal,
+            scopeIn: encodeStringArray(subtask.scopeIn),
+            scopeOut: encodeStringArray(subtask.scopeOut),
+            acceptanceCriteria: encodeStringArray(subtask.acceptanceCriteria),
+            untouchedAreas: encodeStringArray(subtask.untouchedAreas),
+            status: subtask.status,
+            maturity: subtask.maturity,
+            startPolicy: subtask.startPolicy,
+            delegationPolicy: subtask.delegationPolicy,
+            recommendedReasoningLevel: subtask.recommendedReasoningLevel,
+            promptSeed: subtask.promptSeed,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          })),
+        ).run();
+        if (source.graph.dependencies.length > 0) {
+          this.#database.insert(taskDependenciesTable).values(
+            source.graph.dependencies.map((dependency) => ({
+              ...dependency,
+              createdAt: timestamp,
+            })),
+          ).run();
+        }
+
+        this.#database.insert(canonicalTaskMaterializationsTable).values({
+          projectId: source.graph.projectId,
+          bigTaskId,
+          planRevision: source.graph.planRevision,
+          candidateBinding: source.graph.candidateBinding,
+          subtaskCount: source.graph.subtasks.length,
+          dependencyCount: source.graph.dependencies.length,
+          materializedAt: timestamp,
+        }).run();
+
+        return this.#readCanonicalTaskMaterialization(bigTaskId);
+      }),
+    );
+  }
+
+  getCanonicalTaskMaterialization(
+    input: BigTaskId,
+  ): CanonicalTaskMaterialization | null {
+    const bigTaskId = parseBigTaskId(input);
+    return this.#operation(() =>
+      this.#readSnapshot(() =>
+        this.#hasCanonicalTaskMaterialization(bigTaskId)
+          ? this.#readCanonicalTaskMaterialization(bigTaskId)
+          : null,
+      ),
     );
   }
 
@@ -2549,6 +2721,12 @@ export class TaskStorage {
       if (this.#getBigTask(bigTaskId) === null) {
         throw new TaskStorageError("PARENT_NOT_FOUND", "The Big Task does not exist.");
       }
+      if (this.#hasCanonicalTaskMaterialization(bigTaskId)) {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "The canonical materialized dependency graph is immutable.",
+        );
+      }
 
       const allSubtasks = this.#allDependencySubtasks();
       const validation = validateSubtaskDependencies(allSubtasks, dependencies);
@@ -2575,6 +2753,12 @@ export class TaskStorage {
       }
 
       return this.#atomic(() => {
+        if (this.#hasCanonicalTaskMaterialization(bigTaskId)) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The canonical materialized dependency graph is immutable.",
+          );
+        }
         const targetSubtaskIds = allSubtasks
           .filter((subtask) => subtask.bigTaskId === bigTaskId)
           .map(({ id }) => id);
@@ -3123,6 +3307,230 @@ export class TaskStorage {
       throw new TaskStorageError("TRANSACTION_FAILED", "Nested transactions are not supported.");
     }
     return this.#atomic(() => operation(this));
+  }
+
+  #hasCanonicalTaskMaterialization(bigTaskId: BigTaskId): boolean {
+    const tableExists = this.#sqlite.prepare(
+      "SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = 'canonical_task_materializations'",
+    ).get();
+    if (tableExists === undefined) {
+      return false;
+    }
+    return this.#database
+      .select({ bigTaskId: canonicalTaskMaterializationsTable.bigTaskId })
+      .from(canonicalTaskMaterializationsTable)
+      .where(eq(canonicalTaskMaterializationsTable.bigTaskId, bigTaskId))
+      .get() !== undefined;
+  }
+
+  #readCanonicalTaskMaterializationSource(bigTaskId: BigTaskId): {
+    readonly graph: MaterializedGraph;
+    readonly authority: Extract<
+      ApprovedTaskContractAuthority,
+      { readonly taskContractAuthorityReadiness: "TASK_CONTRACT_AUTHORITY_READY" }
+    >;
+    readonly sourceMaterializedAt: string;
+  } {
+    const snapshot = this.#orchestrationPlanning.getSnapshot(bigTaskId);
+    if (snapshot === null) {
+      throw new TaskStorageError(
+        "PARENT_NOT_FOUND",
+        "The durable orchestration planning authority does not exist.",
+      );
+    }
+    const authority =
+      this.#orchestrationPlanning.getApprovedTaskContractAuthority(bigTaskId);
+    if (
+      snapshot.materializedGraph === null ||
+      authority === null ||
+      authority.taskContractAuthorityReadiness !== "TASK_CONTRACT_AUTHORITY_READY" ||
+      !authority.materialized
+    ) {
+      throw new TaskStorageError(
+        "CONFLICT",
+        "The approved canonical task materialization authority is not ready.",
+      );
+    }
+    const graph = snapshot.materializedGraph;
+    if (
+      graph.projectId !== authority.projectId ||
+      graph.bigTaskId !== authority.bigTaskId ||
+      graph.planRevision !== authority.planRevision ||
+      graph.candidateBinding !== authority.candidateBinding ||
+      graph.bigTaskId !== bigTaskId ||
+      graph.subtasks.length !== authority.taskContracts.length
+    ) {
+      throw malformedStoredData();
+    }
+    for (let index = 0; index < graph.subtasks.length; index += 1) {
+      const proposed = graph.subtasks[index]!;
+      const contract = authority.taskContracts[index]!;
+      if (
+        proposed.id !== contract.subtaskId ||
+        proposed.bigTaskId !== contract.bigTaskId ||
+        proposed.taskContractRef !== contract.taskContractRef ||
+        contract.projectId !== graph.projectId ||
+        contract.bigTaskId !== graph.bigTaskId
+      ) {
+        throw malformedStoredData();
+      }
+    }
+    const sourceRow = this.#database
+      .select({
+        projectId: orchestrationMaterializationsTable.projectId,
+        planRevision: orchestrationMaterializationsTable.planRevision,
+        candidateBinding: orchestrationMaterializationsTable.candidateBinding,
+        materializedAt: orchestrationMaterializationsTable.materializedAt,
+      })
+      .from(orchestrationMaterializationsTable)
+      .where(eq(orchestrationMaterializationsTable.bigTaskId, bigTaskId))
+      .get();
+    if (
+      sourceRow === undefined ||
+      sourceRow.projectId !== graph.projectId ||
+      sourceRow.planRevision !== graph.planRevision ||
+      sourceRow.candidateBinding !== graph.candidateBinding ||
+      !isCanonicalUtcTimestamp(sourceRow.materializedAt)
+    ) {
+      throw malformedStoredData();
+    }
+    return { graph, authority, sourceMaterializedAt: sourceRow.materializedAt };
+  }
+
+  #readCanonicalTaskMaterialization(
+    bigTaskId: BigTaskId,
+  ): CanonicalTaskMaterialization {
+    const evidence = this.#database
+      .select()
+      .from(canonicalTaskMaterializationsTable)
+      .where(eq(canonicalTaskMaterializationsTable.bigTaskId, bigTaskId))
+      .get();
+    if (evidence === undefined) {
+      throw malformedStoredData();
+    }
+    const source = this.#readCanonicalTaskMaterializationSource(bigTaskId);
+    this.#validateCanonicalTaskMaterializationEvidence(evidence, source.graph);
+    if (
+      new Date(evidence.materializedAt).getTime() <
+      new Date(source.sourceMaterializedAt).getTime()
+    ) {
+      throw malformedStoredData();
+    }
+
+    const rows = this.#database
+      .select()
+      .from(subtasksTable)
+      .where(eq(subtasksTable.bigTaskId, bigTaskId))
+      .all();
+    if (rows.length !== source.graph.subtasks.length) {
+      throw malformedStoredData();
+    }
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    const contractsById = new Map(
+      source.authority.taskContracts.map((contract) => [contract.subtaskId, contract]),
+    );
+    const subtasks = source.graph.subtasks.map((proposed) => {
+      const row = rowsById.get(proposed.id);
+      const contract = contractsById.get(proposed.id);
+      if (row === undefined || contract === undefined) {
+        throw malformedStoredData();
+      }
+      const subtask = subtaskFromRow(row);
+      if (
+        row.createdAt !== evidence.materializedAt ||
+        !isCanonicalUtcTimestamp(row.updatedAt) ||
+        subtask.id !== contract.subtaskId ||
+        subtask.bigTaskId !== contract.bigTaskId ||
+        subtask.title !== contract.title ||
+        subtask.goal !== contract.goal ||
+        encodeStringArray(subtask.scopeIn) !== encodeStringArray(contract.scopeIn) ||
+        encodeStringArray(subtask.scopeOut) !== encodeStringArray(contract.scopeOut) ||
+        encodeStringArray(subtask.acceptanceCriteria) !==
+          encodeStringArray(contract.acceptanceCriteria) ||
+        encodeStringArray(subtask.untouchedAreas) !==
+          encodeStringArray(contract.untouchedAreas) ||
+        subtask.startPolicy !== contract.startPolicy ||
+        subtask.delegationPolicy !== contract.delegationPolicy ||
+        subtask.recommendedReasoningLevel !== contract.recommendedReasoningLevel ||
+        subtask.promptSeed !== contract.promptSeed
+      ) {
+        throw malformedStoredData();
+      }
+      return {
+        subtaskId: proposed.id,
+        taskContractRef: proposed.taskContractRef,
+        profile: proposed.profile,
+        writeEnabled: proposed.writeEnabled,
+        subtask,
+      };
+    });
+
+    const targetIds = new Set(source.graph.subtasks.map(({ id }) => id));
+    const dependencyRows = this.#database
+      .select()
+      .from(taskDependenciesTable)
+      .orderBy(
+        asc(taskDependenciesTable.upstreamSubtaskId),
+        asc(taskDependenciesTable.downstreamSubtaskId),
+        asc(taskDependenciesTable.dependencyType),
+      )
+      .all()
+      .filter(
+        (row) =>
+          targetIds.has(row.upstreamSubtaskId as SubtaskId) ||
+          targetIds.has(row.downstreamSubtaskId as SubtaskId),
+      );
+    if (
+      dependencyRows.length !== source.graph.dependencies.length ||
+      dependencyRows.some((row) => row.createdAt !== evidence.materializedAt)
+    ) {
+      throw malformedStoredData();
+    }
+    const dependencies = dependencyRows.map((row) => dependencyFromRow({
+      upstreamSubtaskId: row.upstreamSubtaskId,
+      downstreamSubtaskId: row.downstreamSubtaskId,
+      dependencyType: row.dependencyType,
+      requiredGate: row.requiredGate,
+      reason: row.reason,
+    }));
+    if (JSON.stringify(dependencies) !== JSON.stringify(source.graph.dependencies)) {
+      throw malformedStoredData();
+    }
+
+    return deepFreeze({
+      projectId: evidence.projectId as ProjectId,
+      bigTaskId,
+      planRevision: evidence.planRevision,
+      candidateBinding: evidence.candidateBinding,
+      subtaskCount: evidence.subtaskCount,
+      dependencyCount: evidence.dependencyCount,
+      materializedAt: evidence.materializedAt,
+      subtasks,
+      dependencies,
+    });
+  }
+
+  #validateCanonicalTaskMaterializationEvidence(
+    evidence: CanonicalTaskMaterializationRow,
+    graph: MaterializedGraph,
+  ): void {
+    const projectId = ProjectIdSchema.safeParse(evidence.projectId);
+    const storedBigTaskId = BigTaskIdSchema.safeParse(evidence.bigTaskId);
+    if (
+      !projectId.success ||
+      projectId.data !== evidence.projectId ||
+      !storedBigTaskId.success ||
+      storedBigTaskId.data !== evidence.bigTaskId ||
+      evidence.projectId !== graph.projectId ||
+      evidence.bigTaskId !== graph.bigTaskId ||
+      evidence.planRevision !== graph.planRevision ||
+      evidence.candidateBinding !== graph.candidateBinding ||
+      evidence.subtaskCount !== graph.subtasks.length ||
+      evidence.dependencyCount !== graph.dependencies.length ||
+      !isCanonicalUtcTimestamp(evidence.materializedAt)
+    ) {
+      throw malformedStoredData();
+    }
   }
 
   #getProject(projectId: ProjectId): Project | null {
@@ -3839,6 +4247,44 @@ export class TaskStorage {
         throw error;
       }
       throw new TaskStorageError("TRANSACTION_FAILED", "The transaction failed and was rolled back.");
+    }
+  }
+
+  #atomicCanonicalTaskMaterialization<T>(operation: () => T): T {
+    if (!this.#sqlite.isTransaction) {
+      return this.#atomic(operation);
+    }
+
+    const savepoint = "canonical_task_materialization";
+    try {
+      this.#sqlite.exec(`SAVEPOINT ${savepoint}`);
+    } catch {
+      throw new TaskStorageError(
+        "TRANSACTION_FAILED",
+        "The canonical task materialization transaction could not start.",
+      );
+    }
+    try {
+      const result = operation();
+      this.#sqlite.exec(`RELEASE ${savepoint}`);
+      return result;
+    } catch (error) {
+      try {
+        this.#sqlite.exec(`ROLLBACK TO ${savepoint}`);
+        this.#sqlite.exec(`RELEASE ${savepoint}`);
+      } catch {
+        throw new TaskStorageError(
+          "TRANSACTION_FAILED",
+          "The canonical task materialization transaction rollback failed.",
+        );
+      }
+      if (error instanceof TaskStorageError) {
+        throw error;
+      }
+      throw new TaskStorageError(
+        "TRANSACTION_FAILED",
+        "The canonical task materialization transaction failed and was rolled back.",
+      );
     }
   }
 

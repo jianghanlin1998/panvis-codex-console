@@ -325,6 +325,54 @@ export const orchestrationMaterializationsTable = sqliteTable(
   ],
 );
 
+export const canonicalTaskMaterializationsTable = sqliteTable(
+  "canonical_task_materializations",
+  {
+    bigTaskId: text("big_task_id")
+      .primaryKey()
+      .references(() => orchestrationMaterializationsTable.bigTaskId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projectsTable.id, { onDelete: "restrict", onUpdate: "restrict" }),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskCount: integer("subtask_count").notNull(),
+    dependencyCount: integer("dependency_count").notNull(),
+    materializedAt: text("materialized_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "canonical_task_materializations_candidate_fk",
+      columns: [table.bigTaskId, table.planRevision],
+      foreignColumns: [
+        orchestrationPlanCandidatesTable.bigTaskId,
+        orchestrationPlanCandidatesTable.revision,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "canonical_task_materializations_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "canonical_task_materializations_binding_check",
+      sql`length(${table.candidateBinding}) >= 1`,
+    ),
+    check(
+      "canonical_task_materializations_subtask_count_check",
+      sql`typeof(${table.subtaskCount}) = 'integer' and ${table.subtaskCount} >= 1`,
+    ),
+    check(
+      "canonical_task_materializations_dependency_count_check",
+      sql`typeof(${table.dependencyCount}) = 'integer' and ${table.dependencyCount} >= 0`,
+    ),
+  ],
+);
+
 export const worktreeOwnershipsTable = sqliteTable(
   "worktree_ownerships",
   {
