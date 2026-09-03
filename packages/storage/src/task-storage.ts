@@ -70,10 +70,12 @@ import type {
   TaskContractV0,
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
+import { deriveInitialWorkflowStage } from "@codex-task-console/orchestration";
 import type {
   MaterializedGraph,
   PlanCandidate,
   ReviewDecision,
+  WorkflowInitializationStage,
   WorkflowProfile,
 } from "@codex-task-console/orchestration";
 import { and, asc, count, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
@@ -100,7 +102,9 @@ import {
   projectsTable,
   subtaskImplementationCheckpointsTable,
   subtasksTable,
+  subtaskWorkflowInstancesTable,
   taskDependenciesTable,
+  workflowInitializationReceiptsTable,
 } from "./schema.js";
 import { decodeStringArray, encodeStringArray } from "./structured-fields.js";
 import { registerTaskStorageWorktreeAccess } from "./task-storage-internals.js";
@@ -205,6 +209,29 @@ export interface CanonicalTaskMaterialization {
   readonly dependencies: readonly SubtaskDependency[];
 }
 
+export interface DurableSubtaskWorkflowInstance {
+  readonly projectId: ProjectId;
+  readonly bigTaskId: BigTaskId;
+  readonly planRevision: number;
+  readonly candidateBinding: string;
+  readonly subtaskId: SubtaskId;
+  readonly initialStage: WorkflowInitializationStage;
+  readonly initialRepairCyclesUsed: 0;
+  readonly initializedAt: string;
+  readonly profile: WorkflowProfile;
+  readonly writeEnabled: boolean;
+}
+
+export interface DurableSubtaskWorkflowInitialization {
+  readonly projectId: ProjectId;
+  readonly bigTaskId: BigTaskId;
+  readonly planRevision: number;
+  readonly candidateBinding: string;
+  readonly workflowInstanceCount: number;
+  readonly initializedAt: string;
+  readonly workflowInstances: readonly DurableSubtaskWorkflowInstance[];
+}
+
 const MAX_BOUNDED_DURABLE_HISTORY_LIMIT = 64;
 
 const parseBoundedDurableHistoryLimit = (value: number): number => {
@@ -299,6 +326,10 @@ type BigTaskRow = typeof bigTasksTable.$inferSelect;
 type SubtaskRow = typeof subtasksTable.$inferSelect;
 type CanonicalTaskMaterializationRow =
   typeof canonicalTaskMaterializationsTable.$inferSelect;
+type SubtaskWorkflowInstanceRow =
+  typeof subtaskWorkflowInstancesTable.$inferSelect;
+type WorkflowInitializationReceiptRow =
+  typeof workflowInitializationReceiptsTable.$inferSelect;
 type ChatThreadRow = typeof chatThreadsTable.$inferSelect;
 type ExecutionRunRow = typeof executionRunsTable.$inferSelect;
 type ContextItemRow = typeof contextItemsTable.$inferSelect;
@@ -1746,6 +1777,130 @@ export class TaskStorage {
           ? this.#readCanonicalTaskMaterialization(bigTaskId)
           : null,
       ),
+    );
+  }
+
+  initializeDurableSubtaskWorkflows(
+    input: BigTaskId,
+  ): DurableSubtaskWorkflowInitialization {
+    const bigTaskId = parseBigTaskId(input);
+    return this.#operation(() =>
+      this.#atomicWorkflowInitialization(() => {
+        if (this.#hasWorkflowInitializationReceipt(bigTaskId)) {
+          return this.#readWorkflowInitialization(bigTaskId);
+        }
+        if (!this.#hasCanonicalTaskMaterialization(bigTaskId)) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The canonical task materialization authority is not ready.",
+          );
+        }
+
+        const source = this.#readCanonicalTaskMaterialization(bigTaskId);
+        const subtaskIds = source.subtasks.map(({ subtaskId }) => subtaskId);
+        const existing = this.#database
+          .select({ subtaskId: subtaskWorkflowInstancesTable.subtaskId })
+          .from(subtaskWorkflowInstancesTable)
+          .where(or(
+            eq(subtaskWorkflowInstancesTable.bigTaskId, bigTaskId),
+            inArray(subtaskWorkflowInstancesTable.subtaskId, subtaskIds),
+          ))
+          .get();
+        if (existing !== undefined) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "Workflow bootstrap state already exists for this initialization.",
+          );
+        }
+
+        const timestamp = this.#durableTimestampAtOrAfter(source.materializedAt);
+        const values = source.subtasks.map(({ subtaskId, profile }) => {
+          const initialStage = deriveInitialWorkflowStage(profile);
+          if (initialStage === null) {
+            throw malformedStoredData();
+          }
+          return {
+            projectId: source.projectId,
+            bigTaskId,
+            planRevision: source.planRevision,
+            candidateBinding: source.candidateBinding,
+            subtaskId,
+            initialStage,
+            initialRepairCyclesUsed: 0,
+            initializedAt: timestamp,
+          };
+        });
+        this.#database.insert(subtaskWorkflowInstancesTable).values(values).run();
+        this.#database.insert(workflowInitializationReceiptsTable).values({
+          projectId: source.projectId,
+          bigTaskId,
+          planRevision: source.planRevision,
+          candidateBinding: source.candidateBinding,
+          workflowInstanceCount: values.length,
+          initializedAt: timestamp,
+        }).run();
+
+        return this.#readWorkflowInitialization(bigTaskId);
+      }),
+    );
+  }
+
+  getDurableSubtaskWorkflowInitialization(
+    input: BigTaskId,
+  ): DurableSubtaskWorkflowInitialization | null {
+    const bigTaskId = parseBigTaskId(input);
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        if (this.#hasWorkflowInitializationReceipt(bigTaskId)) {
+          return this.#readWorkflowInitialization(bigTaskId);
+        }
+        if (this.#hasAnyWorkflowInstanceForBigTask(bigTaskId)) {
+          throw malformedStoredData();
+        }
+        return null;
+      }),
+    );
+  }
+
+  getDurableSubtaskWorkflowInstance(
+    input: SubtaskId,
+  ): DurableSubtaskWorkflowInstance | null {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const storedInstance = this.#database
+          .select({ bigTaskId: subtaskWorkflowInstancesTable.bigTaskId })
+          .from(subtaskWorkflowInstancesTable)
+          .where(eq(subtaskWorkflowInstancesTable.subtaskId, subtaskId))
+          .get();
+        const canonicalSubtask = this.#database
+          .select({ bigTaskId: subtasksTable.bigTaskId })
+          .from(subtasksTable)
+          .where(eq(subtasksTable.id, subtaskId))
+          .get();
+        const bigTaskId = storedInstance?.bigTaskId ?? canonicalSubtask?.bigTaskId;
+        const parsedBigTaskId = BigTaskIdSchema.safeParse(bigTaskId);
+        if (!parsedBigTaskId.success) {
+          if (storedInstance !== undefined) {
+            throw malformedStoredData();
+          }
+          return null;
+        }
+        if (!this.#hasWorkflowInitializationReceipt(parsedBigTaskId.data)) {
+          if (storedInstance !== undefined) {
+            throw malformedStoredData();
+          }
+          return null;
+        }
+        const initialization = this.#readWorkflowInitialization(parsedBigTaskId.data);
+        const instance = initialization.workflowInstances.find(
+          (candidate) => candidate.subtaskId === subtaskId,
+        );
+        if (instance === undefined) {
+          throw malformedStoredData();
+        }
+        return instance;
+      }),
     );
   }
 
@@ -3543,6 +3698,150 @@ export class TaskStorage {
     }
   }
 
+  #hasWorkflowInitializationReceipt(bigTaskId: BigTaskId): boolean {
+    return this.#database
+      .select({ bigTaskId: workflowInitializationReceiptsTable.bigTaskId })
+      .from(workflowInitializationReceiptsTable)
+      .where(eq(workflowInitializationReceiptsTable.bigTaskId, bigTaskId))
+      .get() !== undefined;
+  }
+
+  #hasAnyWorkflowInstanceForBigTask(bigTaskId: BigTaskId): boolean {
+    return this.#sqlite.prepare(`SELECT 1 AS present
+      FROM subtask_workflow_instances AS instance
+      LEFT JOIN subtasks AS subtask ON subtask.id = instance.subtask_id
+      WHERE instance.big_task_id = ? OR subtask.big_task_id = ?
+      LIMIT 1`).get(bigTaskId, bigTaskId) !== undefined;
+  }
+
+  #readWorkflowInitialization(
+    bigTaskId: BigTaskId,
+  ): DurableSubtaskWorkflowInitialization {
+    const receipt = this.#database
+      .select()
+      .from(workflowInitializationReceiptsTable)
+      .where(eq(workflowInitializationReceiptsTable.bigTaskId, bigTaskId))
+      .get();
+    if (receipt === undefined) {
+      throw malformedStoredData();
+    }
+    const source = this.#readCanonicalTaskMaterialization(bigTaskId);
+    this.#validateWorkflowInitializationReceipt(receipt, source);
+
+    const subtaskIds = source.subtasks.map(({ subtaskId }) => subtaskId);
+    const rows = this.#database
+      .select()
+      .from(subtaskWorkflowInstancesTable)
+      .where(or(
+        eq(subtaskWorkflowInstancesTable.bigTaskId, bigTaskId),
+        inArray(subtaskWorkflowInstancesTable.subtaskId, subtaskIds),
+      ))
+      .all();
+    if (rows.length !== source.subtasks.length) {
+      throw malformedStoredData();
+    }
+    const rowsBySubtaskId = new Map(rows.map((row) => [row.subtaskId, row]));
+    if (rowsBySubtaskId.size !== rows.length) {
+      throw malformedStoredData();
+    }
+
+    const workflowInstances = source.subtasks.map(({ subtaskId, profile, writeEnabled }) => {
+      const row = rowsBySubtaskId.get(subtaskId);
+      const expectedInitialStage = deriveInitialWorkflowStage(profile);
+      if (
+        row === undefined ||
+        expectedInitialStage === null ||
+        !this.#isExactWorkflowInstanceRow(
+          row,
+          source,
+          subtaskId,
+          expectedInitialStage,
+          receipt.initializedAt,
+        )
+      ) {
+        throw malformedStoredData();
+      }
+      return {
+        projectId: source.projectId,
+        bigTaskId: source.bigTaskId,
+        planRevision: source.planRevision,
+        candidateBinding: source.candidateBinding,
+        subtaskId,
+        initialStage: expectedInitialStage,
+        initialRepairCyclesUsed: 0 as const,
+        initializedAt: receipt.initializedAt,
+        profile,
+        writeEnabled,
+      };
+    });
+
+    return deepFreeze({
+      projectId: source.projectId,
+      bigTaskId: source.bigTaskId,
+      planRevision: source.planRevision,
+      candidateBinding: source.candidateBinding,
+      workflowInstanceCount: receipt.workflowInstanceCount,
+      initializedAt: receipt.initializedAt,
+      workflowInstances,
+    });
+  }
+
+  #validateWorkflowInitializationReceipt(
+    receipt: WorkflowInitializationReceiptRow,
+    source: CanonicalTaskMaterialization,
+  ): void {
+    const projectId = ProjectIdSchema.safeParse(receipt.projectId);
+    const storedBigTaskId = BigTaskIdSchema.safeParse(receipt.bigTaskId);
+    if (
+      !projectId.success ||
+      projectId.data !== receipt.projectId ||
+      !storedBigTaskId.success ||
+      storedBigTaskId.data !== receipt.bigTaskId ||
+      receipt.projectId !== source.projectId ||
+      receipt.bigTaskId !== source.bigTaskId ||
+      receipt.planRevision !== source.planRevision ||
+      receipt.candidateBinding !== source.candidateBinding ||
+      !Number.isSafeInteger(receipt.workflowInstanceCount) ||
+      receipt.workflowInstanceCount !== source.subtasks.length ||
+      !isCanonicalUtcTimestamp(receipt.initializedAt) ||
+      new Date(receipt.initializedAt).getTime() <
+        new Date(source.materializedAt).getTime()
+    ) {
+      throw malformedStoredData();
+    }
+  }
+
+  #isExactWorkflowInstanceRow(
+    row: SubtaskWorkflowInstanceRow,
+    source: CanonicalTaskMaterialization,
+    subtaskId: SubtaskId,
+    expectedInitialStage: WorkflowInitializationStage,
+    initializedAt: string,
+  ): boolean {
+    const projectId = ProjectIdSchema.safeParse(row.projectId);
+    const storedBigTaskId = BigTaskIdSchema.safeParse(row.bigTaskId);
+    const storedSubtaskId = SubtaskIdSchema.safeParse(row.subtaskId);
+    return (
+      projectId.success &&
+      projectId.data === row.projectId &&
+      storedBigTaskId.success &&
+      storedBigTaskId.data === row.bigTaskId &&
+      storedSubtaskId.success &&
+      storedSubtaskId.data === row.subtaskId &&
+      row.projectId === source.projectId &&
+      row.bigTaskId === source.bigTaskId &&
+      row.planRevision === source.planRevision &&
+      row.candidateBinding === source.candidateBinding &&
+      row.subtaskId === subtaskId &&
+      row.initialStage === expectedInitialStage &&
+      row.initialRepairCyclesUsed === 0 &&
+      row.initializedAt === initializedAt &&
+      isCanonicalUtcTimestamp(row.initializedAt) &&
+      new Date(row.initializedAt).getTime() >=
+        new Date(source.materializedAt).getTime()
+    );
+  }
+
   #getProject(projectId: ProjectId): Project | null {
     const row = this.#database
       .select()
@@ -4294,6 +4593,44 @@ export class TaskStorage {
       throw new TaskStorageError(
         "TRANSACTION_FAILED",
         "The canonical task materialization transaction failed and was rolled back.",
+      );
+    }
+  }
+
+  #atomicWorkflowInitialization<T>(operation: () => T): T {
+    if (!this.#sqlite.isTransaction) {
+      return this.#atomic(operation);
+    }
+
+    const savepoint = "workflow_initialization";
+    try {
+      this.#sqlite.exec(`SAVEPOINT ${savepoint}`);
+    } catch {
+      throw new TaskStorageError(
+        "TRANSACTION_FAILED",
+        "The workflow initialization transaction could not start.",
+      );
+    }
+    try {
+      const result = operation();
+      this.#sqlite.exec(`RELEASE ${savepoint}`);
+      return result;
+    } catch (error) {
+      try {
+        this.#sqlite.exec(`ROLLBACK TO ${savepoint}`);
+        this.#sqlite.exec(`RELEASE ${savepoint}`);
+      } catch {
+        throw new TaskStorageError(
+          "TRANSACTION_FAILED",
+          "The workflow initialization transaction rollback failed.",
+        );
+      }
+      if (error instanceof TaskStorageError) {
+        throw error;
+      }
+      throw new TaskStorageError(
+        "TRANSACTION_FAILED",
+        "The workflow initialization transaction failed and was rolled back.",
       );
     }
   }

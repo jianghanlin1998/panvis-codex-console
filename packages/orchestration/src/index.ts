@@ -40,6 +40,7 @@ export type {
   StageTransitionInput,
   StageTransitionResult,
   WorkflowProfile,
+  WorkflowInitializationStage,
   WorkflowStage,
 } from "./contracts.js";
 
@@ -53,6 +54,10 @@ export {
   submitPlannerRevision,
 } from "./plan-review.js";
 export { materializeApprovedPlan } from "./materialization.js";
-export { evaluateStageTransition, getWorkflowStagePath } from "./stages.js";
+export {
+  deriveInitialWorkflowStage,
+  evaluateStageTransition,
+  getWorkflowStagePath,
+} from "./stages.js";
 export { selectSerialWriteDispatch } from "./dispatch.js";
 export { evaluateBigTaskCompletion } from "./completion.js";

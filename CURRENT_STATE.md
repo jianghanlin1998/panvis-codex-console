@@ -389,19 +389,32 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Materialized stable Subtask-set protection: IMPLEMENTED
 - Materialized dependency-graph protection: IMPLEMENTED
 - Step 8B2b Comprehensive Hardening: PASS
-- Step 8B2b Atomic Canonical Subtask and Dependency Materialization V0 maturity: HARDENED
+- Step 8B2b Fresh Independent QA: PASS
+- Step 8B2b Fresh Independent QA findings: NONE
+- Step 8B2b Atomic Canonical Subtask and Dependency Materialization V0 maturity: ACCEPTED
+- Step 8B2b accepted evidence SHA: `a35cec6195e6a350e6338457b19f48c114176174`
 - CTC-ORCH-B2B-HARD-001: CLOSED — owned completion evidence now classifies missing or downgraded upstream source authority as durable corruption
 - CTC-ORCH-B2B-HARD-002: CLOSED — canonical replay rejects lifecycle `updatedAt` values earlier than immutable creation/materialization provenance
-- Step 8B2b Fresh Independent QA: PENDING
-- Orchestration stage/evidence persistence: NOT STARTED / BLOCKED on Step 8B2b ACCEPTED
-- Later orchestration maturity transitions: NOT STARTED / BLOCKED on Step 8B2b ACCEPTED
+- Step 8B3a Durable Per-Subtask Workflow Instance and Stage Initialization Authority V0: IMPLEMENTED
+- Step 8B3a per-Subtask immutable workflow bootstrap: IMPLEMENTED
+- Step 8B3a deterministic initial stage: IMPLEMENTED
+- Step 8B3a initial repair counter: IMPLEMENTED / 0
+- Step 8B3a Big-Task workflow initialization receipt: IMPLEMENTED
+- Step 8B3a atomic all-Subtask initialization: IMPLEMENTED
+- Step 8B3a exact idempotent initialization retry: IMPLEMENTED
+- Step 8B3a Comprehensive Hardening: NOT RUN
+- Step 8B3a Fresh Independent QA: NOT RUN
+- Step 8B3a maturity: IMPLEMENTED / NOT ACCEPTED
+- Step 8B3a stage/evidence advancement: NOT IMPLEMENTED
+- Step 8B3a TODO → IN_PROGRESS orchestration: NOT IMPLEMENTED
+- Step 8B3b typed source-backed evidence + atomic stage transitions: BLOCKED on Step 8B3a ACCEPTED
+- Step 8B downstream stage/evidence/lifecycle work: BLOCKED on Step 8B3a ACCEPTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Step 8B downstream stage/evidence/lifecycle work: BLOCKED on Step 8B2b ACCEPTED
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Independent no-write QA of Step 8B2b. Do not begin the later stage/evidence/lifecycle slice.
+**Next safe task:** NEW CHAT Comprehensive Hardening of Step 8B3a. Do not begin Step 8B3b.
 
 ## Not operational yet
 - browser Console UI

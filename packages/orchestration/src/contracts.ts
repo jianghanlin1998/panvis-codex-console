@@ -29,6 +29,11 @@ export const WORKFLOW_STAGES = Object.freeze([
 
 export type WorkflowStage = (typeof WORKFLOW_STAGES)[number];
 
+export type WorkflowInitializationStage = Extract<
+  WorkflowStage,
+  "MATERIALIZE" | "EXECUTE"
+>;
+
 export const HUMAN_REQUIRED_REASONS = Object.freeze([
   "PLAN_REVIEW_EXHAUSTED",
   "REVIEW_ESCALATED",

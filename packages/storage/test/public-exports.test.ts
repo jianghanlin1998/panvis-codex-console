@@ -20,6 +20,7 @@ import {
   projectsTable,
   STORAGE_ERROR_CODES,
   subtaskImplementationCheckpointsTable,
+  subtaskWorkflowInstancesTable,
   subtasksTable,
   taskContractsTable,
   taskDependenciesTable,
@@ -28,6 +29,7 @@ import {
   TaskStorageError,
   TrustedRepositorySourceError,
   TrustedRepositorySourceReader,
+  workflowInitializationReceiptsTable,
 } from "@codex-task-console/storage";
 import type {
   ApprovedTaskContractAuthority,
@@ -48,6 +50,8 @@ import type {
   DurablePlanningReviewBundle,
   DurablePlanCandidateArtifact,
   DurableReviewDecisionArtifact,
+  DurableSubtaskWorkflowInitialization,
+  DurableSubtaskWorkflowInstance,
   JitContextStorageSourceSnapshot,
   OperationalJitContextAssemblyErrorCode,
   OperationalJitContextProfile,
@@ -86,6 +90,8 @@ describe("storage package public exports", () => {
     expect(taskContractsTable).toBeDefined();
     expect(taskDependenciesTable).toBeDefined();
     expect(subtaskImplementationCheckpointsTable).toBeDefined();
+    expect(subtaskWorkflowInstancesTable).toBeDefined();
+    expect(workflowInitializationReceiptsTable).toBeDefined();
     expect(TASK_CONTRACT_AUTHORITY_READINESS).toEqual([
       "TASK_CONTRACT_AUTHORITY_READY",
       "TASK_CONTRACT_AUTHORITY_NOT_READY",
@@ -107,6 +113,8 @@ describe("storage package public exports", () => {
     expectTypeOf<DurablePlanningReviewBundle>().toBeObject();
     expectTypeOf<DurablePlanCandidateArtifact>().toBeObject();
     expectTypeOf<DurableReviewDecisionArtifact>().toBeObject();
+    expectTypeOf<DurableSubtaskWorkflowInitialization>().toBeObject();
+    expectTypeOf<DurableSubtaskWorkflowInstance>().toBeObject();
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
     expectTypeOf<OperationalJitContextAssemblyErrorCode>().toBeString();
     expectTypeOf<OperationalJitContextProfile>().toBeString();

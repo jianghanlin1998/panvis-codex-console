@@ -16,9 +16,11 @@ export {
   orchestrationReviewDecisionsTable,
   projectsTable,
   subtaskImplementationCheckpointsTable,
+  subtaskWorkflowInstancesTable,
   subtasksTable,
   taskContractsTable,
   taskDependenciesTable,
+  workflowInitializationReceiptsTable,
 } from "./schema.js";
 
 export { openTaskDatabase, TaskStorage } from "./task-storage.js";
@@ -37,6 +39,8 @@ export type {
   CompleteSubtaskImplementationResult,
   CreateChatThreadInput,
   CreateExecutionRunInput,
+  DurableSubtaskWorkflowInitialization,
+  DurableSubtaskWorkflowInstance,
   FinishExecutionRunInput,
   FinalizePrimaryExecutionAttemptInput,
   FinalizedPrimaryExecutionAttempt,

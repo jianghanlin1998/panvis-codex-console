@@ -11,6 +11,7 @@ import type {
   StageTransitionInput,
   StageTransitionResult,
   WorkflowProfile,
+  WorkflowInitializationStage,
   WorkflowStage,
 } from "./contracts.js";
 import { parseMaterializedGraph } from "./graph.js";
@@ -150,6 +151,15 @@ export const getWorkflowStagePath = (
         "COMPLETE",
       ]);
   }
+};
+
+export const deriveInitialWorkflowStage = (
+  profile: WorkflowProfile,
+): WorkflowInitializationStage | null => {
+  if (!isWorkflowProfile(profile)) {
+    return null;
+  }
+  return profile === "LOW" ? "EXECUTE" : "MATERIALIZE";
 };
 
 const executionEntryEvidence = [

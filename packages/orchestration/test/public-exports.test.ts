@@ -12,6 +12,7 @@ describe("orchestration package public exports", () => {
     for (const publicOperation of [
       "applyReviewerDecision",
       "beginPlanReview",
+      "deriveInitialWorkflowStage",
       "evaluateBigTaskCompletion",
       "evaluateStageTransition",
       "getWorkflowStagePath",

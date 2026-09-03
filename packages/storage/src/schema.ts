@@ -85,6 +85,7 @@ export const subtasksTable = sqliteTable(
   },
   (table) => [
     index("subtasks_big_task_id_index").on(table.bigTaskId),
+    uniqueIndex("subtasks_id_big_task_id_unique").on(table.id, table.bigTaskId),
     check(
       "subtasks_status_check",
       sql`${table.status} in ('TODO', 'IN_PROGRESS', 'QA_DEBUG', 'DONE', 'DROPPED', 'ARCHIVED')`,
@@ -344,6 +345,12 @@ export const canonicalTaskMaterializationsTable = sqliteTable(
     materializedAt: text("materialized_at").notNull(),
   },
   (table) => [
+    uniqueIndex("canonical_task_materializations_authority_unique").on(
+      table.projectId,
+      table.bigTaskId,
+      table.planRevision,
+      table.candidateBinding,
+    ),
     foreignKey({
       name: "canonical_task_materializations_candidate_fk",
       columns: [table.bigTaskId, table.planRevision],
@@ -369,6 +376,117 @@ export const canonicalTaskMaterializationsTable = sqliteTable(
     check(
       "canonical_task_materializations_dependency_count_check",
       sql`typeof(${table.dependencyCount}) = 'integer' and ${table.dependencyCount} >= 0`,
+    ),
+  ],
+);
+
+export const subtaskWorkflowInstancesTable = sqliteTable(
+  "subtask_workflow_instances",
+  {
+    subtaskId: text("subtask_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    initialStage: text("initial_stage").notNull(),
+    initialRepairCyclesUsed: integer("initial_repair_cycles_used").notNull(),
+    initializedAt: text("initialized_at").notNull(),
+  },
+  (table) => [
+    index("subtask_workflow_instances_big_task_index").on(
+      table.bigTaskId,
+      table.subtaskId,
+    ),
+    foreignKey({
+      name: "subtask_workflow_instances_materialization_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+      ],
+      foreignColumns: [
+        canonicalTaskMaterializationsTable.projectId,
+        canonicalTaskMaterializationsTable.bigTaskId,
+        canonicalTaskMaterializationsTable.planRevision,
+        canonicalTaskMaterializationsTable.candidateBinding,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    foreignKey({
+      name: "subtask_workflow_instances_subtask_fk",
+      columns: [table.subtaskId, table.bigTaskId],
+      foreignColumns: [subtasksTable.id, subtasksTable.bigTaskId],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "subtask_workflow_instances_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "subtask_workflow_instances_binding_check",
+      sql`length(${table.candidateBinding}) >= 1`,
+    ),
+    check(
+      "subtask_workflow_instances_initial_stage_check",
+      sql`${table.initialStage} in ('MATERIALIZE', 'EXECUTE')`,
+    ),
+    check(
+      "subtask_workflow_instances_initial_repair_check",
+      sql`typeof(${table.initialRepairCyclesUsed}) = 'integer' and ${table.initialRepairCyclesUsed} = 0`,
+    ),
+    check(
+      "subtask_workflow_instances_initialized_at_check",
+      sql`length(${table.initializedAt}) >= 1`,
+    ),
+  ],
+);
+
+export const workflowInitializationReceiptsTable = sqliteTable(
+  "workflow_initialization_receipts",
+  {
+    bigTaskId: text("big_task_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    workflowInstanceCount: integer("workflow_instance_count").notNull(),
+    initializedAt: text("initialized_at").notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "workflow_initialization_receipts_materialization_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+      ],
+      foreignColumns: [
+        canonicalTaskMaterializationsTable.projectId,
+        canonicalTaskMaterializationsTable.bigTaskId,
+        canonicalTaskMaterializationsTable.planRevision,
+        canonicalTaskMaterializationsTable.candidateBinding,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "workflow_initialization_receipts_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "workflow_initialization_receipts_binding_check",
+      sql`length(${table.candidateBinding}) >= 1`,
+    ),
+    check(
+      "workflow_initialization_receipts_count_check",
+      sql`typeof(${table.workflowInstanceCount}) = 'integer' and ${table.workflowInstanceCount} >= 1`,
+    ),
+    check(
+      "workflow_initialization_receipts_initialized_at_check",
+      sql`length(${table.initializedAt}) >= 1`,
     ),
   ],
 );

@@ -115,7 +115,7 @@ describe("Step 8B1 migration predecessor matrix", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 13 });
+      ).toEqual({ count: 14 });
       expect(
         sqlite
           .prepare(
@@ -239,7 +239,7 @@ describe("Step 8B1 migration predecessor matrix", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 13 });
+      ).toEqual({ count: 14 });
       sqlite.close();
     });
   });
