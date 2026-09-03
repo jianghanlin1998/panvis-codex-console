@@ -70,10 +70,20 @@ export interface DurablePlanningReviewBundle {
   readonly bigTaskId: BigTaskId;
   readonly reviewState: PlanReviewState;
   readonly candidateBinding: string;
+  /**
+   * Completeness of the current candidate's immutable Task Contract bundle only.
+   * This does not authorize a Reviewer action, prove approval or graph validity,
+   * materialize canonical Subtasks, or establish execution readiness.
+   */
   readonly taskContractAuthorityReadiness: TaskContractAuthorityReadiness;
   readonly taskContracts: readonly TaskContractV0[];
 }
 
+/**
+ * Exact approved Task Contract authority for the current reviewed candidate.
+ * READY is independent from graph validity and canonical-Subtask execution
+ * readiness; `materialized` reports only Step 8B1 graph materialization.
+ */
 export type ApprovedTaskContractAuthority =
   | Readonly<{
       taskContractAuthorityReadiness: "TASK_CONTRACT_AUTHORITY_NOT_READY";

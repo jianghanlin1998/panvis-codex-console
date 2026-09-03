@@ -369,22 +369,25 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Durable materialization authority and approved graph replay: IMPLEMENTED
 - Durable orchestration text policy: well-formed Unicode preserved exactly without normalization; C0/C1 controls and unpaired surrogates rejected
 - Step 8B2a Immutable Task Contract Authority V0: IMPLEMENTED
+- Step 8B2a implementation SHA: `f4c3c11d4df33f87fb3ed21f63460ae480da6da6`
 - Immutable Task Contract artifact persistence: IMPLEMENTED
 - Exact candidate revision / candidateBinding / Subtask contract association: IMPLEMENTED
 - Approved Task Contract authority derivation: IMPLEMENTED
 - Contract-aware Review bundle source: IMPLEMENTED
-- Step 8B2a Comprehensive Hardening: NOT RUN
-- Step 8B2a Fresh Independent QA: NOT RUN
+- Step 8B2a Comprehensive Hardening: PASS
+- Step 8B2a Immutable Task Contract Authority V0 maturity: HARDENED
+- CTC-ORCH-B2A-HARD-001: CLOSED — immutable INSERT-conflict guards prevent SQLite replacement writes from retargeting Task Contract artifacts or candidate associations when `recursive_triggers` is disabled
+- Step 8B2a Fresh Independent QA: PENDING
 - Approved graph to canonical executable Subtask / dependency materialization: NOT IMPLEMENTED
 - Orchestration stage/evidence persistence: NOT IMPLEMENTED
-- IMPLEMENTED -> HARDENED -> ACCEPTED public durable mutations: NOT IMPLEMENTED
+- Later orchestration maturity transitions: NOT IMPLEMENTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
 - Step 8B2b: NOT STARTED / BLOCKED on Step 8B2a ACCEPTED
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Comprehensive Hardening of Step 8B2a. Do not begin Step 8B2b.
+**Next safe task:** NEW CHAT Fresh Independent no-write QA of Step 8B2a. Do not begin Step 8B2b.
 
 ## Not operational yet
 - browser Console UI

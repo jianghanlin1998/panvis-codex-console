@@ -9,6 +9,7 @@ import {
   BigTaskIdSchema,
   ProjectIdSchema,
   SubtaskIdSchema,
+  TaskContractV0Schema,
 } from "@codex-task-console/domain";
 import type {
   PlanCandidate,
@@ -36,6 +37,21 @@ const PREDECESSOR_MIGRATIONS = [
   "20260831044031_tired_riptide",
   "20260902135340_material_master_chief",
   "20260902152406_simple_exodus",
+] as const;
+const ALL_MIGRATIONS = [
+  ...PREDECESSOR_MIGRATIONS,
+  "20260902171242_grey_toad",
+] as const;
+const REQUIRED_TASK_CONTRACT_TRIGGERS = [
+  "candidate_task_contract_bindings_immutable_delete",
+  "candidate_task_contract_bindings_immutable_insert_conflict",
+  "candidate_task_contract_bindings_immutable_update",
+  "orchestration_plan_candidate_task_contract_count_immutable",
+  "orchestration_plan_candidate_task_contract_count_insert_check",
+  "orchestration_plan_candidate_task_contract_count_insert_conflict",
+  "task_contracts_immutable_delete",
+  "task_contracts_immutable_insert_conflict",
+  "task_contracts_immutable_update",
 ] as const;
 
 const copyPredecessor = (databasePath: string, folderName: string): string => {
@@ -67,6 +83,313 @@ const plan = (projectId: string, bigTaskId: string, subtaskId: string): PlanCand
 });
 
 describe("Immutable Task Contract authority migration", () => {
+  it.each(
+    ALL_MIGRATIONS.map((migration, index) => [migration, index] as const),
+  )("migrates generation %s through current authority", (_migration, index) => {
+    withTemporaryDatabasePath((databasePath) => {
+      const generationFolder = join(dirname(databasePath), `generation-${index}`);
+      mkdirSync(generationFolder);
+      for (const migration of ALL_MIGRATIONS.slice(0, index + 1)) {
+        cpSync(
+          join(MIGRATIONS_ROOT, migration),
+          join(generationFolder, basename(migration)),
+          { recursive: true },
+        );
+      }
+
+      const projectId = ProjectIdSchema.parse(`prj_contract_gen_${index}`);
+      const historicalBigTaskId = BigTaskIdSchema.parse(
+        `bt_contract_gen_history_${index}`,
+      );
+      let storage = openTaskDatabase({
+        databasePath,
+        clock: fixedClock,
+        migrationsFolder: generationFolder,
+      });
+      storage.createProject(
+        makeProject(projectId, `contract-generation-${index}`),
+      );
+      storage.createBigTask(makeBigTask(historicalBigTaskId, projectId));
+      let historicalPlan: PlanCandidate | null = null;
+      if (index >= 9) {
+        historicalPlan = plan(
+          projectId,
+          historicalBigTaskId,
+          `st_contract_gen_history_${index}`,
+        );
+        storage.beginDurablePlanning(historicalPlan);
+      }
+      storage.close();
+
+      storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      expect(storage.getProjectById(projectId)).toEqual(
+        makeProject(projectId, `contract-generation-${index}`),
+      );
+      if (historicalPlan === null) {
+        expect(
+          storage.getDurablePlanningSnapshot(historicalBigTaskId),
+        ).toBeNull();
+      } else {
+        expect(
+          storage.getDurablePlanningReviewBundle(historicalBigTaskId),
+        ).toMatchObject({
+          reviewState: { candidate: historicalPlan },
+          taskContractAuthorityReadiness:
+            "TASK_CONTRACT_AUTHORITY_NOT_READY",
+          taskContracts: [],
+        });
+      }
+
+      const currentBigTaskId = BigTaskIdSchema.parse(
+        `bt_contract_gen_current_${index}`,
+      );
+      storage.createBigTask(makeBigTask(currentBigTaskId, projectId));
+      const currentPlan = plan(
+        projectId,
+        currentBigTaskId,
+        `st_contract_gen_current_${index}`,
+      );
+      const subtask = currentPlan.subtasks[0]!;
+      const contract = TaskContractV0Schema.parse({
+        taskContractRef: subtask.taskContractRef,
+        projectId,
+        bigTaskId: currentBigTaskId,
+        subtaskId: subtask.id,
+        title: `Generation ${index} contract`,
+        goal: "Prove latest immutable authority after migration.",
+        scopeIn: ["Migration generation"],
+        scopeOut: [],
+        acceptanceCriteria: ["Authority reopens exactly."],
+        untouchedAreas: [],
+        promptSeed: "Exercise only deterministic storage.",
+        startPolicy: "MANUAL",
+        delegationPolicy: "NONE",
+        recommendedReasoningLevel: "HIGH",
+      });
+      const bundle = storage.beginDurablePlanningBundle(currentPlan, [contract]);
+      storage.recordDurableReviewerDecision(currentBigTaskId, {
+        outcome: "APPROVE",
+        planRevision: 1,
+        candidateBinding: bundle.candidateBinding,
+      });
+      storage.close();
+
+      storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      expect(
+        storage.getApprovedTaskContractAuthority(currentBigTaskId),
+      ).toMatchObject({
+        taskContractAuthorityReadiness: "TASK_CONTRACT_AUTHORITY_READY",
+        taskContracts: [contract],
+      });
+      expect(storage.isForeignKeyEnforcementEnabled()).toBe(true);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
+      ).toEqual({ count: ALL_MIGRATIONS.length });
+      sqlite.close();
+    });
+  });
+
+  it("retains every structural immutability trigger after the full migration chain", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      openTaskDatabase({ databasePath, clock: fixedClock }).close();
+      const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+      const triggers = sqlite
+        .prepare(
+          `SELECT name, sql
+             FROM sqlite_schema
+            WHERE type = 'trigger'
+              AND (name LIKE 'task_contracts_%'
+                OR name LIKE 'candidate_task_contract_bindings_%'
+                OR name LIKE 'orchestration_plan_candidate_task_contract_count_%')
+            ORDER BY name`,
+        )
+        .all() as unknown as readonly {
+        readonly name: string;
+        readonly sql: string;
+      }[];
+      expect(triggers.map(({ name }) => name)).toEqual(
+        REQUIRED_TASK_CONTRACT_TRIGGERS,
+      );
+      for (const trigger of triggers) {
+        expect(trigger.sql).toMatch(/RAISE\s*\(\s*ABORT/i);
+      }
+      sqlite.close();
+    });
+  });
+
+  it("enforces the Task Contract PK, unique, FK, and CHECK matrix", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      const projectId = ProjectIdSchema.parse("prj_contract_constraints");
+      const bigTaskId = BigTaskIdSchema.parse("bt_contract_constraints");
+      storage.createProject(makeProject(projectId, "contract-constraints"));
+      storage.createBigTask(makeBigTask(bigTaskId, projectId));
+      const currentPlan = plan(
+        projectId,
+        bigTaskId,
+        "st_contract_constraints",
+      );
+      const subtask = currentPlan.subtasks[0]!;
+      const contract = TaskContractV0Schema.parse({
+        taskContractRef: subtask.taskContractRef,
+        projectId,
+        bigTaskId,
+        subtaskId: subtask.id,
+        title: "Constraint contract",
+        goal: "Exercise structural invariants.",
+        scopeIn: ["Schema"],
+        scopeOut: [],
+        acceptanceCriteria: ["Invalid writes fail."],
+        untouchedAreas: [],
+        promptSeed: "Use the exact schema.",
+        startPolicy: "MANUAL",
+        delegationPolicy: "NONE",
+        recommendedReasoningLevel: "HIGH",
+      });
+      const bundle = storage.beginDurablePlanningBundle(currentPlan, [contract]);
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = ON");
+      const insertContract = sqlite.prepare(
+        `INSERT INTO task_contracts
+           (project_id, task_contract_ref, big_task_id, subtask_id, contract_payload, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      const contractValues = [
+        contract.projectId,
+        contract.taskContractRef,
+        contract.bigTaskId,
+        contract.subtaskId,
+        JSON.stringify(contract),
+        "2026-08-09T00:00:00.000Z",
+      ] as const;
+      expect(() => insertContract.run(...contractValues)).toThrow();
+      expect(() =>
+        insertContract.run(
+          "prj_missing",
+          "missing-project-ref",
+          contract.bigTaskId,
+          contract.subtaskId,
+          JSON.stringify({ ...contract, projectId: "prj_missing" }),
+          contractValues[5],
+        ),
+      ).toThrow();
+      expect(() =>
+        insertContract.run(
+          contract.projectId,
+          "missing-big-task-ref",
+          "bt_missing",
+          contract.subtaskId,
+          JSON.stringify({ ...contract, bigTaskId: "bt_missing" }),
+          contractValues[5],
+        ),
+      ).toThrow();
+      for (const invalidRef of ["", "x".repeat(1_001)]) {
+        expect(() =>
+          insertContract.run(
+            contract.projectId,
+            invalidRef,
+            contract.bigTaskId,
+            contract.subtaskId,
+            JSON.stringify({ ...contract, taskContractRef: invalidRef }),
+            contractValues[5],
+          ),
+        ).toThrow();
+      }
+
+      const insertBinding = sqlite.prepare(
+        `INSERT INTO candidate_task_contract_bindings
+           (project_id, big_task_id, plan_revision, candidate_binding, subtask_id, task_contract_ref, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const bindingValues = [
+        contract.projectId,
+        contract.bigTaskId,
+        1,
+        bundle.candidateBinding,
+        contract.subtaskId,
+        contract.taskContractRef,
+        "2026-08-09T00:00:00.000Z",
+      ] as const;
+      expect(() => insertBinding.run(...bindingValues)).toThrow();
+      expect(() =>
+        insertBinding.run(
+          contract.projectId,
+          contract.bigTaskId,
+          99,
+          bundle.candidateBinding,
+          "st_absent_revision",
+          contract.taskContractRef,
+          bindingValues[6],
+        ),
+      ).toThrow();
+      expect(() =>
+        insertBinding.run(
+          contract.projectId,
+          contract.bigTaskId,
+          1,
+          bundle.candidateBinding,
+          "st_missing_contract",
+          "missing-contract-ref",
+          bindingValues[6],
+        ),
+      ).toThrow();
+      expect(() =>
+        insertBinding.run(
+          contract.projectId,
+          contract.bigTaskId,
+          1,
+          bundle.candidateBinding,
+          "st_duplicate_ref",
+          contract.taskContractRef,
+          bindingValues[6],
+        ),
+      ).toThrow();
+      for (const invalidRevision of [0, -1]) {
+        expect(() =>
+          insertBinding.run(
+            contract.projectId,
+            contract.bigTaskId,
+            invalidRevision,
+            bundle.candidateBinding,
+            "st_invalid_revision",
+            contract.taskContractRef,
+            bindingValues[6],
+          ),
+        ).toThrow();
+      }
+      expect(() =>
+        insertBinding.run(
+          contract.projectId,
+          contract.bigTaskId,
+          1,
+          "",
+          "st_empty_binding",
+          contract.taskContractRef,
+          bindingValues[6],
+        ),
+      ).toThrow();
+      for (const invalidRef of ["", "x".repeat(1_001)]) {
+        expect(() =>
+          insertBinding.run(
+            contract.projectId,
+            contract.bigTaskId,
+            1,
+            bundle.candidateBinding,
+            "st_invalid_ref",
+            invalidRef,
+            bindingValues[6],
+          ),
+        ).toThrow();
+      }
+      sqlite.close();
+    });
+  });
+
   it("adds empty authority tables without fabricating contracts for accepted Step 8B1 histories", () => {
     withTemporaryDatabasePath((databasePath) => {
       const predecessor = copyPredecessor(databasePath, "task-contract-predecessor");
@@ -201,6 +524,22 @@ describe("Immutable Task Contract authority migration", () => {
     [
       "immutability trigger",
       "CREATE TRIGGER task_contracts_immutable_update BEFORE INSERT ON projects BEGIN SELECT 1; END",
+    ],
+    [
+      "artifact insert-conflict trigger",
+      "CREATE TRIGGER task_contracts_immutable_insert_conflict BEFORE INSERT ON projects BEGIN SELECT 1; END",
+    ],
+    [
+      "association insert-conflict trigger",
+      "CREATE TRIGGER candidate_task_contract_bindings_immutable_insert_conflict BEFORE INSERT ON projects BEGIN SELECT 1; END",
+    ],
+    [
+      "bundle-marker conflict trigger",
+      "CREATE TRIGGER orchestration_plan_candidate_task_contract_count_insert_conflict BEFORE INSERT ON projects BEGIN SELECT 1; END",
+    ],
+    [
+      "final trigger",
+      "CREATE TRIGGER orchestration_plan_candidate_task_contract_count_insert_check BEFORE INSERT ON projects BEGIN SELECT 1; END",
     ],
   ] as const)("rolls back the whole migration on a %s collision", (_label, collisionSql) => {
     withTemporaryDatabasePath((databasePath) => {

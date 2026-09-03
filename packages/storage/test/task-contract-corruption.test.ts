@@ -113,15 +113,50 @@ type CorruptionMutation = (sqlite: DatabaseSync) => void;
 
 const corruptionCases: readonly [string, CorruptionMutation][] = [
   ["artifact invalid JSON", (db) => replaceFirstPayload(db, () => "not-json")],
+  ["artifact JSON null", (db) => replaceFirstPayload(db, () => "null")],
   [
     "artifact noncanonical JSON whitespace",
     (db) => replaceFirstPayload(db, (payload) => `${JSON.stringify(payload)} `),
   ],
   [
-    "artifact duplicate JSON key",
+    "artifact noncanonical JSON key order",
+    (db) =>
+      replaceFirstPayload(db, (payload) =>
+        JSON.stringify(Object.fromEntries(Object.entries(payload).reverse())),
+      ),
+  ],
+  [
+    "artifact escaped ordinary ASCII",
+    (db) =>
+      replaceFirstPayload(db, (payload) =>
+        JSON.stringify(payload).replace("Corruption", "\\u0043orruption"),
+      ),
+  ],
+  [
+    "artifact escaped Unicode instead of canonical literal Unicode",
+    (db) =>
+      replaceFirstPayload(db, (payload) =>
+        JSON.stringify({ ...payload, title: "任务" }).replace(
+          "任务",
+          "\\u4efb\\u52a1",
+        ),
+      ),
+  ],
+  [
+    "artifact duplicate JSON key with the same parsed value",
     (db) =>
       replaceFirstPayload(db, (payload) =>
         JSON.stringify(payload).replace("{", '{"title":"duplicate",'),
+      ),
+  ],
+  [
+    "artifact duplicate JSON key with a different parsed value",
+    (db) =>
+      replaceFirstPayload(db, (payload) =>
+        JSON.stringify(payload).replace(
+          '"goal":',
+          '"title":"last-value-wins","goal":',
+        ),
       ),
   ],
   [
@@ -131,6 +166,13 @@ const corruptionCases: readonly [string, CorruptionMutation][] = [
         delete payload.title;
         return JSON.stringify(payload);
       }),
+  ],
+  [
+    "artifact numeric title",
+    (db) =>
+      replaceFirstPayload(db, (payload) =>
+        JSON.stringify({ ...payload, title: 7 }),
+      ),
   ],
   [
     "artifact unknown status",
@@ -467,6 +509,206 @@ const corruptionCases: readonly [string, CorruptionMutation][] = [
 ];
 
 describe("Task Contract stored-authority corruption", () => {
+  it("blocks conflict algorithms from changing a legacy candidate bundle marker", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      storage.createProject(makeProject(PROJECT_ID, "contract-corruption"));
+      storage.createBigTask(makeBigTask(BIG_TASK_ID, PROJECT_ID));
+      storage.beginDurablePlanning(plan());
+      storage.close();
+
+      const sqlite = new DatabaseSync(databasePath);
+      const row = sqlite
+        .prepare("SELECT * FROM orchestration_plan_candidates")
+        .get() as {
+        readonly big_task_id: string;
+        readonly project_id: string;
+        readonly revision: number;
+        readonly candidate_payload: string;
+        readonly candidate_binding: string;
+        readonly created_at: string;
+      };
+      const changedValues = [
+        row.big_task_id,
+        row.project_id,
+        row.revision,
+        row.candidate_payload,
+        row.candidate_binding,
+        1,
+        row.created_at,
+      ] as const;
+      for (const prefix of ["INSERT OR REPLACE", "REPLACE"] as const) {
+        expect(() =>
+          sqlite
+            .prepare(
+              `${prefix} INTO orchestration_plan_candidates
+                 (big_task_id, project_id, revision, candidate_payload, candidate_binding, task_contract_count, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(...changedValues),
+        ).toThrow();
+      }
+      expect(() =>
+        sqlite
+          .prepare(
+            `INSERT INTO orchestration_plan_candidates
+               (big_task_id, project_id, revision, candidate_payload, candidate_binding, task_contract_count, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(big_task_id, revision)
+             DO UPDATE SET task_contract_count = excluded.task_contract_count`,
+          )
+          .run(...changedValues),
+      ).toThrow();
+      expect(
+        sqlite
+          .prepare(
+            "SELECT task_contract_count FROM orchestration_plan_candidates",
+          )
+          .get(),
+      ).toEqual({ task_contract_count: null });
+      sqlite.close();
+    });
+  });
+
+  it("blocks every SQLite conflict form from retargeting immutable authority", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      seedApprovedBundle(databasePath);
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = ON");
+      expect(sqlite.prepare("PRAGMA recursive_triggers").get()).toEqual({
+        recursive_triggers: 0,
+      });
+
+      const artifact = sqlite.prepare("SELECT * FROM task_contracts").get() as {
+        readonly project_id: string;
+        readonly task_contract_ref: string;
+        readonly big_task_id: string;
+        readonly subtask_id: string;
+        readonly contract_payload: string;
+        readonly created_at: string;
+      };
+      const binding = sqlite
+        .prepare(
+          "SELECT * FROM candidate_task_contract_bindings WHERE subtask_id = 'st_corruption_0'",
+        )
+        .get() as {
+        readonly project_id: string;
+        readonly big_task_id: string;
+        readonly plan_revision: number;
+        readonly candidate_binding: string;
+        readonly subtask_id: string;
+        readonly task_contract_ref: string;
+        readonly created_at: string;
+      };
+
+      const artifactValues = [
+        artifact.project_id,
+        artifact.task_contract_ref,
+        artifact.big_task_id,
+        artifact.subtask_id,
+        artifact.contract_payload,
+        artifact.created_at,
+      ] as const;
+      const bindingValues = [
+        binding.project_id,
+        binding.big_task_id,
+        binding.plan_revision,
+        `${binding.candidate_binding}-retargeted`,
+        binding.subtask_id,
+        binding.task_contract_ref,
+        binding.created_at,
+      ] as const;
+
+      expect(() =>
+        sqlite
+          .prepare(
+            "INSERT OR REPLACE INTO task_contracts (project_id, task_contract_ref, big_task_id, subtask_id, contract_payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(...artifactValues),
+      ).toThrow();
+      expect(() =>
+        sqlite
+          .prepare(
+            "REPLACE INTO task_contracts (project_id, task_contract_ref, big_task_id, subtask_id, contract_payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(...artifactValues),
+      ).toThrow();
+      expect(() =>
+        sqlite
+          .prepare(
+            `INSERT INTO task_contracts
+               (project_id, task_contract_ref, big_task_id, subtask_id, contract_payload, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(project_id, task_contract_ref)
+             DO UPDATE SET contract_payload = excluded.contract_payload`,
+          )
+          .run(...artifactValues),
+      ).toThrow();
+      expect(() =>
+        sqlite
+          .prepare(
+            "INSERT INTO task_contracts (project_id, task_contract_ref, big_task_id, subtask_id, contract_payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          )
+          .run(...artifactValues),
+      ).toThrow();
+
+      expect(() =>
+        sqlite
+          .prepare(
+            "INSERT OR REPLACE INTO candidate_task_contract_bindings (project_id, big_task_id, plan_revision, candidate_binding, subtask_id, task_contract_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(...bindingValues),
+      ).toThrow();
+      expect(() =>
+        sqlite
+          .prepare(
+            "REPLACE INTO candidate_task_contract_bindings (project_id, big_task_id, plan_revision, candidate_binding, subtask_id, task_contract_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(...bindingValues),
+      ).toThrow();
+      expect(() =>
+        sqlite
+          .prepare(
+            `INSERT INTO candidate_task_contract_bindings
+               (project_id, big_task_id, plan_revision, candidate_binding, subtask_id, task_contract_ref, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(big_task_id, plan_revision, subtask_id)
+             DO UPDATE SET candidate_binding = excluded.candidate_binding`,
+          )
+          .run(...bindingValues),
+      ).toThrow();
+      expect(() =>
+        sqlite
+          .prepare(
+            "INSERT INTO candidate_task_contract_bindings (project_id, big_task_id, plan_revision, candidate_binding, subtask_id, task_contract_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(...bindingValues),
+      ).toThrow();
+      expect(() =>
+        sqlite
+          .prepare(
+            "UPDATE orchestration_plan_candidates SET task_contract_count = NULL",
+          )
+          .run(),
+      ).toThrow();
+
+      expect(
+        sqlite
+          .prepare(
+            "SELECT candidate_binding FROM candidate_task_contract_bindings WHERE subtask_id = 'st_corruption_0'",
+          )
+          .get(),
+      ).toEqual({ candidate_binding: binding.candidate_binding });
+      sqlite.close();
+
+      const reopened = openTaskDatabase({ databasePath, clock: fixedClock });
+      expect(reopened.getApprovedTaskContractAuthority(BIG_TASK_ID)).toMatchObject({
+        taskContractAuthorityReadiness: "TASK_CONTRACT_AUTHORITY_READY",
+      });
+      reopened.close();
+    });
+  });
+
   it("enforces artifact, association, and bundle-marker immutability in SQLite", () => {
     withTemporaryDatabasePath((databasePath) => {
       seedApprovedBundle(databasePath);

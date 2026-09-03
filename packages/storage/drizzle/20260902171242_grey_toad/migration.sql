@@ -31,6 +31,17 @@ CREATE TABLE `task_contracts` (
 ALTER TABLE `orchestration_plan_candidates` ADD `task_contract_count` integer;--> statement-breakpoint
 CREATE UNIQUE INDEX `candidate_task_contract_bindings_ref_unique` ON `candidate_task_contract_bindings` (`project_id`,`big_task_id`,`plan_revision`,`task_contract_ref`);--> statement-breakpoint
 CREATE INDEX `task_contracts_big_task_subtask_index` ON `task_contracts` (`big_task_id`,`subtask_id`);--> statement-breakpoint
+CREATE TRIGGER `task_contracts_immutable_insert_conflict`
+BEFORE INSERT ON `task_contracts`
+WHEN EXISTS (
+	SELECT 1
+	FROM `task_contracts` AS `existing`
+	WHERE `existing`.`project_id` = NEW.`project_id`
+	  AND `existing`.`task_contract_ref` = NEW.`task_contract_ref`
+)
+BEGIN
+	SELECT RAISE(ABORT, 'immutable Task Contract artifact');
+END;--> statement-breakpoint
 CREATE TRIGGER `task_contracts_immutable_update`
 BEFORE UPDATE ON `task_contracts`
 BEGIN
@@ -41,6 +52,25 @@ BEFORE DELETE ON `task_contracts`
 BEGIN
 	SELECT RAISE(ABORT, 'immutable Task Contract artifact');
 END;--> statement-breakpoint
+CREATE TRIGGER `candidate_task_contract_bindings_immutable_insert_conflict`
+BEFORE INSERT ON `candidate_task_contract_bindings`
+WHEN EXISTS (
+	SELECT 1
+	FROM `candidate_task_contract_bindings` AS `existing`
+	WHERE (
+		`existing`.`big_task_id` = NEW.`big_task_id`
+		AND `existing`.`plan_revision` = NEW.`plan_revision`
+		AND `existing`.`subtask_id` = NEW.`subtask_id`
+	) OR (
+		`existing`.`project_id` = NEW.`project_id`
+		AND `existing`.`big_task_id` = NEW.`big_task_id`
+		AND `existing`.`plan_revision` = NEW.`plan_revision`
+		AND `existing`.`task_contract_ref` = NEW.`task_contract_ref`
+	)
+)
+BEGIN
+	SELECT RAISE(ABORT, 'immutable candidate Task Contract association');
+END;--> statement-breakpoint
 CREATE TRIGGER `candidate_task_contract_bindings_immutable_update`
 BEFORE UPDATE ON `candidate_task_contract_bindings`
 BEGIN
@@ -50,6 +80,18 @@ CREATE TRIGGER `candidate_task_contract_bindings_immutable_delete`
 BEFORE DELETE ON `candidate_task_contract_bindings`
 BEGIN
 	SELECT RAISE(ABORT, 'immutable candidate Task Contract association');
+END;--> statement-breakpoint
+CREATE TRIGGER `orchestration_plan_candidate_task_contract_count_insert_conflict`
+BEFORE INSERT ON `orchestration_plan_candidates`
+WHEN EXISTS (
+	SELECT 1
+	FROM `orchestration_plan_candidates` AS `existing`
+	WHERE `existing`.`big_task_id` = NEW.`big_task_id`
+	  AND `existing`.`revision` = NEW.`revision`
+	  AND `existing`.`task_contract_count` IS NOT NEW.`task_contract_count`
+)
+BEGIN
+	SELECT RAISE(ABORT, 'immutable Task Contract bundle marker');
 END;--> statement-breakpoint
 CREATE TRIGGER `orchestration_plan_candidate_task_contract_count_immutable`
 BEFORE UPDATE OF `task_contract_count` ON `orchestration_plan_candidates`
