@@ -1598,7 +1598,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         .map((row) => (row as { readonly name: string }).name);
       sqliteAfter.close();
       expect(schemaAfter).toBe(schemaBefore);
-      expect(migrationCount.count).toBe(16);
+      expect(migrationCount.count).toBe(17);
       expect(tables).toEqual([
         "__drizzle_migrations",
         "audit_events",
@@ -1613,6 +1613,17 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         "durable_workflow_human_requirements",
         "durable_workflow_transitions",
         "execution_runs",
+        "governed_big_task_completion_receipts",
+        "governed_budget_extensions",
+        "governed_dispatch_receipts",
+        "governed_finding_resolutions",
+        "governed_findings",
+        "governed_handoffs",
+        "governed_manual_start_authorities",
+        "governed_promoted_context_dispositions",
+        "governed_role_authorizations",
+        "governed_role_execution_links",
+        "governed_role_results",
         "orchestration_materializations",
         "orchestration_plan_candidates",
         "orchestration_planning_tracks",

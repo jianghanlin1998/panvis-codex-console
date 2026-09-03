@@ -7,8 +7,8 @@ import type {
   ServerResponse,
 } from "node:http";
 
-import { SubtaskIdSchema } from "@codex-task-console/domain";
-import type { SubtaskId } from "@codex-task-console/domain";
+import { BigTaskIdSchema, SubtaskIdSchema } from "@codex-task-console/domain";
+import type { BigTaskId, SubtaskId } from "@codex-task-console/domain";
 
 import {
   LocalControlServiceError,
@@ -307,6 +307,14 @@ const parseCanonicalSubtaskId = (value: unknown): SubtaskId => {
   return parsed.data;
 };
 
+const parseCanonicalBigTaskId = (value: unknown): BigTaskId => {
+  const parsed = BigTaskIdSchema.safeParse(value);
+  if (!parsed.success || parsed.data !== value) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  return parsed.data;
+};
+
 const parseSubtaskBody = (text: string): SubtaskId => {
   let value: unknown;
   try {
@@ -331,6 +339,39 @@ const parseSubtaskBody = (text: string): SubtaskId => {
   );
 };
 
+const parseBigTaskBody = (text: string): BigTaskId => {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  const keys = topLevelObjectKeys(text);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    keys === null ||
+    keys.length !== 1 ||
+    keys[0] !== "bigTaskId" ||
+    Object.keys(value).length !== 1
+  ) {
+    throw new HttpBoundaryError("INVALID_REQUEST", 400);
+  }
+  return parseCanonicalBigTaskId(
+    (value as Readonly<Record<string, unknown>>).bigTaskId,
+  );
+};
+
+const requireGovernedMethod = <Method extends (...arguments_: never[]) => unknown>(
+  method: Method | undefined,
+): Method => {
+  if (method === undefined) {
+    throw new HttpBoundaryError("LOCAL_OPERATION_FAILED", 500);
+  }
+  return method;
+};
+
 const requireMutationHeaders = (request: IncomingMessage): void => {
   if (request.headers["x-ctc-request"] !== "1") {
     throw new HttpBoundaryError("REQUEST_BOUNDARY_FAILED", 403);
@@ -353,6 +394,26 @@ const routeRequest = async (
     return Object.freeze({ ok: true, schemaVersion: 1 });
   }
   if (method === "GET") {
+    const governedMatch = /^\/v0\/governed\/big-tasks\/([^/]+)$/u.exec(url);
+    if (governedMatch !== null) {
+      let decoded: string;
+      try {
+        decoded = decodeURIComponent(governedMatch[1] ?? "");
+      } catch {
+        throw new HttpBoundaryError("INVALID_REQUEST", 400);
+      }
+      if (
+        decoded.includes("/") ||
+        decoded.includes("\\") ||
+        encodeURIComponent(decoded) !== governedMatch[1]
+      ) {
+        throw new HttpBoundaryError("INVALID_REQUEST", 400);
+      }
+      return requireGovernedMethod(service.inspectGovernedBigTask)?.call(
+        service,
+        parseCanonicalBigTaskId(decoded),
+      ) as Promise<object>;
+    }
     const match = /^\/v0\/subtasks\/([^/]+)$/u.exec(url);
     if (match !== null) {
       let decoded: string;
@@ -395,6 +456,32 @@ const routeRequest = async (
     }
     requireMutationHeaders(request);
     return postRoute(parseSubtaskBody(await readBoundedBody(request)));
+  }
+  const governedSubtaskRoutes = new Map<
+    string,
+    ((subtaskId: SubtaskId) => Promise<object>) | undefined
+  >([
+    ["/v0/governed/manual-start", service.authorizeGovernedManualStart],
+    [
+      "/v0/governed/budget-extension",
+      service.authorizeGovernedBudgetExtension,
+    ],
+  ]);
+  if (governedSubtaskRoutes.has(url)) {
+    if (method !== "POST") {
+      throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
+    }
+    requireMutationHeaders(request);
+    const handler = requireGovernedMethod(governedSubtaskRoutes.get(url));
+    return handler.call(service, parseSubtaskBody(await readBoundedBody(request)));
+  }
+  if (url === "/v0/governed/advance") {
+    if (method !== "POST") {
+      throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
+    }
+    requireMutationHeaders(request);
+    const handler = requireGovernedMethod(service.advanceGovernedBigTask);
+    return handler.call(service, parseBigTaskBody(await readBoundedBody(request)));
   }
   if (method === "OPTIONS") {
     throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);

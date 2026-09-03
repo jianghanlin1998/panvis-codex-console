@@ -98,7 +98,9 @@ export {
 
 export {
   LIVE_CODEX_EXECUTION_FAILURE_CODES,
+  GOVERNED_ROLE_CODEX_EXECUTION_FAILURE_CODES,
   OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
+  executeGovernedRoleCodex,
   executeSingleSubtaskOwnedWorktreeCodex,
   executeSingleSubtaskLiveCodex,
 } from "./live-execution.js";
@@ -107,6 +109,10 @@ export type {
   LiveCodexExecutionFailureCode,
   LiveCodexExecutionResult,
   LiveCodexExecutionSuccess,
+  GovernedRoleCodexExecutionFailure,
+  GovernedRoleCodexExecutionFailureCode,
+  GovernedRoleCodexExecutionResult,
+  GovernedRoleCodexExecutionSuccess,
   OwnedWorktreeCodexExecutionFailure,
   OwnedWorktreeCodexExecutionFailureCode,
   OwnedWorktreeCodexExecutionResult,

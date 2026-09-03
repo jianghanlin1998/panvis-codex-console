@@ -13,6 +13,17 @@ export {
   durableWorkflowHumanRequirementsTable,
   durableWorkflowTransitionsTable,
   executionRunsTable,
+  governedBigTaskCompletionReceiptsTable,
+  governedBudgetExtensionsTable,
+  governedDispatchReceiptsTable,
+  governedFindingResolutionsTable,
+  governedFindingsTable,
+  governedHandoffsTable,
+  governedManualStartAuthoritiesTable,
+  governedPromotedContextDispositionsTable,
+  governedRoleAuthorizationsTable,
+  governedRoleExecutionLinksTable,
+  governedRoleResultsTable,
   orchestrationMaterializationsTable,
   orchestrationPlanCandidatesTable,
   orchestrationPlanningTracksTable,
@@ -25,6 +36,27 @@ export {
   taskDependenciesTable,
   workflowInitializationReceiptsTable,
 } from "./schema.js";
+
+export {
+  createGovernedExecutionStore,
+  GOVERNED_SUBTASK_ROLES,
+  GovernedExecutionStore,
+} from "./governed-execution.js";
+export type {
+  AggregateSubtaskUsageBudget,
+  GovernedBudgetExtensionAuthority,
+  GovernedDispatchReceipt,
+  GovernedDispatchStatus,
+  GovernedManualStartAuthority,
+  GovernedPreparationResult,
+  GovernedRoleAuthorization,
+  GovernedRoleContextProfile,
+  GovernedRoleExecutionAttempt,
+  GovernedRoleExecutionInput,
+  GovernedRoleReconciliationResult,
+  GovernedRoleResult,
+  GovernedSubtaskRole,
+} from "./governed-execution.js";
 
 export {
   DURABLE_WORKFLOW_EVIDENCE_AUTHORITY_SOURCE_TYPES,

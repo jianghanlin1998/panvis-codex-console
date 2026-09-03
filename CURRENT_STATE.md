@@ -139,9 +139,6 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - ChatGPT auth gate: PASS
 - API-key fallback: NONE
 - Execution Input Preflight binding: PASS
-- Live persistence: NOT IMPLEMENTED
-- Worktree execution: NOT IMPLEMENTED
-- Lifecycle orchestration integration: NOT IMPLEMENTED
 - Comprehensive Hardening: PASS under approved local single-user V1 boundary
 - CTC-LIVE-HARD-001: ACCEPTED_V1_LIMITATION — no OS-enforced same-user read confinement
 - CTC-LIVE-HARD-002: ACCEPTED_V1_LIMITATION — ambient Codex config/context not fully clean-room isolated
@@ -242,7 +239,6 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-LOCAL-HARD-006: CLOSED — phased shutdown cleanup remains retryable after partial authority cleanup
 - Generic shell/RPC: NONE
 - Browser UI: NOT IMPLEMENTED
-- Operational orchestration service: NOT IMPLEMENTED
 - Roadmap Step 7 real backend dogfood: PASS
 - Provider/model turns for Step 6: 0
 - Real target writes for Step 6 hardening: 0
@@ -353,22 +349,28 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8C Fresh Independent QA on `3d9785ff4f97436d10f528d042026825dc710ef0`: FAIL — historical result
 - `CTC-ORCH-8C-FQA-001`: CLOSED by repair `5aa395c8cba6e07588e5b7e59e6e4a11bd7cb142`; Focused Re-QA confirmed the original failure class closed
 - Step 8C Fresh Focused Re-QA on `5aa395c8cba6e07588e5b7e59e6e4a11bd7cb142`: FAIL
-- `CTC-ORCH-8C-FRQA-002`: repaired by the commit containing this file / awaiting fresh focused verification
-- Step 8C: REPAIRED / NOT ACCEPTED
-- Step 8D: NOT STARTED / BLOCKED on Step 8C ACCEPTED
-- Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / gated on Step 8D
+- `CTC-ORCH-8C-FRQA-002`: CLOSED
+- Step 8C Fresh Focused Re-QA on `288ef4f3dfe519a2cead90ff460d225aa8b6bd91`: PASS; final findings NONE
+- Step 8C Durable Workflow Control Plane V0: ACCEPTED
+- Step 8C accepted evidence SHA: `288ef4f3dfe519a2cead90ff460d225aa8b6bd91`
+- Step 8D Operational Governed Execution V0: IMPLEMENTED
+- Step 8D durable authority: trusted gate derivation, atomic dispatch receipt and TODO -> IN_PROGRESS ownership, exact role/thread/run/result linkage, aggregate budgets, serial Project write dispatch, bounded repair/Re-QA, findings/Handoff/disposition, crash reconciliation, and durable Big Task completion
+- Step 8D operational surface: bounded local-control inspect, advance-one-role, manual-start, and one-time budget-extension operations; no generic prompt/role/path/evidence authority
+- Step 8D implementation verification: focused governed storage/migration/mock-App-Server coverage 16 tests PASS; full suite 138 files / 4,202 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
+- Step 8D Comprehensive Hardening: PENDING
+- Step 8D Fresh Independent QA: NOT YET ELIGIBLE / pending hardening
+- Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / blocked on Step 8D ACCEPTED
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
-- Operational TODO → IN_PROGRESS dispatch, provider role execution, scheduling, worktree automation, and execution-role/thread/run linkage remain NOT IMPLEMENTED
+- Real Step 8D provider/model turns: 0; real target orchestration: NONE
 - Hanlin manual QA: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Focused Re-QA of CTC-ORCH-8C-FRQA-002
+**Next safe task:** NEW CHAT comprehensive write-enabled Step 8D hardening
 
 ## Not operational yet
 - browser Console UI
-- provider-driven TODO -> IN_PROGRESS dispatch, operational repair/re-entry execution, or standalone later-maturity commands
-- scheduling, concurrency control, or `WHEN_READY` execution
-- Focused Re-QA operational assembly
+- background scheduling or infinite `WHEN_READY` daemon execution
+- standalone later-maturity commands
 - trusted locked-invariant source
 - trusted bounded-retest-target source
 - accepted Promoted Context retrieval or injection
@@ -382,7 +384,6 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - accepted-context persistence, `acceptedAt`, durable accepted IDs, or idempotency/anti-replay
 - Promoted Context retrieval/materialization
 - context conflict resolution or search/RAG
-- worktree lifecycle automation
 - automatic Audit Event emission
 - batch provisioning
 - provider expansion or deployment

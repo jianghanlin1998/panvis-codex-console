@@ -34,6 +34,11 @@ import {
 import {
   createWorktreeOwnershipManager,
   ExecutionInputPreflight,
+  GovernedExecutionStore,
+  type GovernedRoleAuthorization,
+  type GovernedRoleContextProfile,
+  type GovernedRoleReconciliationResult,
+  type GovernedRoleResult,
   type ExecutionInputPreflightResult,
   type OperationalJitContextProfile,
   type ResolvedActiveOwnedWorktree,
@@ -299,6 +304,69 @@ export type OwnedWorktreeCodexExecutionResult =
   | OwnedWorktreeCodexExecutionSuccess
   | OwnedWorktreeCodexExecutionFailure;
 
+export const GOVERNED_ROLE_CODEX_EXECUTION_FAILURE_CODES = Object.freeze([
+  ...OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
+  "GOVERNED_AUTHORITY_REQUIRED",
+  "STRUCTURED_RESULT_INVALID",
+] as const);
+
+export type GovernedRoleCodexExecutionFailureCode =
+  (typeof GOVERNED_ROLE_CODEX_EXECUTION_FAILURE_CODES)[number];
+
+interface GovernedRoleThreadPolicy {
+  readonly approvalPolicy: "never";
+  readonly cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE";
+  readonly ephemeral: true;
+  readonly sandbox: "readOnly" | "workspaceWrite";
+  readonly writableRootCount: 0 | 1;
+  readonly networkAccess: false;
+}
+
+interface GovernedRoleCodexExecutionResultBase {
+  readonly providerId: typeof CODEX_APP_SERVER_PROVIDER_ID;
+  readonly authorization: GovernedRoleAuthorization | null;
+  readonly runtime: RuntimeSummary | null;
+  readonly authType: "chatgpt" | null;
+  readonly planType: string | null;
+  readonly preflight: Readonly<{
+    readonly profile: GovernedRoleContextProfile;
+    readonly status: "WITHIN_TARGET" | "ABOVE_TARGET";
+    readonly utf8Bytes: number;
+  }> | null;
+  readonly chatThreadId: ChatThreadId | null;
+  readonly executionRunId: ExecutionRunId | null;
+  readonly providerThread: ProviderThreadReference | null;
+  readonly providerRun: ProviderRunReference | null;
+  readonly model: ProviderModelReference | null;
+  readonly normalizedUsage: NormalizedUsage | null;
+  readonly terminalTurnStatus: "completed" | "failed" | "interrupted" | null;
+  readonly roleResult: GovernedRoleResult | null;
+  readonly reconciliation: GovernedRoleReconciliationResult | null;
+  readonly threadPolicy: GovernedRoleThreadPolicy | null;
+  readonly diagnostics: LiveCodexExecutionDiagnostics;
+  readonly appServerChildCleaned: boolean;
+  readonly transientRuntimeCleaned: boolean;
+}
+
+export interface GovernedRoleCodexExecutionSuccess
+  extends GovernedRoleCodexExecutionResultBase {
+  readonly success: true;
+  readonly failureCode: null;
+  readonly authorization: GovernedRoleAuthorization;
+  readonly roleResult: GovernedRoleResult;
+  readonly reconciliation: GovernedRoleReconciliationResult;
+}
+
+export interface GovernedRoleCodexExecutionFailure
+  extends GovernedRoleCodexExecutionResultBase {
+  readonly success: false;
+  readonly failureCode: GovernedRoleCodexExecutionFailureCode;
+}
+
+export type GovernedRoleCodexExecutionResult =
+  | GovernedRoleCodexExecutionSuccess
+  | GovernedRoleCodexExecutionFailure;
+
 interface MutableDiagnostics {
   approvalRequestsDeclined: number;
   interruptRequests: number;
@@ -414,6 +482,16 @@ class LiveExecutionError extends Error {
   constructor(code: CodexExecutionFailureCode) {
     super(code);
     this.name = "LiveExecutionError";
+    this.code = code;
+  }
+}
+
+class GovernedLiveExecutionError extends Error {
+  readonly code: GovernedRoleCodexExecutionFailureCode;
+
+  constructor(code: GovernedRoleCodexExecutionFailureCode) {
+    super(code);
+    this.name = "GovernedLiveExecutionError";
     this.code = code;
   }
 }
@@ -1245,6 +1323,453 @@ export async function executeSingleSubtaskOwnedWorktreeCodex(
     subtaskId,
     productionOwnedWorktreeDependencies(),
   );
+}
+
+export async function executeGovernedRoleCodex(
+  governed: GovernedExecutionStore,
+  authorizationId: string,
+): Promise<GovernedRoleCodexExecutionResult> {
+  return executeGovernedRoleCodexWithDependencies(
+    governed,
+    authorizationId,
+    productionOwnedWorktreeDependencies(),
+  );
+}
+
+/** Internal deterministic-test hook; not exported from the package root. */
+export async function executeGovernedRoleCodexWithDependenciesForTest(
+  governed: GovernedExecutionStore,
+  authorizationId: string,
+  dependencies: OwnedWorktreeExecutionDependencies,
+): Promise<GovernedRoleCodexExecutionResult> {
+  if (process.env.NODE_ENV !== "test") {
+    return immediateGovernedRoleFailure("INVALID_INPUT");
+  }
+  return executeGovernedRoleCodexWithDependencies(
+    governed,
+    authorizationId,
+    dependencies,
+  );
+}
+
+async function executeGovernedRoleCodexWithDependencies(
+  governed: GovernedExecutionStore,
+  authorizationId: string,
+  dependencies: OwnedWorktreeExecutionDependencies,
+): Promise<GovernedRoleCodexExecutionResult> {
+  const diagnostics = emptyDiagnostics();
+  let authorization: GovernedRoleAuthorization | null = null;
+  let runtimeSummary: RuntimeSummary | null = null;
+  let authType: "chatgpt" | null = null;
+  let planType: string | null = null;
+  let preflightSummary: GovernedRoleCodexExecutionResultBase["preflight"] = null;
+  let promptText: string | null = null;
+  let chatThreadId: ChatThreadId | null = null;
+  let executionRunId: ExecutionRunId | null = null;
+  let providerThread: ProviderThreadReference | null = null;
+  let providerRun: ProviderRunReference | null = null;
+  let model: ProviderModelReference | null = null;
+  let normalizedUsage: NormalizedUsage | null = null;
+  let terminalTurnStatus: "completed" | "failed" | "interrupted" | null = null;
+  let roleResult: GovernedRoleResult | null = null;
+  let reconciliation: GovernedRoleReconciliationResult | null = null;
+  let threadPolicy: GovernedRoleThreadPolicy | null = null;
+  let failureCode: GovernedRoleCodexExecutionFailureCode | null = null;
+  let transientRuntime: string | undefined;
+  let client: JsonlAppServerClient | undefined;
+  let events: TurnEventTracker | undefined;
+  let turnStartSent = false;
+  let durableRunState: "NONE" | "CREATED" | "RUNNING" | "TERMINAL" = "NONE";
+  let appServerChildCleaned = true;
+  let transientRuntimeCleaned = true;
+
+  try {
+    if (
+      !(governed instanceof GovernedExecutionStore) ||
+      typeof authorizationId !== "string"
+    ) {
+      throw new LiveExecutionError("INVALID_INPUT");
+    }
+    try {
+      const attempt = governed.reserveRoleExecutionAttempt(authorizationId);
+      const input = governed.resolveRoleExecutionInput(authorizationId);
+      if (
+        attempt.chatThreadId !== input.attempt.chatThreadId ||
+        attempt.executionRunId !== input.attempt.executionRunId
+      ) {
+        throw new Error("authority mismatch");
+      }
+      authorization = input.authorization;
+      chatThreadId = attempt.chatThreadId;
+      executionRunId = attempt.executionRunId;
+      durableRunState = "CREATED";
+      preflightSummary = {
+        profile: input.preflight.contextProfile,
+        status: input.preflight.status,
+        utf8Bytes: input.preflight.utf8Bytes,
+      };
+      promptText = input.preflight.text;
+      assertActiveOwnedWorktree(input.worktree, input.authorization.subtaskId);
+      validateWorktreeFilesystem(
+        dependencies,
+        input.worktree.ownership.worktreePath,
+      );
+    } catch {
+      throw new GovernedLiveExecutionError("GOVERNED_AUTHORITY_REQUIRED");
+    }
+    const trustedAuthorization = authorization;
+    if (trustedAuthorization === null) {
+      throw new GovernedLiveExecutionError("GOVERNED_AUTHORITY_REQUIRED");
+    }
+
+    let runtime: ResolvedCodexRuntime;
+    try {
+      runtime = dependencies.resolveRuntime();
+      assertExactActiveRuntime(runtime);
+      if (!dependencies.checkCompatibility()) {
+        throw new Error("incompatible runtime");
+      }
+    } catch {
+      throw new LiveExecutionError("ACTIVE_RUNTIME_REQUIRED");
+    }
+    runtimeSummary = {
+      exactVersion: TESTED_CODEX_VERSION,
+      releaseVersion: runtime.releaseVersion,
+      target: runtime.target,
+    };
+
+    transientRuntime = dependencies.createWorkspace();
+    assertDisposableWorkspace(transientRuntime);
+    const beforeSpawn = governed.revalidateRoleCandidate(authorizationId);
+    validateWorktreeFilesystem(
+      dependencies,
+      beforeSpawn.ownership.worktreePath,
+    );
+    const worktreePath = beforeSpawn.ownership.worktreePath;
+    const eventTracker = new TurnEventTracker(
+      diagnostics,
+      dependencies.limits.maxAgentResponseBytes,
+      trustedAuthorization.writeEnabled
+        ? { kind: "WORKSPACE_WRITE", worktreePath }
+        : { kind: "READ_ONLY" },
+    );
+    events = eventTracker;
+
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = dependencies.spawnAppServer(
+        runtime.canonicalExecutablePath,
+        ownedWriteAppServerArguments(),
+        {
+          cwd: worktreePath,
+          env: buildLiveCodexChildEnvironment(
+            dependencies.sourceEnvironment,
+            dependencies.normalHomeDirectory,
+            transientRuntime,
+          ),
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        },
+      );
+    } catch {
+      throw new LiveExecutionError("APP_SERVER_START_FAILED");
+    }
+    client = new JsonlAppServerClient(
+      child,
+      dependencies.limits,
+      diagnostics,
+      eventTracker,
+    );
+    await client.waitForSpawn(dependencies.limits.startupTimeoutMs);
+
+    const initializeResult = await client.request(
+      1,
+      "initialize",
+      { clientInfo: CLIENT_INFO, capabilities: null },
+      dependencies.limits.requestTimeoutMs,
+    );
+    validateInitializeResult(initializeResult);
+    client.notify("initialized");
+    const accountResult = await client.request(
+      2,
+      "account/read",
+      { refreshToken: false },
+      dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          parseChatGptAccount(result);
+          eventTracker.establishChatGptAuth();
+        },
+      },
+    );
+    planType = parseChatGptAccount(accountResult);
+    authType = "chatgpt";
+    eventTracker.assertChatGptAuthenticated();
+
+    governed.revalidateRoleCandidate(authorizationId);
+    const threadResult = await client.request(
+      3,
+      "thread/start",
+      {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        cwd: worktreePath,
+        ephemeral: true,
+        sandbox: trustedAuthorization.writeEnabled
+          ? "workspace-write"
+          : "read-only",
+        serviceName: CLIENT_INFO.name,
+      },
+      dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          const authorizedThread = parseGovernedCandidateThreadStartResult(
+            result,
+            worktreePath,
+            trustedAuthorization.writeEnabled,
+          );
+          eventTracker.observeThreadResponse(authorizedThread.threadId);
+        },
+      },
+    );
+    const thread = parseGovernedCandidateThreadStartResult(
+      threadResult,
+      worktreePath,
+      trustedAuthorization.writeEnabled,
+    );
+    providerThread = mapCodexThreadReference(thread.threadId);
+    model = mapCodexModelReference(thread.model);
+    try {
+      governed.bindRoleProviderThread(authorizationId, providerThread);
+    } catch {
+      throw new LiveExecutionError("DURABLE_THREAD_PERSISTENCE_FAILED");
+    }
+
+    eventTracker.assertChatGptAuthenticated();
+    const finalPreTurn = governed.revalidateRoleCandidate(authorizationId);
+    validateWorktreeFilesystem(
+      dependencies,
+      finalPreTurn.ownership.worktreePath,
+    );
+    if (promptText === null) {
+      throw new GovernedLiveExecutionError("GOVERNED_AUTHORITY_REQUIRED");
+    }
+    const turnResult = await client.request(
+      4,
+      "turn/start",
+      {
+        threadId: thread.threadId,
+        input: [{ type: "text", text: promptText, text_elements: [] }],
+        cwd: worktreePath,
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandboxPolicy: trustedAuthorization.writeEnabled
+          ? {
+              type: "workspaceWrite",
+              writableRoots: [worktreePath],
+              networkAccess: false,
+              excludeSlashTmp: true,
+              excludeTmpdirEnvVar: false,
+            }
+          : { type: "readOnly", networkAccess: false },
+      },
+      dependencies.limits.requestTimeoutMs,
+      {
+        onResult: (result) => {
+          eventTracker.observeTurnResponse(parseTurnStartResult(result));
+        },
+        onSent: () => {
+          diagnostics.turnStartRequests += 1;
+          turnStartSent = true;
+          eventTracker.observeTurnStartSent(thread.threadId);
+        },
+      },
+    );
+    const turnId = parseTurnStartResult(turnResult);
+    if (eventTracker.turnId !== turnId) {
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    providerRun = mapCodexTurnReference(thread.threadId, turnId);
+    try {
+      governed.startRoleProviderRun(authorizationId, providerRun, model);
+      durableRunState = "RUNNING";
+    } catch {
+      throw new LiveExecutionError("DURABLE_RUN_PERSISTENCE_FAILED");
+    }
+    threadPolicy = {
+      approvalPolicy: "never",
+      cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE",
+      ephemeral: true,
+      sandbox: trustedAuthorization.writeEnabled ? "workspaceWrite" : "readOnly",
+      writableRootCount: trustedAuthorization.writeEnabled ? 1 : 0,
+      networkAccess: false,
+    };
+
+    const terminal = await eventTracker.waitForTerminal(
+      dependencies.limits.turnIdleTimeoutMs,
+      dependencies.limits.turnAbsoluteTimeoutMs,
+    );
+    if (client.failure !== null) {
+      throw client.failure;
+    }
+    eventTracker.assertChatGptAuthenticated();
+    terminalTurnStatus = terminal.status;
+    normalizedUsage = eventTracker.normalizedUsage;
+    if (terminal.status === "failed") {
+      throw new LiveExecutionError("TURN_FAILED");
+    }
+    if (terminal.status === "interrupted") {
+      throw new LiveExecutionError("TURN_INTERRUPTED");
+    }
+  } catch (error: unknown) {
+    failureCode = asGovernedRoleFailureCode(error);
+    if (
+      turnStartSent &&
+      client !== undefined &&
+      events?.threadId !== null &&
+      events?.threadId !== undefined &&
+      events.turnId !== null &&
+      events.terminal === null &&
+      client.failure === null &&
+      client.isRunning &&
+      diagnostics.interruptRequests === 0
+    ) {
+      diagnostics.interruptRequests += 1;
+      try {
+        await client.request(
+          5,
+          "turn/interrupt",
+          { threadId: events.threadId, turnId: events.turnId },
+          dependencies.limits.interruptTimeoutMs,
+        );
+      } catch {
+        // Preserve the original sanitized failure and continue bounded shutdown.
+      }
+    }
+  } finally {
+    if (events !== undefined) {
+      normalizedUsage ??= events.normalizedUsage;
+      terminalTurnStatus ??= events.terminal?.status ?? null;
+    }
+    if (client !== undefined) {
+      appServerChildCleaned = await client.shutdown();
+      if (failureCode === null) {
+        failureCode =
+          client.failure === null
+            ? null
+            : asGovernedRoleFailureCode(client.failure);
+        if (!appServerChildCleaned && failureCode === null) {
+          failureCode = "PROCESS_CLEANUP_FAILED";
+        }
+      }
+    }
+    if (transientRuntime !== undefined) {
+      try {
+        dependencies.removeWorkspace(transientRuntime);
+        transientRuntimeCleaned = !existsSync(transientRuntime);
+      } catch {
+        transientRuntimeCleaned = false;
+      }
+      if (!transientRuntimeCleaned && failureCode === null) {
+        failureCode = "WORKSPACE_CLEANUP_FAILED";
+      }
+    }
+  }
+
+  if (
+    failureCode === null &&
+    durableRunState === "RUNNING" &&
+    terminalTurnStatus === "completed" &&
+    authorization !== null &&
+    events !== undefined
+  ) {
+    try {
+      const candidate = governed.revalidateRoleCandidate(authorizationId);
+      validateWorktreeFilesystem(
+        dependencies,
+        candidate.ownership.worktreePath,
+      );
+      roleResult = governed.persistSuccessfulRoleResult(
+        authorizationId,
+        events.responseText,
+        model ?? undefined,
+        normalizedUsage ?? undefined,
+      );
+      durableRunState = "TERMINAL";
+      reconciliation = governed.reconcileRoleResult(authorizationId);
+    } catch (error: unknown) {
+      failureCode =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "INVALID_INPUT"
+          ? "STRUCTURED_RESULT_INVALID"
+          : "GOVERNED_AUTHORITY_REQUIRED";
+    }
+  }
+
+  if (
+    authorization !== null &&
+    (durableRunState === "CREATED" || durableRunState === "RUNNING") &&
+    !(durableRunState === "CREATED" && turnStartSent)
+  ) {
+    try {
+      governed.finalizeFailedRoleAttempt(
+        authorizationId,
+        durableRunState === "RUNNING" && terminalTurnStatus === "interrupted"
+          ? "INTERRUPTED"
+          : "FAILED",
+        durableRunState === "RUNNING" ? model ?? undefined : undefined,
+        durableRunState === "RUNNING" ? normalizedUsage ?? undefined : undefined,
+      );
+      durableRunState = "TERMINAL";
+    } catch {
+      failureCode = "DURABLE_RUN_PERSISTENCE_FAILED";
+    }
+  }
+
+  const common: GovernedRoleCodexExecutionResultBase = {
+    providerId: CODEX_APP_SERVER_PROVIDER_ID,
+    authorization,
+    runtime: runtimeSummary,
+    authType,
+    planType,
+    preflight: preflightSummary,
+    chatThreadId,
+    executionRunId,
+    providerThread,
+    providerRun,
+    model,
+    normalizedUsage,
+    terminalTurnStatus,
+    roleResult,
+    reconciliation,
+    threadPolicy,
+    diagnostics: Object.freeze({ ...diagnostics }),
+    appServerChildCleaned,
+    transientRuntimeCleaned,
+  };
+  if (
+    failureCode !== null ||
+    authorization === null ||
+    roleResult === null ||
+    reconciliation === null
+  ) {
+    return Object.freeze({
+      ...common,
+      success: false,
+      failureCode: failureCode ?? "TERMINAL_EVENT_REQUIRED",
+    });
+  }
+  return Object.freeze({
+    ...common,
+    success: true,
+    failureCode: null,
+    authorization,
+    roleResult,
+    reconciliation,
+  });
 }
 
 /** Internal deterministic-test hook; not exported from the package root. */
@@ -2368,6 +2893,39 @@ function parseOwnedWorktreeThreadStartResult(
   };
 }
 
+function parseGovernedCandidateThreadStartResult(
+  result: JsonValue,
+  worktreePath: string,
+  writeEnabled: boolean,
+): { readonly threadId: string; readonly model: string } {
+  if (writeEnabled) {
+    return parseOwnedWorktreeThreadStartResult(result, worktreePath);
+  }
+  const record = requireRecord(result);
+  const thread = requireRecord(record.thread);
+  const threadId = requireBoundedString(thread.id, 512);
+  if (
+    thread.ephemeral !== true ||
+    thread.cwd !== worktreePath ||
+    record.cwd !== worktreePath ||
+    record.approvalPolicy !== "never" ||
+    record.approvalsReviewer !== "user"
+  ) {
+    throw new LiveExecutionError("READ_ONLY_POLICY_REQUIRED");
+  }
+  const sandbox = requireRecordForCode(
+    record.sandbox,
+    "READ_ONLY_POLICY_REQUIRED",
+  );
+  if (sandbox.type !== "readOnly" || sandbox.networkAccess !== false) {
+    throw new LiveExecutionError("READ_ONLY_POLICY_REQUIRED");
+  }
+  return {
+    threadId,
+    model: requireBoundedString(record.model, 512),
+  };
+}
+
 function validateWriteThreadItem(
   item: JsonObject,
   itemType: "commandExecution" | "fileChange",
@@ -2664,6 +3222,15 @@ function asOwnedWorktreeFailureCode(
   return asLiveExecutionError(error).code;
 }
 
+function asGovernedRoleFailureCode(
+  error: unknown,
+): GovernedRoleCodexExecutionFailureCode {
+  if (error instanceof GovernedLiveExecutionError) {
+    return error.code;
+  }
+  return asOwnedWorktreeFailureCode(error);
+}
+
 function emptyDiagnostics(): MutableDiagnostics {
   return {
     approvalRequestsDeclined: 0,
@@ -2806,6 +3373,34 @@ function immediateOwnedWorktreeFailure(
       emptyOwnedWorktreeEvidence(),
       emptyDiagnostics(),
     ),
+    success: false,
+    failureCode,
+  });
+}
+
+function immediateGovernedRoleFailure(
+  failureCode: GovernedRoleCodexExecutionFailureCode,
+): GovernedRoleCodexExecutionFailure {
+  return Object.freeze({
+    providerId: CODEX_APP_SERVER_PROVIDER_ID,
+    authorization: null,
+    runtime: null,
+    authType: null,
+    planType: null,
+    preflight: null,
+    chatThreadId: null,
+    executionRunId: null,
+    providerThread: null,
+    providerRun: null,
+    model: null,
+    normalizedUsage: null,
+    terminalTurnStatus: null,
+    roleResult: null,
+    reconciliation: null,
+    threadPolicy: null,
+    diagnostics: Object.freeze({ ...emptyDiagnostics() }),
+    appServerChildCleaned: true,
+    transientRuntimeCleaned: true,
     success: false,
     failureCode,
   });

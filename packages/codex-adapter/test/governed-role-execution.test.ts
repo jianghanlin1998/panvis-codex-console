@@ -1,0 +1,343 @@
+import { execFileSync, spawn } from "node:child_process";
+import {
+  chmodSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+import {
+  BigTaskIdSchema,
+  ProjectIdSchema,
+  ProjectSchema,
+  SubtaskIdSchema,
+  TaskContractV0Schema,
+} from "@codex-task-console/domain";
+import {
+  createGovernedExecutionStore,
+  openTaskDatabase,
+} from "@codex-task-console/storage";
+import type {
+  GovernedExecutionStore,
+  GovernedPreparationResult,
+  TaskStorage,
+} from "@codex-task-console/storage";
+import { createWorktreeOwnershipManagerForTesting } from "../../storage/src/worktree-ownership.js";
+import {
+  executeGovernedRoleCodexWithDependenciesForTest,
+} from "../src/live-execution.js";
+import { validateOwnedWorktreeHardlinkSafety } from "../src/worktree-filesystem-safety.js";
+import { TESTED_CODEX_VERSION } from "../src/index.js";
+
+const MOCK_PATH = fileURLToPath(
+  new URL("../../../fixtures/mock-governed-app-server.ts", import.meta.url),
+);
+const BIG_TASK_ID = BigTaskIdSchema.parse("bt_governed_adapter");
+const SUBTASK_ID = SubtaskIdSchema.parse("st_governed_adapter");
+const PROJECT_ID = ProjectIdSchema.parse("prj_governed_adapter");
+
+type Dependencies = Parameters<
+  typeof executeGovernedRoleCodexWithDependenciesForTest
+>[2];
+
+interface Fixture {
+  readonly directory: string;
+  readonly storage: TaskStorage;
+  readonly governed: GovernedExecutionStore;
+}
+
+const git = (path: string, arguments_: readonly string[]): string =>
+  execFileSync("git", ["-C", path, ...arguments_], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Governed Adapter",
+      GIT_AUTHOR_EMAIL: "adapter@example.invalid",
+      GIT_COMMITTER_NAME: "Governed Adapter",
+      GIT_COMMITTER_EMAIL: "adapter@example.invalid",
+    },
+  }).trim();
+
+const createFixture = (
+  profile: "LOW" | "STANDARD" | "HIGH_RISK_FOUNDATION" = "LOW",
+): Fixture => {
+  const directory = realpathSync.native(
+    mkdtempSync(join(tmpdir(), "ctc-governed-adapter-")),
+  );
+  const repositoryPath = join(directory, "source");
+  execFileSync("git", ["init", "--initial-branch", "main", repositoryPath]);
+  writeFileSync(join(repositoryPath, "AGENTS.md"), "Keep it bounded.\n", {
+    encoding: "utf8",
+  });
+  git(repositoryPath, ["add", "--all"]);
+  git(repositoryPath, ["commit", "--message", "fixture"]);
+  git(repositoryPath, [
+    "update-ref",
+    "refs/remotes/origin/main",
+    git(repositoryPath, ["rev-parse", "HEAD"]),
+  ]);
+  git(repositoryPath, ["config", "branch.main.remote", "origin"]);
+  git(repositoryPath, ["config", "branch.main.merge", "refs/heads/main"]);
+
+  let timestamp = Date.parse("2026-09-04T00:00:00.000Z");
+  const storage = openTaskDatabase({
+    databasePath: join(directory, "console.sqlite"),
+    clock: () => new Date((timestamp += 1_000)),
+  });
+  storage.createProject(
+    ProjectSchema.parse({
+      recordType: "PROJECT",
+      id: PROJECT_ID,
+      name: "Governed Adapter",
+      slug: "governed-adapter",
+      repository: { kind: "PATH", path: repositoryPath },
+      defaultBranch: "main",
+      maxActiveCodingSubtasks: 2,
+    }),
+  );
+  storage.createBigTask({
+    recordType: "BIG_TASK",
+    id: BIG_TASK_ID,
+    projectId: PROJECT_ID,
+    title: "Governed adapter",
+    goal: "Run exact roles",
+    rationale: "Protocol coverage",
+    scopeIn: ["Mock App Server"],
+    scopeOut: ["Network"],
+    acceptanceCriteria: ["Structured result persists"],
+    status: "IN_PROGRESS",
+  });
+  const plan: Parameters<TaskStorage["beginDurablePlanningBundle"]>[0] = {
+    kind: "PLAN_CANDIDATE",
+    projectId: PROJECT_ID,
+    bigTaskId: BIG_TASK_ID,
+    revision: 1,
+    subtasks: [
+      {
+        id: SUBTASK_ID,
+        bigTaskId: BIG_TASK_ID,
+        profile,
+        taskContractRef: "contract/governed-adapter",
+        writeEnabled: true,
+      },
+    ],
+    dependencies: [],
+  };
+  const bundle = storage.beginDurablePlanningBundle(plan, [
+    TaskContractV0Schema.parse({
+      taskContractRef: "contract/governed-adapter",
+      projectId: PROJECT_ID,
+      bigTaskId: BIG_TASK_ID,
+      subtaskId: SUBTASK_ID,
+      title: "Governed adapter",
+      goal: "Run exact roles",
+      scopeIn: ["Mock App Server"],
+      scopeOut: ["Network"],
+      acceptanceCriteria: ["Structured result persists"],
+      untouchedAreas: ["Source checkout"],
+      promptSeed: "Return the exact governed JSON result.",
+      startPolicy: "WHEN_READY",
+      delegationPolicy: "NONE",
+      recommendedReasoningLevel: "HIGH",
+    }),
+  ]);
+  storage.recordDurableReviewerDecision(BIG_TASK_ID, {
+    outcome: "APPROVE",
+    planRevision: 1,
+    candidateBinding: bundle.reviewState.candidateBinding,
+  });
+  storage.materializeDurablePlan(BIG_TASK_ID);
+  storage.materializeApprovedCanonicalTasks(BIG_TASK_ID);
+  storage.initializeDurableSubtaskWorkflows(BIG_TASK_ID);
+  const manager = createWorktreeOwnershipManagerForTesting(storage, {
+    worktreeRoot: join(directory, "worktrees"),
+    idGenerator: () => `wt_${"a".repeat(32)}`,
+  });
+  manager.provisionOwnedWorktreeForSubtask(SUBTASK_ID);
+  return {
+    directory,
+    storage,
+    governed: createGovernedExecutionStore(storage, manager),
+  };
+};
+
+const cleanup = (fixture: Fixture): void => {
+  fixture.storage.close();
+  rmSync(fixture.directory, { force: true, recursive: true });
+};
+
+const authorization = (
+  result: GovernedPreparationResult,
+): Extract<GovernedPreparationResult, { readonly kind: "ROLE_AUTHORIZED" }> => {
+  expect(result.kind).toBe("ROLE_AUTHORIZED");
+  return result as Extract<
+    GovernedPreparationResult,
+    { readonly kind: "ROLE_AUTHORIZED" }
+  >;
+};
+
+const dependencies = (
+  role: string,
+  malformed = false,
+): Dependencies => ({
+  checkCompatibility: () => true,
+  resolveRuntime: () => ({
+    canonicalExecutablePath: "/owned/codex/bin/codex",
+    exactVersionOutput: TESTED_CODEX_VERSION,
+    executable: true,
+    readable: true,
+    releaseVersion: "0.148.0-alpha.9",
+    source: "OWNED_RELEASE",
+    target: "aarch64-apple-darwin",
+  }),
+  resolveOwnedWorktree: () => {
+    throw new Error("legacy resolver must not own governed authority");
+  },
+  generateChatThreadId: () => {
+    throw new Error("governed storage owns thread IDs");
+  },
+  generateExecutionRunId: () => {
+    throw new Error("governed storage owns run IDs");
+  },
+  validateWorktreeFilesystem: validateOwnedWorktreeHardlinkSafety,
+  spawnAppServer: (_executable, _arguments_, options) =>
+    spawn(
+      process.execPath,
+      [MOCK_PATH, `--role=${role}`, ...(malformed ? ["--malformed"] : [])],
+      options,
+    ),
+  sourceEnvironment: { LANG: "en_US.UTF-8" },
+  normalHomeDirectory: "/fixture/home",
+  createWorkspace: () => {
+    const path = mkdtempSync(join(realpathSync(tmpdir()), "ctc-governed-runtime-"));
+    chmodSync(path, 0o700);
+    return path;
+  },
+  removeWorkspace: (path) => rmSync(path, { force: true, recursive: true }),
+  limits: {
+    startupTimeoutMs: 2_000,
+    requestTimeoutMs: 2_000,
+    turnIdleTimeoutMs: 2_000,
+    turnAbsoluteTimeoutMs: 5_000,
+    interruptTimeoutMs: 500,
+    shutdownGraceMs: 500,
+    terminateGraceMs: 500,
+    maxJsonlLineBytes: 256 * 1_024,
+    maxPendingRequests: 8,
+    maxNotifications: 64,
+    maxAgentResponseBytes: 16 * 1_024,
+    maxStderrBytes: 128,
+  },
+});
+
+describe("governed Codex role execution", () => {
+  it("runs write and read roles with exact candidate policies and no transcript output", async () => {
+    const fixture = createFixture();
+    try {
+      const execute = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const executeResult = await executeGovernedRoleCodexWithDependenciesForTest(
+        fixture.governed,
+        execute.authorization.authorizationId,
+        dependencies("EXECUTE"),
+      );
+      expect(executeResult.success, JSON.stringify(executeResult)).toBe(true);
+      expect(executeResult).toMatchObject({
+        success: true,
+        failureCode: null,
+        threadPolicy: {
+          cwd: "TRUSTED_ACTIVE_OWNED_WORKTREE",
+          sandbox: "workspaceWrite",
+          writableRootCount: 1,
+          networkAccess: false,
+        },
+        roleResult: { role: "EXECUTE", outcome: "READY" },
+        reconciliation: { kind: "TRANSITION_RECORDED", currentStage: "VERIFY" },
+      });
+      expect(executeResult).not.toHaveProperty("agentResponseText");
+
+      const verify = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const verifyResult = await executeGovernedRoleCodexWithDependenciesForTest(
+        fixture.governed,
+        verify.authorization.authorizationId,
+        dependencies("VERIFY"),
+      );
+      expect(verifyResult.success, JSON.stringify(verifyResult)).toBe(true);
+      expect(verifyResult).toMatchObject({
+        success: true,
+        threadPolicy: {
+          sandbox: "readOnly",
+          writableRootCount: 0,
+          networkAccess: false,
+        },
+        roleResult: { role: "VERIFY", outcome: "PASS" },
+        reconciliation: { currentStage: "COMPLETE" },
+      });
+      expect(fixture.governed.prepareNextRole(BIG_TASK_ID).kind).toBe(
+        "BIG_TASK_COMPLETE",
+      );
+    } finally {
+      cleanup(fixture);
+    }
+  });
+
+  it("fails malformed provider output without persisting a successful result", async () => {
+    const fixture = createFixture();
+    try {
+      const execute = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(
+        fixture.governed,
+        execute.authorization.authorizationId,
+        dependencies("EXECUTE", true),
+      );
+      expect(result).toMatchObject({
+        success: false,
+        failureCode: "STRUCTURED_RESULT_INVALID",
+        roleResult: null,
+      });
+      expect(
+        fixture.storage.getExecutionRunById(result.executionRunId!),
+      ).toMatchObject({ status: "FAILED", normalizedUsage: { totalTokens: 18 } });
+      expect(fixture.governed.prepareNextRole(BIG_TASK_ID)).toMatchObject({
+        kind: "BLOCKED",
+        reason: "PROVIDER_ROLE_FAILED",
+      });
+    } finally {
+      cleanup(fixture);
+    }
+  });
+
+  it("binds HIGH_RISK hardening and fresh QA to write/read policies", async () => {
+    const fixture = createFixture("HIGH_RISK_FOUNDATION");
+    try {
+      for (const expected of [
+        ["EXECUTE", "workspaceWrite", "STANDARD_SUBTASK_EXECUTION"],
+        ["HARDEN", "workspaceWrite", "STANDARD_SUBTASK_EXECUTION"],
+        ["FRESH_QA", "readOnly", "FRESH_INDEPENDENT_QA"],
+      ] as const) {
+        const prepared = authorization(
+          fixture.governed.prepareNextRole(BIG_TASK_ID),
+        );
+        expect(prepared.authorization.role).toBe(expected[0]);
+        const result = await executeGovernedRoleCodexWithDependenciesForTest(
+          fixture.governed,
+          prepared.authorization.authorizationId,
+          dependencies(expected[0]),
+        );
+        expect(result.success, JSON.stringify(result)).toBe(true);
+        expect(result.threadPolicy?.sandbox).toBe(expected[1]);
+        expect(result.preflight?.profile).toBe(expected[2]);
+      }
+      expect(fixture.governed.prepareNextRole(BIG_TASK_ID).kind).toBe(
+        "BIG_TASK_COMPLETE",
+      );
+    } finally {
+      cleanup(fixture);
+    }
+  });
+});

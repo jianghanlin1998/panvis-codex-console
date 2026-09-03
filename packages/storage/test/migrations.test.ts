@@ -103,6 +103,17 @@ describe("database lifecycle and migrations", () => {
           "durable_workflow_human_requirements",
           "durable_workflow_transitions",
           "execution_runs",
+          "governed_big_task_completion_receipts",
+          "governed_budget_extensions",
+          "governed_dispatch_receipts",
+          "governed_finding_resolutions",
+          "governed_findings",
+          "governed_handoffs",
+          "governed_manual_start_authorities",
+          "governed_promoted_context_dispositions",
+          "governed_role_authorizations",
+          "governed_role_execution_links",
+          "governed_role_results",
           "orchestration_materializations",
           "orchestration_plan_candidates",
           "orchestration_planning_tracks",
@@ -133,7 +144,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(16);
+        expect(row.count).toBe(17);
       } finally {
         sqlite.close();
       }
@@ -150,7 +161,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(16);
+        expect(row.count).toBe(17);
       } finally {
         sqlite.close();
       }
@@ -725,7 +736,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           after.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 16 });
+        ).toEqual({ count: 17 });
       } finally {
         after.close();
       }
@@ -845,7 +856,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           migrated.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 16 });
+        ).toEqual({ count: 17 });
       } finally {
         migrated.close();
       }

@@ -1237,6 +1237,563 @@ export const executionRunsTable = sqliteTable(
   ],
 );
 
+export const governedManualStartAuthoritiesTable = sqliteTable(
+  "governed_manual_start_authorities",
+  {
+    authorityId: text("authority_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    workflowSequence: integer("workflow_sequence").notNull(),
+    authorizedAt: text("authorized_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_manual_start_subtask_unique").on(table.subtaskId),
+    foreignKey({
+      name: "governed_manual_start_workflow_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+        table.subtaskId,
+      ],
+      foreignColumns: [
+        subtaskWorkflowInstancesTable.projectId,
+        subtaskWorkflowInstancesTable.bigTaskId,
+        subtaskWorkflowInstancesTable.planRevision,
+        subtaskWorkflowInstancesTable.candidateBinding,
+        subtaskWorkflowInstancesTable.subtaskId,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "governed_manual_start_id_check",
+      sql`length(${table.authorityId}) between 5 and 128 and ${table.authorityId} glob 'gms_*'`,
+    ),
+    check(
+      "governed_manual_start_sequence_check",
+      sql`typeof(${table.workflowSequence}) = 'integer' and ${table.workflowSequence} >= 1`,
+    ),
+  ],
+);
+
+export const governedBudgetExtensionsTable = sqliteTable(
+  "governed_budget_extensions",
+  {
+    authorityId: text("authority_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    grantedTokens: integer("granted_tokens").notNull(),
+    authorizedAt: text("authorized_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_budget_extension_subtask_unique").on(table.subtaskId),
+    foreignKey({
+      name: "governed_budget_extension_workflow_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+        table.subtaskId,
+      ],
+      foreignColumns: [
+        subtaskWorkflowInstancesTable.projectId,
+        subtaskWorkflowInstancesTable.bigTaskId,
+        subtaskWorkflowInstancesTable.planRevision,
+        subtaskWorkflowInstancesTable.candidateBinding,
+        subtaskWorkflowInstancesTable.subtaskId,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "governed_budget_extension_id_check",
+      sql`length(${table.authorityId}) between 5 and 128 and ${table.authorityId} glob 'gbe_*'`,
+    ),
+    check(
+      "governed_budget_extension_amount_check",
+      sql`typeof(${table.grantedTokens}) = 'integer' and ${table.grantedTokens} = 40000`,
+    ),
+  ],
+);
+
+export const governedDispatchReceiptsTable = sqliteTable(
+  "governed_dispatch_receipts",
+  {
+    receiptId: text("receipt_id").primaryKey(),
+    operationId: text("operation_id").notNull(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    workflowSequence: integer("workflow_sequence").notNull(),
+    profile: text("profile").notNull(),
+    writeEnabled: integer("write_enabled").notNull(),
+    startPolicy: text("start_policy").notNull(),
+    manualStartAuthorityId: text("manual_start_authority_id"),
+    worktreeOwnershipId: text("worktree_ownership_id")
+      .notNull()
+      .references(() => worktreeOwnershipsTable.id, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    gateEvidenceReferences: text("gate_evidence_references").notNull(),
+    status: text("status").notNull(),
+    reservedAt: text("reserved_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    terminalAt: text("terminal_at"),
+  },
+  (table) => [
+    uniqueIndex("governed_dispatch_operation_unique").on(table.operationId),
+    uniqueIndex("governed_dispatch_subtask_unique").on(table.subtaskId),
+    uniqueIndex("governed_dispatch_project_active_write_unique")
+      .on(table.projectId)
+      .where(
+        sql`${table.writeEnabled} = 1 and ${table.status} in ('RESERVED', 'ACTIVE')`,
+      ),
+    index("governed_dispatch_big_task_index").on(
+      table.bigTaskId,
+      table.status,
+      table.receiptId,
+    ),
+    foreignKey({
+      name: "governed_dispatch_workflow_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+        table.subtaskId,
+      ],
+      foreignColumns: [
+        subtaskWorkflowInstancesTable.projectId,
+        subtaskWorkflowInstancesTable.bigTaskId,
+        subtaskWorkflowInstancesTable.planRevision,
+        subtaskWorkflowInstancesTable.candidateBinding,
+        subtaskWorkflowInstancesTable.subtaskId,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    foreignKey({
+      name: "governed_dispatch_manual_start_fk",
+      columns: [table.manualStartAuthorityId],
+      foreignColumns: [governedManualStartAuthoritiesTable.authorityId],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "governed_dispatch_id_check",
+      sql`length(${table.receiptId}) between 5 and 128 and ${table.receiptId} glob 'gdr_*'`,
+    ),
+    check(
+      "governed_dispatch_operation_id_check",
+      sql`length(${table.operationId}) between 5 and 128 and ${table.operationId} glob 'gdo_*'`,
+    ),
+    check(
+      "governed_dispatch_sequence_check",
+      sql`typeof(${table.workflowSequence}) = 'integer' and ${table.workflowSequence} >= 1`,
+    ),
+    check(
+      "governed_dispatch_profile_check",
+      sql`${table.profile} in ('LOW', 'STANDARD', 'HIGH_RISK_FOUNDATION')`,
+    ),
+    check(
+      "governed_dispatch_write_check",
+      sql`${table.writeEnabled} in (0, 1)`,
+    ),
+    check(
+      "governed_dispatch_start_policy_check",
+      sql`(${table.startPolicy} = 'WHEN_READY' and ${table.manualStartAuthorityId} is null)
+        or (${table.startPolicy} = 'MANUAL' and ${table.manualStartAuthorityId} is not null)`,
+    ),
+    check(
+      "governed_dispatch_gate_refs_check",
+      sql`length(${table.gateEvidenceReferences}) between 2 and 16384`,
+    ),
+    check(
+      "governed_dispatch_lifecycle_check",
+      sql`(${table.status} in ('RESERVED', 'ACTIVE') and ${table.terminalAt} is null)
+        or (${table.status} in ('COMPLETED', 'HUMAN_REQUIRED')
+          and ${table.terminalAt} is not null
+          and ${table.updatedAt} = ${table.terminalAt})`,
+    ),
+  ],
+);
+
+export const governedRoleAuthorizationsTable = sqliteTable(
+  "governed_role_authorizations",
+  {
+    authorizationId: text("authorization_id").primaryKey(),
+    dispatchReceiptId: text("dispatch_receipt_id")
+      .notNull()
+      .references(() => governedDispatchReceiptsTable.receiptId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    workflowSequence: integer("workflow_sequence").notNull(),
+    workflowStage: text("workflow_stage").notNull(),
+    repairCyclesUsed: integer("repair_cycles_used").notNull(),
+    role: text("role").notNull(),
+    contextProfile: text("context_profile").notNull(),
+    writeEnabled: integer("write_enabled").notNull(),
+    worktreeOwnershipId: text("worktree_ownership_id")
+      .notNull()
+      .references(() => worktreeOwnershipsTable.id, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    candidateSha: text("candidate_sha").notNull(),
+    authorizedAt: text("authorized_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_role_stage_unique").on(
+      table.subtaskId,
+      table.workflowSequence,
+    ),
+    index("governed_role_dispatch_index").on(
+      table.dispatchReceiptId,
+      table.workflowSequence,
+    ),
+    foreignKey({
+      name: "governed_role_workflow_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+        table.subtaskId,
+      ],
+      foreignColumns: [
+        subtaskWorkflowInstancesTable.projectId,
+        subtaskWorkflowInstancesTable.bigTaskId,
+        subtaskWorkflowInstancesTable.planRevision,
+        subtaskWorkflowInstancesTable.candidateBinding,
+        subtaskWorkflowInstancesTable.subtaskId,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "governed_role_id_check",
+      sql`length(${table.authorizationId}) between 5 and 128 and ${table.authorizationId} glob 'gra_*'`,
+    ),
+    check(
+      "governed_role_sequence_check",
+      sql`typeof(${table.workflowSequence}) = 'integer' and ${table.workflowSequence} >= 1`,
+    ),
+    check(
+      "governed_role_stage_role_check",
+      sql`(${table.workflowStage} = 'EXECUTE' and ${table.role} = 'EXECUTE')
+        or (${table.workflowStage} = 'VERIFY' and ${table.role} = 'VERIFY')
+        or (${table.workflowStage} = 'HARDEN' and ${table.role} = 'HARDEN')
+        or (${table.workflowStage} = 'FRESH_QA' and ${table.role} = 'FRESH_QA')
+        or (${table.workflowStage} = 'REPAIR' and ${table.role} = 'REPAIR')
+        or (${table.workflowStage} = 'FOCUSED_RE_QA' and ${table.role} = 'FOCUSED_RE_QA')`,
+    ),
+    check(
+      "governed_role_repair_check",
+      sql`typeof(${table.repairCyclesUsed}) = 'integer' and ${table.repairCyclesUsed} in (0, 1)`,
+    ),
+    check(
+      "governed_role_profile_check",
+      sql`(${table.role} in ('EXECUTE', 'VERIFY', 'HARDEN', 'REPAIR')
+          and ${table.contextProfile} = 'STANDARD_SUBTASK_EXECUTION')
+        or (${table.role} = 'FRESH_QA' and ${table.contextProfile} = 'FRESH_INDEPENDENT_QA')
+        or (${table.role} = 'FOCUSED_RE_QA' and ${table.contextProfile} = 'FOCUSED_RE_QA')`,
+    ),
+    check(
+      "governed_role_write_check",
+      sql`(${table.role} in ('VERIFY', 'FRESH_QA', 'FOCUSED_RE_QA') and ${table.writeEnabled} = 0)
+        or (${table.role} in ('EXECUTE', 'HARDEN', 'REPAIR') and ${table.writeEnabled} in (0, 1))`,
+    ),
+    check(
+      "governed_role_sha_check",
+      sql`length(${table.candidateSha}) in (40, 64) and ${table.candidateSha} not glob '*[^0-9a-f]*'`,
+    ),
+  ],
+);
+
+export const governedRoleExecutionLinksTable = sqliteTable(
+  "governed_role_execution_links",
+  {
+    authorizationId: text("authorization_id")
+      .primaryKey()
+      .references(() => governedRoleAuthorizationsTable.authorizationId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    chatThreadId: text("chat_thread_id")
+      .notNull()
+      .references(() => chatThreadsTable.id, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    executionRunId: text("execution_run_id")
+      .notNull()
+      .references(() => executionRunsTable.id, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    linkedAt: text("linked_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_role_thread_unique").on(table.chatThreadId),
+    uniqueIndex("governed_role_run_unique").on(table.executionRunId),
+  ],
+);
+
+export const governedRoleResultsTable = sqliteTable(
+  "governed_role_results",
+  {
+    resultId: text("result_id").primaryKey(),
+    authorizationId: text("authorization_id")
+      .notNull()
+      .references(() => governedRoleAuthorizationsTable.authorizationId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    executionRunId: text("execution_run_id")
+      .notNull()
+      .references(() => executionRunsTable.id, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    role: text("role").notNull(),
+    outcome: text("outcome").notNull(),
+    summary: text("summary").notNull(),
+    candidateSha: text("candidate_sha").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_role_result_authorization_unique").on(
+      table.authorizationId,
+    ),
+    uniqueIndex("governed_role_result_run_unique").on(table.executionRunId),
+    check(
+      "governed_role_result_id_check",
+      sql`length(${table.resultId}) between 5 and 128 and ${table.resultId} glob 'grr_*'`,
+    ),
+    check(
+      "governed_role_result_role_check",
+      sql`${table.role} in ('EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA')`,
+    ),
+    check(
+      "governed_role_result_outcome_check",
+      sql`(${table.role} in ('EXECUTE', 'REPAIR') and ${table.outcome} in ('READY', 'BLOCKED'))
+        or (${table.role} in ('VERIFY', 'HARDEN', 'FRESH_QA', 'FOCUSED_RE_QA')
+          and ${table.outcome} in ('PASS', 'BLOCKING_FAIL'))`,
+    ),
+    check(
+      "governed_role_result_summary_check",
+      sql`length(trim(${table.summary})) between 1 and 1000`,
+    ),
+    check(
+      "governed_role_result_sha_check",
+      sql`length(${table.candidateSha}) in (40, 64) and ${table.candidateSha} not glob '*[^0-9a-f]*'`,
+    ),
+  ],
+);
+
+export const governedFindingsTable = sqliteTable(
+  "governed_findings",
+  {
+    findingId: text("finding_id").primaryKey(),
+    resultId: text("result_id")
+      .notNull()
+      .references(() => governedRoleResultsTable.resultId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    subtaskId: text("subtask_id").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    providerFindingKey: text("provider_finding_key").notNull(),
+    blocking: integer("blocking").notNull(),
+    violatedInvariant: text("violated_invariant").notNull(),
+    affectedContract: text("affected_contract").notNull(),
+    reproduction: text("reproduction").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_finding_result_ordinal_unique").on(
+      table.resultId,
+      table.ordinal,
+    ),
+    index("governed_finding_subtask_index").on(
+      table.subtaskId,
+      table.createdAt,
+      table.findingId,
+    ),
+    check(
+      "governed_finding_id_check",
+      sql`length(${table.findingId}) between 5 and 128 and ${table.findingId} glob 'gfd_*'`,
+    ),
+    check(
+      "governed_finding_ordinal_check",
+      sql`typeof(${table.ordinal}) = 'integer' and ${table.ordinal} between 0 and 15`,
+    ),
+    check(
+      "governed_finding_blocking_check",
+      sql`${table.blocking} in (0, 1)`,
+    ),
+    check(
+      "governed_finding_text_check",
+      sql`length(trim(${table.providerFindingKey})) between 1 and 128
+        and length(trim(${table.violatedInvariant})) between 1 and 1000
+        and length(trim(${table.affectedContract})) between 1 and 256
+        and length(trim(${table.reproduction})) between 1 and 1000`,
+    ),
+  ],
+);
+
+export const governedFindingResolutionsTable = sqliteTable(
+  "governed_finding_resolutions",
+  {
+    findingId: text("finding_id")
+      .primaryKey()
+      .references(() => governedFindingsTable.findingId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    roleResultId: text("role_result_id")
+      .notNull()
+      .references(() => governedRoleResultsTable.resultId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    resolvedAt: text("resolved_at").notNull(),
+  },
+);
+
+export const governedHandoffsTable = sqliteTable(
+  "governed_handoffs",
+  {
+    handoffId: text("handoff_id").primaryKey(),
+    subtaskId: text("subtask_id").notNull(),
+    roleResultId: text("role_result_id")
+      .notNull()
+      .references(() => governedRoleResultsTable.resultId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    candidateSha: text("candidate_sha").notNull(),
+    summary: text("summary").notNull(),
+    verificationDisposition: text("verification_disposition").notNull(),
+    remainingBlockerCount: integer("remaining_blocker_count").notNull(),
+    scopeConfirmation: text("scope_confirmation").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_handoff_subtask_unique").on(table.subtaskId),
+    uniqueIndex("governed_handoff_result_unique").on(table.roleResultId),
+    check(
+      "governed_handoff_id_check",
+      sql`length(${table.handoffId}) between 5 and 128 and ${table.handoffId} glob 'gho_*'`,
+    ),
+    check(
+      "governed_handoff_sha_check",
+      sql`length(${table.candidateSha}) in (40, 64) and ${table.candidateSha} not glob '*[^0-9a-f]*'`,
+    ),
+    check(
+      "governed_handoff_disposition_check",
+      sql`${table.verificationDisposition} = 'PASS'
+        and typeof(${table.remainingBlockerCount}) = 'integer'
+        and ${table.remainingBlockerCount} = 0
+        and ${table.scopeConfirmation} = 'TASK_CONTRACT_SCOPE_CONFIRMED'`,
+    ),
+  ],
+);
+
+export const governedPromotedContextDispositionsTable = sqliteTable(
+  "governed_promoted_context_dispositions",
+  {
+    dispositionId: text("disposition_id").primaryKey(),
+    subtaskId: text("subtask_id").notNull(),
+    roleResultId: text("role_result_id")
+      .notNull()
+      .references(() => governedRoleResultsTable.resultId, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    decision: text("decision").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_promoted_context_subtask_unique").on(table.subtaskId),
+    uniqueIndex("governed_promoted_context_result_unique").on(table.roleResultId),
+    check(
+      "governed_promoted_context_id_check",
+      sql`length(${table.dispositionId}) between 5 and 128 and ${table.dispositionId} glob 'gpc_*'`,
+    ),
+    check(
+      "governed_promoted_context_decision_check",
+      sql`${table.decision} in ('NO_PROMOTION_CANDIDATE', 'CANDIDATE_RECORDED')`,
+    ),
+  ],
+);
+
+export const governedBigTaskCompletionReceiptsTable = sqliteTable(
+  "governed_big_task_completion_receipts",
+  {
+    receiptId: text("receipt_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id")
+      .notNull()
+      .references(() => bigTasksTable.id, {
+        onDelete: "restrict",
+        onUpdate: "restrict",
+      }),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskCount: integer("subtask_count").notNull(),
+    completedAt: text("completed_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("governed_big_task_completion_big_task_unique").on(
+      table.bigTaskId,
+    ),
+    foreignKey({
+      name: "governed_big_task_completion_materialization_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+      ],
+      foreignColumns: [
+        canonicalTaskMaterializationsTable.projectId,
+        canonicalTaskMaterializationsTable.bigTaskId,
+        canonicalTaskMaterializationsTable.planRevision,
+        canonicalTaskMaterializationsTable.candidateBinding,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "governed_big_task_completion_id_check",
+      sql`length(${table.receiptId}) between 5 and 128 and ${table.receiptId} glob 'gbc_*'`,
+    ),
+    check(
+      "governed_big_task_completion_count_check",
+      sql`typeof(${table.subtaskCount}) = 'integer' and ${table.subtaskCount} >= 1`,
+    ),
+  ],
+);
+
 export const taskDependenciesTable = sqliteTable(
   "task_dependencies",
   {

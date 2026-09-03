@@ -2,7 +2,7 @@ import { request } from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import type { SubtaskId } from "@codex-task-console/domain";
+import type { BigTaskId, SubtaskId } from "@codex-task-console/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,6 +23,7 @@ import type {
 const TOKEN = "a".repeat(64);
 const SUBTASK_ID = "st_http_test" as SubtaskId;
 const SECOND_SUBTASK_ID = "st_http_second" as SubtaskId;
+const BIG_TASK_ID = "bt_http_test" as BigTaskId;
 
 interface TestServer {
   readonly authority: string;
@@ -339,6 +340,71 @@ describe("local HTTP security boundary", () => {
 });
 
 describe("narrow API authority and concurrency continuity", () => {
+  it("exposes only bounded governed inspect, advance, manual-start, and extension inputs", async () => {
+    const inspectGovernedBigTask = vi.fn(async (bigTaskId: BigTaskId) => ({
+      bigTaskId,
+      status: "IN_PROGRESS",
+    }));
+    const advanceGovernedBigTask = vi.fn(async (bigTaskId: BigTaskId) => ({
+      prepared: { kind: "BLOCKED", reason: "DEPENDENCY_BLOCKED" },
+      execution: null,
+      bigTaskId,
+    }));
+    const authorizeGovernedManualStart = vi.fn(async (subtaskId: SubtaskId) => ({
+      authorityId: "gms_test",
+      subtaskId,
+    }));
+    const authorizeGovernedBudgetExtension = vi.fn(
+      async (subtaskId: SubtaskId) => ({
+        authorityId: "gbe_test",
+        grantedTokens: 40_000,
+        subtaskId,
+      }),
+    );
+    const service: LocalControlService = {
+      ...defaultService(),
+      inspectGovernedBigTask,
+      advanceGovernedBigTask,
+      authorizeGovernedManualStart,
+      authorizeGovernedBudgetExtension,
+    };
+    const server = await startServer(service);
+
+    expect(
+      (await call(server, { path: `/v0/governed/big-tasks/${BIG_TASK_ID}` }))
+        .status,
+    ).toBe(200);
+    expect(
+      (
+        await post(
+          server,
+          "/v0/governed/advance",
+          JSON.stringify({ bigTaskId: BIG_TASK_ID }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await post(server, "/v0/governed/manual-start")).status).toBe(200);
+    expect((await post(server, "/v0/governed/budget-extension")).status).toBe(
+      200,
+    );
+    expect(inspectGovernedBigTask).toHaveBeenCalledExactlyOnceWith(BIG_TASK_ID);
+    expect(advanceGovernedBigTask).toHaveBeenCalledExactlyOnceWith(BIG_TASK_ID);
+    expect(authorizeGovernedManualStart).toHaveBeenCalledExactlyOnceWith(
+      SUBTASK_ID,
+    );
+    expect(authorizeGovernedBudgetExtension).toHaveBeenCalledExactlyOnceWith(
+      SUBTASK_ID,
+    );
+
+    const extra = await post(
+      server,
+      "/v0/governed/advance",
+      JSON.stringify({ bigTaskId: BIG_TASK_ID, force: true }),
+    );
+    expect(extra.status).toBe(400);
+    expect(advanceGovernedBigTask).toHaveBeenCalledTimes(1);
+  });
+
   it("passes only the canonical Subtask ID to each trusted operation", async () => {
     const service = defaultService();
     const server = await startServer(service);

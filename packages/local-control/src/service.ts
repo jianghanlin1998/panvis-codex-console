@@ -1,10 +1,13 @@
 import {
+  executeGovernedRoleCodex,
   executeSingleSubtaskOwnedWorktreeCodex,
 } from "@codex-task-console/codex-adapter";
 import type {
+  GovernedRoleCodexExecutionResult,
   OwnedWorktreeCodexExecutionResult,
 } from "@codex-task-console/codex-adapter";
 import type {
+  BigTaskId,
   ChatThread,
   ExecutionRun,
   SubtaskId,
@@ -13,9 +16,11 @@ import type {
 import {
   TaskStorageError,
   WorktreeOwnershipError,
+  createGovernedExecutionStore,
   createWorktreeOwnershipManager,
 } from "@codex-task-console/storage";
 import type {
+  GovernedExecutionStore,
   TaskStorage,
   WorktreeOwnershipManager,
 } from "@codex-task-console/storage";
@@ -119,6 +124,10 @@ export interface LocalControlService {
   provisionOwnedWorktree(subtaskId: SubtaskId): Promise<WorktreeOperationResult>;
   runOwnedWorktreeExecution(subtaskId: SubtaskId): Promise<ExecutionOperationResult>;
   releaseOwnedWorktree(subtaskId: SubtaskId): Promise<WorktreeOperationResult>;
+  inspectGovernedBigTask?(bigTaskId: BigTaskId): Promise<object>;
+  advanceGovernedBigTask?(bigTaskId: BigTaskId): Promise<object>;
+  authorizeGovernedManualStart?(subtaskId: SubtaskId): Promise<object>;
+  authorizeGovernedBudgetExtension?(subtaskId: SubtaskId): Promise<object>;
 }
 
 const sanitizeStorageError = (error: unknown): LocalControlServiceError => {
@@ -216,10 +225,15 @@ const summarizeExecution = (
 class ProductionLocalControlService implements LocalControlService {
   readonly #storage: TaskStorage;
   readonly #worktrees: WorktreeOwnershipManager;
+  readonly #governed: GovernedExecutionStore;
   readonly #execute: (
     storage: TaskStorage,
     subtaskId: SubtaskId,
   ) => Promise<OwnedWorktreeCodexExecutionResult>;
+  readonly #executeGoverned: (
+    governed: GovernedExecutionStore,
+    authorizationId: string,
+  ) => Promise<GovernedRoleCodexExecutionResult>;
 
   constructor(
     storage: TaskStorage,
@@ -228,10 +242,16 @@ class ProductionLocalControlService implements LocalControlService {
       storage: TaskStorage,
       subtaskId: SubtaskId,
     ) => Promise<OwnedWorktreeCodexExecutionResult>,
+    executeGoverned: (
+      governed: GovernedExecutionStore,
+      authorizationId: string,
+    ) => Promise<GovernedRoleCodexExecutionResult>,
   ) {
     this.#storage = storage;
     this.#worktrees = worktrees;
     this.#execute = execute;
+    this.#governed = createGovernedExecutionStore(storage, worktrees);
+    this.#executeGoverned = executeGoverned;
   }
 
   async inspectSubtask(subtaskId: SubtaskId): Promise<SubtaskInspection> {
@@ -332,7 +352,76 @@ class ProductionLocalControlService implements LocalControlService {
       throw sanitizeStorageError(error);
     }
   }
+
+  async inspectGovernedBigTask(bigTaskId: BigTaskId): Promise<object> {
+    try {
+      return this.#governed.inspectBigTask(bigTaskId);
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
+
+  async advanceGovernedBigTask(bigTaskId: BigTaskId): Promise<object> {
+    try {
+      const prepared = this.#governed.prepareNextRole(bigTaskId);
+      if (prepared.kind !== "ROLE_AUTHORIZED") {
+        return Object.freeze({ prepared, execution: null });
+      }
+      const execution = await this.#executeGoverned(
+        this.#governed,
+        prepared.authorization.authorizationId,
+      );
+      return Object.freeze({
+        prepared,
+        execution: summarizeGovernedExecution(execution),
+      });
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
+
+  async authorizeGovernedManualStart(subtaskId: SubtaskId): Promise<object> {
+    try {
+      return this.#governed.authorizeManualStart(subtaskId);
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
+
+  async authorizeGovernedBudgetExtension(
+    subtaskId: SubtaskId,
+  ): Promise<object> {
+    try {
+      return this.#governed.authorizeOneTimeBudgetExtension(subtaskId);
+    } catch (error) {
+      throw sanitizeStorageError(error);
+    }
+  }
 }
+
+const summarizeGovernedExecution = (
+  result: GovernedRoleCodexExecutionResult,
+): Readonly<{
+  success: boolean;
+  failureCode: string | null;
+  authorizationId: string | null;
+  role: string | null;
+  executionRunId: string | null;
+  outcome: string | null;
+  reconciliationKind: GovernedRoleReconciliationResultKind | null;
+}> =>
+  Object.freeze({
+    success: result.success,
+    failureCode: result.failureCode,
+    authorizationId: result.authorization?.authorizationId ?? null,
+    role: result.authorization?.role ?? null,
+    executionRunId: result.executionRunId,
+    outcome: result.roleResult?.outcome ?? null,
+    reconciliationKind: result.reconciliation?.kind ?? null,
+  });
+
+type GovernedRoleReconciliationResultKind =
+  NonNullable<GovernedRoleCodexExecutionResult["reconciliation"]>["kind"];
 
 export const createProductionLocalControlService = (
   storage: TaskStorage,
@@ -341,6 +430,7 @@ export const createProductionLocalControlService = (
     storage,
     createWorktreeOwnershipManager(storage),
     executeSingleSubtaskOwnedWorktreeCodex,
+    executeGovernedRoleCodex,
   );
 
 /** Package-private deterministic-test seam; not exported from the package root. */
@@ -351,5 +441,14 @@ export const createLocalControlServiceForTesting = (
     storage: TaskStorage,
     subtaskId: SubtaskId,
   ) => Promise<OwnedWorktreeCodexExecutionResult>,
+  executeGoverned: (
+    governed: GovernedExecutionStore,
+    authorizationId: string,
+  ) => Promise<GovernedRoleCodexExecutionResult> = executeGovernedRoleCodex,
 ): LocalControlService =>
-  new ProductionLocalControlService(storage, worktrees, execute);
+  new ProductionLocalControlService(
+    storage,
+    worktrees,
+    execute,
+    executeGoverned,
+  );
