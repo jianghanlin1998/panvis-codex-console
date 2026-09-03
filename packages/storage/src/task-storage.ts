@@ -1045,6 +1045,46 @@ const isCanonicalUtcTimestamp = (value: string): boolean => {
 const isWorkflowStage = (value: unknown): value is WorkflowStage =>
   typeof value === "string" && WORKFLOW_STAGES.some((stage) => stage === value);
 
+const isWorkflowLifecycleCompositionCompatible = (
+  stage: WorkflowStage,
+  profile: WorkflowProfile,
+  status: Subtask["status"],
+  maturity: Subtask["maturity"],
+): boolean => {
+  switch (stage) {
+    case "PLAN":
+    case "REVIEW":
+      return false;
+    case "MATERIALIZE":
+      return (
+        status === "DROPPED" ||
+        status === "ARCHIVED" ||
+        (status === "TODO" && maturity === "NOT_STARTED")
+      );
+    case "EXECUTE":
+      return (
+        status === "DROPPED" ||
+        status === "ARCHIVED" ||
+        ((status === "TODO" || status === "IN_PROGRESS") &&
+          maturity === "NOT_STARTED") ||
+        (status === "QA_DEBUG" && maturity === "IMPLEMENTED")
+      );
+    case "VERIFY":
+    case "HARDEN":
+      return status === "QA_DEBUG" && maturity === "IMPLEMENTED";
+    case "FRESH_QA":
+    case "REPAIR":
+    case "FOCUSED_RE_QA":
+      return status === "QA_DEBUG" && maturity === "HARDENED";
+    case "COMPLETE":
+      return (
+        status === "DONE" &&
+        maturity ===
+          (profile === "HIGH_RISK_FOUNDATION" ? "ACCEPTED" : "IMPLEMENTED")
+      );
+  }
+};
+
 const isActiveWorkflowStage = (value: unknown): value is Exclude<
   WorkflowStage,
   "PLAN" | "REVIEW" | "COMPLETE"
@@ -5721,21 +5761,12 @@ export class TaskStorage {
         transitions[transitions.length - 1]?.resultingStage ??
         instance.initialStage;
       if (
-        (finalStage === "VERIFY" &&
-          (subtask.status !== "QA_DEBUG" ||
-            subtask.maturity !== "IMPLEMENTED")) ||
-        (finalStage === "HARDEN" &&
-          (subtask.status !== "QA_DEBUG" ||
-            subtask.maturity !== "IMPLEMENTED")) ||
-        ((finalStage === "FRESH_QA" ||
-          finalStage === "REPAIR" ||
-          finalStage === "FOCUSED_RE_QA") &&
-          (subtask.status !== "QA_DEBUG" || subtask.maturity !== "HARDENED")) ||
-        (finalStage === "COMPLETE" &&
-          (subtask.status !== "DONE" ||
-            (instance.profile === "HIGH_RISK_FOUNDATION"
-              ? subtask.maturity !== "ACCEPTED"
-              : subtask.maturity !== "IMPLEMENTED")))
+        !isWorkflowLifecycleCompositionCompatible(
+          finalStage,
+          instance.profile,
+          subtask.status,
+          subtask.maturity,
+        )
       ) {
         throw malformedStoredData();
       }
@@ -5847,6 +5878,19 @@ export class TaskStorage {
   }> {
     let status = view.boardStatus;
     let maturity = view.deliveryMaturity;
+    if (
+      !isWorkflowLifecycleCompositionCompatible(
+        view.currentStage,
+        view.profile,
+        status,
+        maturity,
+      )
+    ) {
+      throw new TaskStorageError(
+        "CONFLICT",
+        "The workflow lifecycle composition is incompatible with its current stage.",
+      );
+    }
     if (view.currentStage === "EXECUTE") {
       if (status !== "QA_DEBUG" || maturity !== "IMPLEMENTED") {
         throw new TaskStorageError(
@@ -5906,6 +5950,19 @@ export class TaskStorage {
         }
         maturity = "ACCEPTED";
       }
+    }
+    if (
+      !isWorkflowLifecycleCompositionCompatible(
+        nextStage,
+        view.profile,
+        status,
+        maturity,
+      )
+    ) {
+      throw new TaskStorageError(
+        "CONFLICT",
+        "The workflow transition would create an incompatible lifecycle composition.",
+      );
     }
     return { status, maturity };
   }

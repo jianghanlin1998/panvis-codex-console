@@ -350,7 +350,9 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8C comprehensive hardening: PASS / HARDENED
 - Step 8C hardening finding `CTC-ORCH-8C-HARD-001`: CLOSED — callers cannot self-attest workflow evidence; accepted evidence now requires immutable source-backed authority provenance
 - Step 8C hardening verification: focused 16 files / 432 tests PASS; full suite 134 files / 4,156 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
-- Step 8C Fresh Independent QA: PENDING / ELIGIBLE
+- Step 8C Fresh Independent QA: FAIL — `CTC-ORCH-8C-FQA-001` found that contradictory persisted MATERIALIZE / EXECUTE lifecycle composition did not fail closed
+- Step 8C bounded post-Fresh-QA repair: IMPLEMENTED — authoritative early-stage workflow / board / maturity compatibility is validated on read and before transition persistence; deterministic focused and canonical verification PASS
+- Step 8C maturity: REPAIRED / NOT ACCEPTED; fresh Focused Re-QA pending
 - Step 8D Operational Governed Execution V0: NOT STARTED / gated on Step 8C ACCEPTED
 - Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / gated on Step 8D
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
@@ -358,7 +360,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Hanlin manual QA for Step 8C hardening: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** fresh clean-context independent no-write Step 8C QA. Do not begin Step 8D.
+**Next safe task:** fresh clean-context no-write Focused Re-QA of the bounded `CTC-ORCH-8C-FQA-001` repair. Do not begin Step 8D.
 
 ## Not operational yet
 - browser Console UI

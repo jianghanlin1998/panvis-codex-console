@@ -19,7 +19,11 @@ import {
   SubtaskImplementationCheckpointIdSchema,
   TaskContractV0Schema,
 } from "@codex-task-console/domain";
-import type { TaskContractV0 } from "@codex-task-console/domain";
+import type {
+  SubtaskMaturity,
+  SubtaskStatus,
+  TaskContractV0,
+} from "@codex-task-console/domain";
 import type {
   PlanCandidate,
   PlanReviewState,
@@ -320,6 +324,19 @@ const materializeToExecute = (
   return result.view;
 };
 
+const setStoredSubtaskLifecycle = (
+  databasePath: string,
+  subtaskId: string,
+  status: SubtaskStatus,
+  maturity: SubtaskMaturity,
+): void => {
+  const sqlite = new DatabaseSync(databasePath);
+  sqlite.prepare(
+    "UPDATE subtasks SET status = ?, maturity = ? WHERE id = ?",
+  ).run(status, maturity, subtaskId);
+  sqlite.close();
+};
+
 const completeImplementation = (
   storage: TaskStorage,
   databasePath: string,
@@ -531,6 +548,12 @@ describe("durable workflow control plane", () => {
         profiles: ["STANDARD"],
       });
       let view = viewFor(storage, source.subtasks[0]!.subtaskId);
+      expect(view).toMatchObject({
+        currentStage: "MATERIALIZE",
+        transitionCount: 0,
+        boardStatus: "TODO",
+        deliveryMaturity: "NOT_STARTED",
+      });
       view = materializeToExecute(storage, view, "standard");
       expect(view).toMatchObject({
         initialStage: "MATERIALIZE",
@@ -1484,6 +1507,170 @@ describe("durable workflow control plane", () => {
         storage.close();
       });
     }
+  });
+
+  it("fails closed on corrupted MATERIALIZE lifecycle and leaves progression atomic", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      let storage = openTaskDatabase({
+        databasePath,
+        clock: incrementingClock(),
+      });
+      const { source } = seed(storage, {
+        suffix: "materialize_corruption",
+        profiles: ["STANDARD"],
+      });
+      const target = source.subtasks[0]!.subtaskId;
+      const initial = viewFor(storage, target);
+      const kinds = [
+        "REPOSITORY_PREFLIGHT_PASSED",
+        "CONTEXT_PREFLIGHT_PASSED",
+        "BUDGET_AVAILABLE",
+        "CONCURRENCY_AVAILABLE",
+        "WORKTREE_OWNERSHIP_AVAILABLE",
+        "HUMAN_APPROVAL_SATISFIED",
+      ] as const;
+      const references = kinds.map((kind, index) =>
+        workflowReference(
+          acceptEvidence(
+            storage,
+            initial,
+            kind,
+            `materialize_corruption_${index}`,
+          ).evidenceId,
+        ),
+      );
+      storage.close();
+
+      setStoredSubtaskLifecycle(databasePath, target, "DONE", "ACCEPTED");
+      storage = openTaskDatabase({
+        databasePath,
+        clock: incrementingClock(),
+      });
+      expectStorageError(
+        () => storage.getDurableWorkflowControlView(target),
+        "MALFORMED_STORED_DATA",
+      );
+      expectStorageError(
+        () =>
+          advance(
+            storage,
+            initial,
+            "wop_materialize_corruption",
+            "EXECUTE",
+            references,
+          ),
+        "MALFORMED_STORED_DATA",
+      );
+
+      const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        sqlite.prepare(
+          `SELECT status, maturity,
+                  (SELECT count(*) FROM durable_workflow_transitions) AS transition_count
+             FROM subtasks WHERE id = ?`,
+        ).get(target),
+      ).toEqual({
+        status: "DONE",
+        maturity: "ACCEPTED",
+        transition_count: 0,
+      });
+      sqlite.close();
+      storage.close();
+    });
+  });
+
+  it.each<
+    readonly [WorkflowProfile, SubtaskStatus, SubtaskMaturity]
+  >([
+    ["STANDARD", "TODO", "ACCEPTED"],
+    ["HIGH_RISK_FOUNDATION", "IN_PROGRESS", "ACCEPTED"],
+    ["STANDARD", "QA_DEBUG", "IMPLEMENTED"],
+    ["HIGH_RISK_FOUNDATION", "QA_DEBUG", "HARDENED"],
+    ["LOW", "DONE", "IMPLEMENTED"],
+    ["LOW", "DONE", "ACCEPTED"],
+  ])(
+    "rejects incompatible %s early lifecycle %s / %s after reopen",
+    (profile, status, maturity) => {
+      withTemporaryDatabasePath((databasePath) => {
+        let storage = openTaskDatabase({
+          databasePath,
+          clock: incrementingClock(),
+        });
+        const suffix = `early_${profile}_${status}_${maturity}`.toLowerCase();
+        const { source } = seed(storage, {
+          suffix,
+          profiles: [profile],
+        });
+        const target = source.subtasks[0]!.subtaskId;
+        storage.close();
+
+        setStoredSubtaskLifecycle(
+          databasePath,
+          target,
+          status,
+          maturity,
+        );
+        storage = openTaskDatabase({
+          databasePath,
+          clock: incrementingClock(),
+        });
+        expectStorageError(
+          () => storage.getDurableWorkflowControlView(target),
+          "MALFORMED_STORED_DATA",
+        );
+        storage.close();
+      });
+    },
+  );
+
+  it("preserves all legitimate EXECUTE lifecycle compositions", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      let storage = openTaskDatabase({
+        databasePath,
+        clock: incrementingClock(),
+      });
+      const { source } = seed(storage, {
+        suffix: "execute_compositions",
+        profiles: ["LOW", "LOW", "LOW"],
+      });
+      const [todoTarget, inProgressTarget, implementedTarget] =
+        source.subtasks.map(({ subtaskId }) => subtaskId);
+      const implementedView = viewFor(storage, implementedTarget!);
+      setStoredSubtaskLifecycle(
+        databasePath,
+        inProgressTarget!,
+        "IN_PROGRESS",
+        "NOT_STARTED",
+      );
+      completeImplementation(
+        storage,
+        databasePath,
+        implementedView,
+        "execute_compositions",
+      );
+      storage.close();
+
+      storage = openTaskDatabase({
+        databasePath,
+        clock: incrementingClock(),
+      });
+      expect(viewFor(storage, todoTarget!)).toMatchObject({
+        currentStage: "EXECUTE",
+        boardStatus: "TODO",
+        deliveryMaturity: "NOT_STARTED",
+      });
+      expect(viewFor(storage, inProgressTarget!)).toMatchObject({
+        currentStage: "EXECUTE",
+        boardStatus: "IN_PROGRESS",
+        deliveryMaturity: "NOT_STARTED",
+      });
+      expect(viewFor(storage, implementedTarget!)).toMatchObject({
+        currentStage: "EXECUTE",
+        boardStatus: "QA_DEBUG",
+        deliveryMaturity: "IMPLEMENTED",
+      });
+      storage.close();
+    });
   });
 
   it("fails a regressing storage clock atomically without consuming trusted evidence", () => {
