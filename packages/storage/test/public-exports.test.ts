@@ -7,6 +7,11 @@ import {
   chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
+  DURABLE_WORKFLOW_EVIDENCE_KINDS,
+  DURABLE_WORKFLOW_EVIDENCE_PRODUCERS,
+  durableWorkflowEvidenceTable,
+  durableWorkflowHumanRequirementsTable,
+  durableWorkflowTransitionsTable,
   ExecutionInputPreflight,
   ExecutionInputPreflightError,
   executionRunsTable,
@@ -35,6 +40,9 @@ import type {
   ApprovedTaskContractAuthority,
   ActiveContextItemBucket,
   ActiveContextItemSnapshot,
+  AcceptDurableWorkflowEvidenceInput,
+  AdvanceDurableWorkflowInput,
+  AdvanceDurableWorkflowResult,
   AllowedRawContextItemBucket,
   AllowedRawContextItemSnapshot,
   BoundedDurableExecutionHistory,
@@ -52,9 +60,20 @@ import type {
   DurableReviewDecisionArtifact,
   DurableSubtaskWorkflowInitialization,
   DurableSubtaskWorkflowInstance,
+  DurableWorkflowControlView,
+  DurableWorkflowEvidence,
+  DurableWorkflowEvidenceKind,
+  DurableWorkflowEvidenceOutcome,
+  DurableWorkflowEvidenceProducer,
+  DurableWorkflowEvidenceReference,
+  DurableWorkflowHumanRequirement,
+  DurableWorkflowTransition,
+  DurableWorkflowTransitionEvidenceReference,
   JitContextStorageSourceSnapshot,
   OperationalJitContextAssemblyErrorCode,
   OperationalJitContextProfile,
+  RequestDurableMaterializedGraphChangeInput,
+  RequestDurableMaterializedGraphChangeResult,
   StartExecutionRunInput,
   TaskContractAuthorityReadiness,
   TrustedRepositorySourceErrorCode,
@@ -86,6 +105,9 @@ describe("storage package public exports", () => {
     expect(contextDigestsTable).toBeDefined();
     expect(auditEventsTable).toBeDefined();
     expect(contextItemsTable).toBeDefined();
+    expect(durableWorkflowEvidenceTable).toBeDefined();
+    expect(durableWorkflowTransitionsTable).toBeDefined();
+    expect(durableWorkflowHumanRequirementsTable).toBeDefined();
     expect(subtasksTable).toBeDefined();
     expect(taskContractsTable).toBeDefined();
     expect(taskDependenciesTable).toBeDefined();
@@ -96,6 +118,18 @@ describe("storage package public exports", () => {
       "TASK_CONTRACT_AUTHORITY_READY",
       "TASK_CONTRACT_AUTHORITY_NOT_READY",
     ]);
+    expect(DURABLE_WORKFLOW_EVIDENCE_KINDS).toContain(
+      "FRESH_QA_OUTCOME_RECORDED",
+    );
+    expect(DURABLE_WORKFLOW_EVIDENCE_PRODUCERS).toEqual([
+      "OPERATIONAL_GATE",
+      "WORKFLOW_ROLE",
+      "HUMAN_AUTHORITY",
+      "DELIVERY_CONTROL",
+    ]);
+    expectTypeOf<AcceptDurableWorkflowEvidenceInput>().toBeObject();
+    expectTypeOf<AdvanceDurableWorkflowInput>().toBeObject();
+    expectTypeOf<AdvanceDurableWorkflowResult>().toBeObject();
     expectTypeOf<ApprovedTaskContractAuthority>().toBeObject();
     expectTypeOf<ActiveContextItemBucket>().toBeObject();
     expectTypeOf<ActiveContextItemSnapshot>().toBeObject();
@@ -115,9 +149,20 @@ describe("storage package public exports", () => {
     expectTypeOf<DurableReviewDecisionArtifact>().toBeObject();
     expectTypeOf<DurableSubtaskWorkflowInitialization>().toBeObject();
     expectTypeOf<DurableSubtaskWorkflowInstance>().toBeObject();
+    expectTypeOf<DurableWorkflowControlView>().toBeObject();
+    expectTypeOf<DurableWorkflowEvidence>().toBeObject();
+    expectTypeOf<DurableWorkflowEvidenceKind>().toBeString();
+    expectTypeOf<DurableWorkflowEvidenceOutcome>().toBeString();
+    expectTypeOf<DurableWorkflowEvidenceProducer>().toBeString();
+    expectTypeOf<DurableWorkflowEvidenceReference>().toBeObject();
+    expectTypeOf<DurableWorkflowHumanRequirement>().toBeObject();
+    expectTypeOf<DurableWorkflowTransition>().toBeObject();
+    expectTypeOf<DurableWorkflowTransitionEvidenceReference>().toBeObject();
     expectTypeOf<JitContextStorageSourceSnapshot>().toBeObject();
     expectTypeOf<OperationalJitContextAssemblyErrorCode>().toBeString();
     expectTypeOf<OperationalJitContextProfile>().toBeString();
+    expectTypeOf<RequestDurableMaterializedGraphChangeInput>().toBeObject();
+    expectTypeOf<RequestDurableMaterializedGraphChangeResult>().toBeObject();
     expectTypeOf<ExecutionInputPreflightErrorCode>().toBeString();
     expectTypeOf<ExecutionInputPreflightResult>().toBeObject();
     expectTypeOf<TrustedRepositorySourceSnapshot>().toBeObject();

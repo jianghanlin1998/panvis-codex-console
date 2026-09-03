@@ -9,6 +9,9 @@ export {
   chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
+  durableWorkflowEvidenceTable,
+  durableWorkflowHumanRequirementsTable,
+  durableWorkflowTransitionsTable,
   executionRunsTable,
   orchestrationMaterializationsTable,
   orchestrationPlanCandidatesTable,
@@ -22,6 +25,27 @@ export {
   taskDependenciesTable,
   workflowInitializationReceiptsTable,
 } from "./schema.js";
+
+export {
+  DURABLE_WORKFLOW_EVIDENCE_KINDS,
+  DURABLE_WORKFLOW_EVIDENCE_PRODUCERS,
+} from "./workflow-control.js";
+export type {
+  AcceptDurableWorkflowEvidenceInput,
+  AdvanceDurableWorkflowInput,
+  AdvanceDurableWorkflowResult,
+  DurableWorkflowControlView,
+  DurableWorkflowEvidence,
+  DurableWorkflowEvidenceKind,
+  DurableWorkflowEvidenceOutcome,
+  DurableWorkflowEvidenceProducer,
+  DurableWorkflowEvidenceReference,
+  DurableWorkflowHumanRequirement,
+  DurableWorkflowTransition,
+  DurableWorkflowTransitionEvidenceReference,
+  RequestDurableMaterializedGraphChangeInput,
+  RequestDurableMaterializedGraphChangeResult,
+} from "./workflow-control.js";
 
 export { openTaskDatabase, TaskStorage } from "./task-storage.js";
 export type {

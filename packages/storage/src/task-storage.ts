@@ -70,13 +70,22 @@ import type {
   TaskContractV0,
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
-import { deriveInitialWorkflowStage } from "@codex-task-console/orchestration";
+import {
+  MATERIALIZED_GRAPH_CHANGE_KINDS,
+  WORKFLOW_STAGES,
+  deriveInitialWorkflowStage,
+  evaluateStageTransition,
+  rejectMaterializedGraphChange,
+} from "@codex-task-console/orchestration";
 import type {
   MaterializedGraph,
+  MaterializedGraphChangeKind,
   PlanCandidate,
   ReviewDecision,
+  StageEvidenceFacts,
   WorkflowInitializationStage,
   WorkflowProfile,
+  WorkflowStage,
 } from "@codex-task-console/orchestration";
 import { and, asc, count, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
@@ -97,6 +106,9 @@ import {
   chatThreadsTable,
   contextDigestsTable,
   contextItemsTable,
+  durableWorkflowEvidenceTable,
+  durableWorkflowHumanRequirementsTable,
+  durableWorkflowTransitionsTable,
   executionRunsTable,
   orchestrationMaterializationsTable,
   projectsTable,
@@ -108,6 +120,26 @@ import {
 } from "./schema.js";
 import { decodeStringArray, encodeStringArray } from "./structured-fields.js";
 import { registerTaskStorageWorktreeAccess } from "./task-storage-internals.js";
+import {
+  DURABLE_WORKFLOW_EVIDENCE_KINDS,
+  DURABLE_WORKFLOW_EVIDENCE_PRODUCERS,
+} from "./workflow-control.js";
+import type {
+  AcceptDurableWorkflowEvidenceInput,
+  AdvanceDurableWorkflowInput,
+  AdvanceDurableWorkflowResult,
+  DurableWorkflowControlView,
+  DurableWorkflowEvidence,
+  DurableWorkflowEvidenceKind,
+  DurableWorkflowEvidenceOutcome,
+  DurableWorkflowEvidenceProducer,
+  DurableWorkflowEvidenceReference,
+  DurableWorkflowHumanRequirement,
+  DurableWorkflowTransition,
+  DurableWorkflowTransitionEvidenceReference,
+  RequestDurableMaterializedGraphChangeInput,
+  RequestDurableMaterializedGraphChangeResult,
+} from "./workflow-control.js";
 
 export interface OpenTaskDatabaseOptions {
   readonly databasePath: string;
@@ -330,6 +362,11 @@ type SubtaskWorkflowInstanceRow =
   typeof subtaskWorkflowInstancesTable.$inferSelect;
 type WorkflowInitializationReceiptRow =
   typeof workflowInitializationReceiptsTable.$inferSelect;
+type DurableWorkflowEvidenceRow = typeof durableWorkflowEvidenceTable.$inferSelect;
+type DurableWorkflowTransitionRow =
+  typeof durableWorkflowTransitionsTable.$inferSelect;
+type DurableWorkflowHumanRequirementRow =
+  typeof durableWorkflowHumanRequirementsTable.$inferSelect;
 type ChatThreadRow = typeof chatThreadsTable.$inferSelect;
 type ExecutionRunRow = typeof executionRunsTable.$inferSelect;
 type ContextItemRow = typeof contextItemsTable.$inferSelect;
@@ -1001,6 +1038,595 @@ const dependencyFromRow = (row: {
 const isCanonicalUtcTimestamp = (value: string): boolean => {
   const timestamp = new Date(value);
   return !Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value;
+};
+
+const isWorkflowStage = (value: unknown): value is WorkflowStage =>
+  typeof value === "string" && WORKFLOW_STAGES.some((stage) => stage === value);
+
+const isActiveWorkflowStage = (value: unknown): value is Exclude<
+  WorkflowStage,
+  "PLAN" | "REVIEW" | "COMPLETE"
+> =>
+  isWorkflowStage(value) &&
+  value !== "PLAN" &&
+  value !== "REVIEW" &&
+  value !== "COMPLETE";
+
+const isWorkflowRecordId = (
+  value: unknown,
+  prefix: "wfe_" | "wop_",
+): value is string =>
+  typeof value === "string" &&
+  value.length >= 5 &&
+  value.length <= 128 &&
+  new RegExp(`^${prefix}[A-Za-z0-9][A-Za-z0-9_-]*$`, "u").test(value);
+
+const parseWorkflowRecordId = (
+  value: unknown,
+  prefix: "wfe_" | "wop_",
+  entity: string,
+): string => {
+  if (!isWorkflowRecordId(value, prefix)) {
+    throw invalidInput(entity);
+  }
+  return value;
+};
+
+const parseWorkflowSourceReference = (value: unknown, entity: string): string => {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 2_048 ||
+    value.trim() !== value
+  ) {
+    throw invalidInput(entity);
+  }
+  return value;
+};
+
+const parseWorkflowIdentity = (
+  record: Readonly<Record<string, unknown>>,
+  entity: string,
+): Readonly<{
+  projectId: ProjectId;
+  bigTaskId: BigTaskId;
+  candidateBinding: string;
+  subtaskId: SubtaskId;
+}> => {
+  const projectId = ProjectIdSchema.safeParse(record.projectId);
+  const bigTaskId = BigTaskIdSchema.safeParse(record.bigTaskId);
+  if (
+    !projectId.success ||
+    projectId.data !== record.projectId ||
+    !bigTaskId.success ||
+    bigTaskId.data !== record.bigTaskId ||
+    typeof record.candidateBinding !== "string" ||
+    record.candidateBinding.length < 1 ||
+    record.candidateBinding.length > 2_048
+  ) {
+    throw invalidInput(entity);
+  }
+  return {
+    projectId: projectId.data,
+    bigTaskId: bigTaskId.data,
+    candidateBinding: record.candidateBinding,
+    subtaskId: parseCanonicalSubtaskId(record.subtaskId as SubtaskId),
+  };
+};
+
+const expectedEvidenceProducer = (
+  kind: DurableWorkflowEvidenceKind,
+): DurableWorkflowEvidenceProducer => {
+  switch (kind) {
+    case "REPOSITORY_PREFLIGHT_PASSED":
+    case "CONTEXT_PREFLIGHT_PASSED":
+    case "BUDGET_AVAILABLE":
+    case "CONCURRENCY_AVAILABLE":
+    case "WORKTREE_OWNERSHIP_AVAILABLE":
+      return "OPERATIONAL_GATE";
+    case "HUMAN_APPROVAL_SATISFIED":
+      return "HUMAN_AUTHORITY";
+    case "VERIFICATION_EVIDENCE_PASSED":
+    case "HARDENING_EVIDENCE_PASSED":
+    case "FRESH_QA_OUTCOME_RECORDED":
+    case "REPAIR_EVIDENCE_PASSED":
+    case "FOCUSED_RE_QA_OUTCOME_RECORDED":
+      return "WORKFLOW_ROLE";
+    case "NO_UNRESOLVED_BLOCKING_FINDING":
+    case "HANDOFF_PRESENT":
+    case "PROMOTED_CONTEXT_DISPOSITION_RECORDED":
+      return "DELIVERY_CONTROL";
+  }
+};
+
+const evidenceKindsForWorkflowStage = (
+  stage: Exclude<WorkflowStage, "PLAN" | "REVIEW" | "COMPLETE">,
+): readonly DurableWorkflowEvidenceKind[] => {
+  switch (stage) {
+    case "MATERIALIZE":
+      return [
+        "REPOSITORY_PREFLIGHT_PASSED",
+        "CONTEXT_PREFLIGHT_PASSED",
+        "BUDGET_AVAILABLE",
+        "CONCURRENCY_AVAILABLE",
+        "WORKTREE_OWNERSHIP_AVAILABLE",
+        "HUMAN_APPROVAL_SATISFIED",
+      ];
+    case "EXECUTE":
+      return [];
+    case "VERIFY":
+      return [
+        "VERIFICATION_EVIDENCE_PASSED",
+        "NO_UNRESOLVED_BLOCKING_FINDING",
+        "HANDOFF_PRESENT",
+        "PROMOTED_CONTEXT_DISPOSITION_RECORDED",
+      ];
+    case "HARDEN":
+      return ["HARDENING_EVIDENCE_PASSED"];
+    case "FRESH_QA":
+      return [
+        "FRESH_QA_OUTCOME_RECORDED",
+        "NO_UNRESOLVED_BLOCKING_FINDING",
+        "HANDOFF_PRESENT",
+        "PROMOTED_CONTEXT_DISPOSITION_RECORDED",
+      ];
+    case "REPAIR":
+      return ["REPAIR_EVIDENCE_PASSED"];
+    case "FOCUSED_RE_QA":
+      return [
+        "FOCUSED_RE_QA_OUTCOME_RECORDED",
+        "NO_UNRESOLVED_BLOCKING_FINDING",
+        "HANDOFF_PRESENT",
+        "PROMOTED_CONTEXT_DISPOSITION_RECORDED",
+      ];
+  }
+};
+
+const parseAcceptDurableWorkflowEvidenceInput = (
+  input: AcceptDurableWorkflowEvidenceInput,
+): AcceptDurableWorkflowEvidenceInput => {
+  const record = parseStrictInputRecord(input, "Durable workflow evidence", [
+    "evidenceId",
+    "projectId",
+    "bigTaskId",
+    "candidateBinding",
+    "subtaskId",
+    "observedStage",
+    "observedRepairCyclesUsed",
+    "kind",
+    "outcome",
+    "producer",
+    "sourceReference",
+    "occurredAt",
+  ]);
+  const identity = parseWorkflowIdentity(record, "Durable workflow evidence");
+  if (
+    !isActiveWorkflowStage(record.observedStage) ||
+    (record.observedRepairCyclesUsed !== 0 &&
+      record.observedRepairCyclesUsed !== 1) ||
+    typeof record.kind !== "string" ||
+    !DURABLE_WORKFLOW_EVIDENCE_KINDS.some((kind) => kind === record.kind) ||
+    (record.outcome !== "PASS" && record.outcome !== "BLOCKING_FAIL") ||
+    typeof record.producer !== "string" ||
+    !DURABLE_WORKFLOW_EVIDENCE_PRODUCERS.some(
+      (producer) => producer === record.producer,
+    ) ||
+    expectedEvidenceProducer(record.kind as DurableWorkflowEvidenceKind) !==
+      record.producer ||
+    (record.outcome === "BLOCKING_FAIL" &&
+      record.kind !== "FRESH_QA_OUTCOME_RECORDED" &&
+      record.kind !== "FOCUSED_RE_QA_OUTCOME_RECORDED") ||
+    typeof record.occurredAt !== "string" ||
+    !isCanonicalUtcTimestamp(record.occurredAt)
+  ) {
+    throw invalidInput("Durable workflow evidence");
+  }
+  return {
+    evidenceId: parseWorkflowRecordId(
+      record.evidenceId,
+      "wfe_",
+      "Durable workflow evidence ID",
+    ),
+    ...identity,
+    observedStage: record.observedStage,
+    observedRepairCyclesUsed: record.observedRepairCyclesUsed,
+    kind: record.kind as DurableWorkflowEvidenceKind,
+    outcome: record.outcome,
+    producer: record.producer as DurableWorkflowEvidenceProducer,
+    sourceReference: parseWorkflowSourceReference(
+      record.sourceReference,
+      "Durable workflow evidence source",
+    ),
+    occurredAt: record.occurredAt,
+  };
+};
+
+const workflowEvidenceReferenceOrder = [
+  "CANONICAL_MATERIALIZATION",
+  "PERSISTED_DEPENDENCY_READINESS",
+  "IMPLEMENTATION_CHECKPOINT",
+  "WORKFLOW_EVIDENCE",
+] as const;
+
+const canonicalWorkflowEvidenceReferences = (
+  references: readonly DurableWorkflowTransitionEvidenceReference[],
+): readonly DurableWorkflowTransitionEvidenceReference[] =>
+  Object.freeze(
+    [...references]
+      .map((reference) => Object.freeze({ ...reference }))
+      .sort((left, right) => {
+        const typeOrder =
+          workflowEvidenceReferenceOrder.indexOf(left.sourceType) -
+          workflowEvidenceReferenceOrder.indexOf(right.sourceType);
+        return typeOrder !== 0
+          ? typeOrder
+          : left.sourceReference < right.sourceReference
+            ? -1
+            : left.sourceReference > right.sourceReference
+              ? 1
+              : 0;
+      }),
+  );
+
+const parseCallerWorkflowEvidenceReferences = (
+  input: unknown,
+): readonly DurableWorkflowEvidenceReference[] => {
+  if (!Array.isArray(input) || input.length > 32) {
+    throw invalidInput("Durable workflow evidence references");
+  }
+  const references = input.map((value) => {
+    const record = parseStrictInputRecord(
+      value,
+      "Durable workflow evidence reference",
+      ["sourceType", "sourceReference"],
+    );
+    if (record.sourceType === "WORKFLOW_EVIDENCE") {
+      return Object.freeze({
+        sourceType: "WORKFLOW_EVIDENCE" as const,
+        sourceReference: parseWorkflowRecordId(
+          record.sourceReference,
+          "wfe_",
+          "Durable workflow evidence reference",
+        ),
+      });
+    }
+    if (record.sourceType === "IMPLEMENTATION_CHECKPOINT") {
+      const checkpointId = SubtaskImplementationCheckpointIdSchema.safeParse(
+        record.sourceReference,
+      );
+      if (!checkpointId.success || checkpointId.data !== record.sourceReference) {
+        throw invalidInput("Implementation Checkpoint evidence reference");
+      }
+      return Object.freeze({
+        sourceType: "IMPLEMENTATION_CHECKPOINT" as const,
+        sourceReference: checkpointId.data,
+      });
+    }
+    throw invalidInput("Durable workflow evidence reference");
+  });
+  const canonical = canonicalWorkflowEvidenceReferences(references);
+  if (
+    new Set(
+      canonical.map(
+        ({ sourceType, sourceReference }) => `${sourceType}:${sourceReference}`,
+      ),
+    ).size !== canonical.length
+  ) {
+    throw invalidInput("Durable workflow evidence references");
+  }
+  return canonical as readonly DurableWorkflowEvidenceReference[];
+};
+
+const encodeWorkflowEvidenceReferences = (
+  references: readonly DurableWorkflowTransitionEvidenceReference[],
+): string => JSON.stringify(canonicalWorkflowEvidenceReferences(references));
+
+const parseStoredWorkflowEvidenceReferences = (
+  input: string,
+): readonly DurableWorkflowTransitionEvidenceReference[] => {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(input) as unknown;
+  } catch {
+    throw malformedStoredData();
+  }
+  if (!Array.isArray(decoded) || decoded.length > 32) {
+    throw malformedStoredData();
+  }
+  const parsed = decoded.map((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw malformedStoredData();
+    }
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).length !== 2 ||
+      !Object.hasOwn(record, "sourceType") ||
+      !Object.hasOwn(record, "sourceReference") ||
+      typeof record.sourceReference !== "string"
+    ) {
+      throw malformedStoredData();
+    }
+    if (
+      record.sourceType === "WORKFLOW_EVIDENCE" ||
+      record.sourceType === "CANONICAL_MATERIALIZATION" ||
+      record.sourceType === "PERSISTED_DEPENDENCY_READINESS"
+    ) {
+      return Object.freeze({
+        sourceType: record.sourceType,
+        sourceReference: record.sourceReference,
+      });
+    }
+    if (record.sourceType === "IMPLEMENTATION_CHECKPOINT") {
+      return Object.freeze({
+        sourceType: record.sourceType,
+        sourceReference: record.sourceReference as SubtaskImplementationCheckpointId,
+      });
+    }
+    throw malformedStoredData();
+  });
+  const canonical = canonicalWorkflowEvidenceReferences(parsed);
+  if (
+    JSON.stringify(canonical) !== input ||
+    new Set(
+      canonical.map(
+        ({ sourceType, sourceReference }) => `${sourceType}:${sourceReference}`,
+      ),
+    ).size !== canonical.length
+  ) {
+    throw malformedStoredData();
+  }
+  return canonical;
+};
+
+const parseAdvanceDurableWorkflowInput = (
+  input: AdvanceDurableWorkflowInput,
+): AdvanceDurableWorkflowInput => {
+  const record = parseStrictInputRecord(input, "Durable workflow transition", [
+    "operationId",
+    "projectId",
+    "bigTaskId",
+    "candidateBinding",
+    "subtaskId",
+    "requestedNextStage",
+    "evidenceReferences",
+  ]);
+  const identity = parseWorkflowIdentity(record, "Durable workflow transition");
+  if (!isWorkflowStage(record.requestedNextStage)) {
+    throw invalidInput("Durable workflow transition");
+  }
+  return {
+    operationId: parseWorkflowRecordId(
+      record.operationId,
+      "wop_",
+      "Durable workflow operation ID",
+    ),
+    ...identity,
+    requestedNextStage: record.requestedNextStage,
+    evidenceReferences: parseCallerWorkflowEvidenceReferences(
+      record.evidenceReferences,
+    ),
+  };
+};
+
+const parseRequestDurableMaterializedGraphChangeInput = (
+  input: RequestDurableMaterializedGraphChangeInput,
+): RequestDurableMaterializedGraphChangeInput => {
+  const record = parseStrictInputRecord(
+    input,
+    "Durable materialized graph change",
+    ["operationId", "projectId", "bigTaskId", "candidateBinding", "changeKind"],
+  );
+  const projectId = ProjectIdSchema.safeParse(record.projectId);
+  const bigTaskId = BigTaskIdSchema.safeParse(record.bigTaskId);
+  if (
+    !projectId.success ||
+    projectId.data !== record.projectId ||
+    !bigTaskId.success ||
+    bigTaskId.data !== record.bigTaskId ||
+    typeof record.candidateBinding !== "string" ||
+    record.candidateBinding.length < 1 ||
+    record.candidateBinding.length > 2_048 ||
+    typeof record.changeKind !== "string" ||
+    !MATERIALIZED_GRAPH_CHANGE_KINDS.some(
+      (changeKind) => changeKind === record.changeKind,
+    )
+  ) {
+    throw invalidInput("Durable materialized graph change");
+  }
+  return {
+    operationId: parseWorkflowRecordId(
+      record.operationId,
+      "wop_",
+      "Durable workflow operation ID",
+    ),
+    projectId: projectId.data,
+    bigTaskId: bigTaskId.data,
+    candidateBinding: record.candidateBinding,
+    changeKind: record.changeKind as MaterializedGraphChangeKind,
+  };
+};
+
+const durableWorkflowEvidenceFromRow = (
+  row: DurableWorkflowEvidenceRow,
+): DurableWorkflowEvidence => {
+  const projectId = ProjectIdSchema.safeParse(row.projectId);
+  const bigTaskId = BigTaskIdSchema.safeParse(row.bigTaskId);
+  const subtaskId = SubtaskIdSchema.safeParse(row.subtaskId);
+  if (
+    !isWorkflowRecordId(row.evidenceId, "wfe_") ||
+    !projectId.success ||
+    projectId.data !== row.projectId ||
+    !bigTaskId.success ||
+    bigTaskId.data !== row.bigTaskId ||
+    !subtaskId.success ||
+    subtaskId.data !== row.subtaskId ||
+    !Number.isSafeInteger(row.planRevision) ||
+    row.planRevision < 1 ||
+    typeof row.candidateBinding !== "string" ||
+    row.candidateBinding.length < 1 ||
+    !Number.isSafeInteger(row.expectedSequence) ||
+    row.expectedSequence < 1 ||
+    !isActiveWorkflowStage(row.observedStage) ||
+    (row.observedRepairCyclesUsed !== 0 &&
+      row.observedRepairCyclesUsed !== 1) ||
+    !DURABLE_WORKFLOW_EVIDENCE_KINDS.some(
+      (kind) => kind === row.evidenceKind,
+    ) ||
+    (row.outcome !== "PASS" && row.outcome !== "BLOCKING_FAIL") ||
+    !DURABLE_WORKFLOW_EVIDENCE_PRODUCERS.some(
+      (producer) => producer === row.producer,
+    ) ||
+    expectedEvidenceProducer(row.evidenceKind as DurableWorkflowEvidenceKind) !==
+      row.producer ||
+    (row.outcome === "BLOCKING_FAIL" &&
+      row.evidenceKind !== "FRESH_QA_OUTCOME_RECORDED" &&
+      row.evidenceKind !== "FOCUSED_RE_QA_OUTCOME_RECORDED") ||
+    row.sourceReference.trim() !== row.sourceReference ||
+    row.sourceReference.length < 1 ||
+    row.sourceReference.length > 2_048 ||
+    !isCanonicalUtcTimestamp(row.occurredAt) ||
+    !isCanonicalUtcTimestamp(row.acceptedAt) ||
+    new Date(row.acceptedAt).getTime() < new Date(row.occurredAt).getTime()
+  ) {
+    throw malformedStoredData();
+  }
+  return deepFreeze({
+    evidenceId: row.evidenceId,
+    projectId: projectId.data,
+    bigTaskId: bigTaskId.data,
+    planRevision: row.planRevision,
+    candidateBinding: row.candidateBinding,
+    subtaskId: subtaskId.data,
+    expectedSequence: row.expectedSequence,
+    observedStage: row.observedStage,
+    observedRepairCyclesUsed: row.observedRepairCyclesUsed,
+    kind: row.evidenceKind as DurableWorkflowEvidenceKind,
+    outcome: row.outcome as DurableWorkflowEvidenceOutcome,
+    producer: row.producer as DurableWorkflowEvidenceProducer,
+    sourceReference: row.sourceReference,
+    occurredAt: row.occurredAt,
+    acceptedAt: row.acceptedAt,
+  });
+};
+
+const durableWorkflowTransitionFromRow = (
+  row: DurableWorkflowTransitionRow,
+): DurableWorkflowTransition => {
+  const projectId = ProjectIdSchema.safeParse(row.projectId);
+  const bigTaskId = BigTaskIdSchema.safeParse(row.bigTaskId);
+  const subtaskId = SubtaskIdSchema.safeParse(row.subtaskId);
+  if (
+    !isWorkflowRecordId(row.operationId, "wop_") ||
+    !projectId.success ||
+    projectId.data !== row.projectId ||
+    !bigTaskId.success ||
+    bigTaskId.data !== row.bigTaskId ||
+    !subtaskId.success ||
+    subtaskId.data !== row.subtaskId ||
+    !Number.isSafeInteger(row.planRevision) ||
+    row.planRevision < 1 ||
+    row.candidateBinding.length < 1 ||
+    !Number.isSafeInteger(row.sequence) ||
+    row.sequence < 1 ||
+    !isActiveWorkflowStage(row.priorStage) ||
+    !isWorkflowStage(row.resultingStage) ||
+    row.resultingStage === "PLAN" ||
+    row.resultingStage === "REVIEW" ||
+    row.resultingStage === "MATERIALIZE" ||
+    (row.priorRepairCyclesUsed !== 0 && row.priorRepairCyclesUsed !== 1) ||
+    (row.resultingRepairCyclesUsed !== 0 &&
+      row.resultingRepairCyclesUsed !== 1) ||
+    !isCanonicalUtcTimestamp(row.occurredAt)
+  ) {
+    throw malformedStoredData();
+  }
+  return deepFreeze({
+    operationId: row.operationId,
+    projectId: projectId.data,
+    bigTaskId: bigTaskId.data,
+    planRevision: row.planRevision,
+    candidateBinding: row.candidateBinding,
+    subtaskId: subtaskId.data,
+    sequence: row.sequence,
+    priorStage: row.priorStage,
+    resultingStage: row.resultingStage,
+    priorRepairCyclesUsed: row.priorRepairCyclesUsed,
+    resultingRepairCyclesUsed: row.resultingRepairCyclesUsed,
+    evidenceReferences: parseStoredWorkflowEvidenceReferences(
+      row.evidenceReferences,
+    ),
+    occurredAt: row.occurredAt,
+  });
+};
+
+const durableWorkflowHumanRequirementFromRow = (
+  row: DurableWorkflowHumanRequirementRow,
+): DurableWorkflowHumanRequirement => {
+  const projectId = ProjectIdSchema.safeParse(row.projectId);
+  const bigTaskId = BigTaskIdSchema.safeParse(row.bigTaskId);
+  const subtaskId =
+    row.subtaskId === null ? null : SubtaskIdSchema.safeParse(row.subtaskId);
+  const isBigTaskScope =
+    row.scopeKind === "BIG_TASK" &&
+    row.scopeKey === row.bigTaskId &&
+    row.subtaskId === null &&
+    row.sequence === null &&
+    row.currentStage === null &&
+    row.requestedNextStage === null &&
+    row.repairCyclesUsed === null &&
+    row.reason === "REPLAN_REQUIRED";
+  const isSubtaskScope =
+    row.scopeKind === "SUBTASK" &&
+    row.scopeKey === row.subtaskId &&
+    subtaskId !== null &&
+    subtaskId.success &&
+    subtaskId.data === row.subtaskId &&
+    Number.isSafeInteger(row.sequence) &&
+    (row.sequence ?? 0) >= 1 &&
+    isActiveWorkflowStage(row.currentStage) &&
+    isWorkflowStage(row.requestedNextStage) &&
+    row.requestedNextStage !== "PLAN" &&
+    row.requestedNextStage !== "REVIEW" &&
+    row.requestedNextStage !== "MATERIALIZE" &&
+    (row.repairCyclesUsed === 0 || row.repairCyclesUsed === 1) &&
+    (row.reason === "REPAIR_REQA_EXHAUSTED" ||
+      row.reason === "AUTHORITY_BLOCKED");
+  if (
+    !isWorkflowRecordId(row.operationId, "wop_") ||
+    !projectId.success ||
+    projectId.data !== row.projectId ||
+    !bigTaskId.success ||
+    bigTaskId.data !== row.bigTaskId ||
+    !Number.isSafeInteger(row.planRevision) ||
+    row.planRevision < 1 ||
+    row.candidateBinding.length < 1 ||
+    (!isBigTaskScope && !isSubtaskScope) ||
+    row.sourceReference.trim() !== row.sourceReference ||
+    row.sourceReference.length < 1 ||
+    row.sourceReference.length > 2_048 ||
+    !isCanonicalUtcTimestamp(row.createdAt)
+  ) {
+    throw malformedStoredData();
+  }
+  return deepFreeze({
+    operationId: row.operationId,
+    projectId: projectId.data,
+    bigTaskId: bigTaskId.data,
+    planRevision: row.planRevision,
+    candidateBinding: row.candidateBinding,
+    scope: row.scopeKind as "BIG_TASK" | "SUBTASK",
+    subtaskId: row.subtaskId as SubtaskId | null,
+    sequence: row.sequence,
+    currentStage: row.currentStage as WorkflowStage | null,
+    requestedNextStage: row.requestedNextStage as WorkflowStage | null,
+    repairCyclesUsed: row.repairCyclesUsed as 0 | 1 | null,
+    reason: row.reason as DurableWorkflowHumanRequirement["reason"],
+    evidenceReferences: parseStoredWorkflowEvidenceReferences(
+      row.evidenceReferences,
+    ),
+    sourceReference: row.sourceReference,
+    createdAt: row.createdAt,
+  });
 };
 
 const contextItemFromRow = (row: ContextItemRow): ContextItem => {
@@ -1900,6 +2526,638 @@ export class TaskStorage {
           throw malformedStoredData();
         }
         return instance;
+      }),
+    );
+  }
+
+  acceptDurableWorkflowEvidence(
+    input: AcceptDurableWorkflowEvidenceInput,
+  ): DurableWorkflowEvidence {
+    const evidence = parseAcceptDurableWorkflowEvidenceInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const existing = this.#getDurableWorkflowEvidenceById(
+          evidence.evidenceId,
+        );
+        if (existing !== null) {
+          if (
+            existing.projectId === evidence.projectId &&
+            existing.bigTaskId === evidence.bigTaskId &&
+            existing.candidateBinding === evidence.candidateBinding &&
+            existing.subtaskId === evidence.subtaskId &&
+            existing.observedStage === evidence.observedStage &&
+            existing.observedRepairCyclesUsed ===
+              evidence.observedRepairCyclesUsed &&
+            existing.kind === evidence.kind &&
+            existing.outcome === evidence.outcome &&
+            existing.producer === evidence.producer &&
+            existing.sourceReference === evidence.sourceReference &&
+            existing.occurredAt === evidence.occurredAt
+          ) {
+            return existing;
+          }
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The durable workflow evidence ID already belongs to different evidence.",
+          );
+        }
+
+        const view = this.#readWorkflowControlView(evidence.subtaskId);
+        this.#assertWorkflowIdentity(evidence, view);
+        if (!isActiveWorkflowStage(view.currentStage)) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The evidence is not current and relevant to the canonical workflow state.",
+          );
+        }
+        if (
+          view.unresolvedHumanRequired !== null ||
+          view.currentStage !== evidence.observedStage ||
+          view.repairCyclesUsed !== evidence.observedRepairCyclesUsed ||
+          !evidenceKindsForWorkflowStage(view.currentStage).includes(
+            evidence.kind,
+          )
+        ) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The evidence is not current and relevant to the canonical workflow state.",
+          );
+        }
+        const existingSource = this.#database
+          .select({ evidenceId: durableWorkflowEvidenceTable.evidenceId })
+          .from(durableWorkflowEvidenceTable)
+          .where(
+            and(
+              eq(durableWorkflowEvidenceTable.subtaskId, evidence.subtaskId),
+              eq(durableWorkflowEvidenceTable.evidenceKind, evidence.kind),
+              eq(
+                durableWorkflowEvidenceTable.sourceReference,
+                evidence.sourceReference,
+              ),
+            ),
+          )
+          .get();
+        if (existingSource !== undefined) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The durable workflow evidence source is already attributed.",
+          );
+        }
+        const previousAt =
+          view.transitions[view.transitions.length - 1]?.occurredAt ??
+          view.initializedAt;
+        if (
+          new Date(evidence.occurredAt).getTime() <
+          new Date(previousAt).getTime()
+        ) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The durable workflow evidence source is stale.",
+          );
+        }
+        const acceptedAt = this.#workflowTimestampAtOrAfter(
+          previousAt,
+          evidence.occurredAt,
+        );
+        this.#database
+          .insert(durableWorkflowEvidenceTable)
+          .values({
+            evidenceId: evidence.evidenceId,
+            projectId: view.projectId,
+            bigTaskId: view.bigTaskId,
+            planRevision: view.planRevision,
+            candidateBinding: view.candidateBinding,
+            subtaskId: view.subtaskId,
+            expectedSequence: view.transitionCount + 1,
+            observedStage: view.currentStage,
+            observedRepairCyclesUsed: view.repairCyclesUsed,
+            evidenceKind: evidence.kind,
+            outcome: evidence.outcome,
+            producer: evidence.producer,
+            sourceReference: evidence.sourceReference,
+            occurredAt: evidence.occurredAt,
+            acceptedAt,
+          })
+          .run();
+        const stored = this.#getDurableWorkflowEvidenceById(
+          evidence.evidenceId,
+        );
+        if (stored === null) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The durable workflow evidence was not persisted.",
+          );
+        }
+        return stored;
+      }),
+    );
+  }
+
+  getDurableWorkflowEvidence(input: string): DurableWorkflowEvidence | null {
+    const evidenceId = parseWorkflowRecordId(
+      input,
+      "wfe_",
+      "Durable workflow evidence ID",
+    );
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const evidence = this.#getDurableWorkflowEvidenceById(evidenceId);
+        if (evidence === null) {
+          return null;
+        }
+        const view = this.#readWorkflowControlView(evidence.subtaskId);
+        if (
+          evidence.projectId !== view.projectId ||
+          evidence.bigTaskId !== view.bigTaskId ||
+          evidence.planRevision !== view.planRevision ||
+          evidence.candidateBinding !== view.candidateBinding ||
+          evidence.expectedSequence > view.transitionCount + 1
+        ) {
+          throw malformedStoredData();
+        }
+        const priorTransition = view.transitions[evidence.expectedSequence - 2];
+        const expectedStage =
+          priorTransition?.resultingStage ?? view.initialStage;
+        const expectedRepairCyclesUsed =
+          priorTransition?.resultingRepairCyclesUsed ??
+          view.initialRepairCyclesUsed;
+        const previousAt =
+          priorTransition?.occurredAt ??
+          view.initializedAt;
+        if (
+          evidence.observedStage !== expectedStage ||
+          evidence.observedRepairCyclesUsed !== expectedRepairCyclesUsed ||
+          new Date(evidence.occurredAt).getTime() <
+            new Date(previousAt).getTime()
+        ) {
+          throw malformedStoredData();
+        }
+        return evidence;
+      }),
+    );
+  }
+
+  getDurableWorkflowControlView(
+    input: SubtaskId,
+  ): DurableWorkflowControlView | null {
+    const subtaskId = parseCanonicalSubtaskId(input);
+    return this.#operation(() =>
+      this.#readSnapshot(() => {
+        const instance = this.#database
+          .select({ subtaskId: subtaskWorkflowInstancesTable.subtaskId })
+          .from(subtaskWorkflowInstancesTable)
+          .where(eq(subtaskWorkflowInstancesTable.subtaskId, subtaskId))
+          .get();
+        return instance === undefined
+          ? null
+          : this.#readWorkflowControlView(subtaskId);
+      }),
+    );
+  }
+
+  advanceDurableWorkflow(
+    input: AdvanceDurableWorkflowInput,
+  ): AdvanceDurableWorkflowResult {
+    const request = parseAdvanceDurableWorkflowInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const existingTransitionRow = this.#database
+          .select()
+          .from(durableWorkflowTransitionsTable)
+          .where(
+            eq(durableWorkflowTransitionsTable.operationId, request.operationId),
+          )
+          .get();
+        const existingHumanRow = this.#database
+          .select()
+          .from(durableWorkflowHumanRequirementsTable)
+          .where(
+            eq(
+              durableWorkflowHumanRequirementsTable.operationId,
+              request.operationId,
+            ),
+          )
+          .get();
+        if (existingTransitionRow !== undefined && existingHumanRow !== undefined) {
+          throw malformedStoredData();
+        }
+        if (existingTransitionRow !== undefined) {
+          const transition = durableWorkflowTransitionFromRow(
+            existingTransitionRow,
+          );
+          const callerReferences = transition.evidenceReferences.filter(
+            (reference): reference is DurableWorkflowEvidenceReference =>
+              reference.sourceType === "WORKFLOW_EVIDENCE" ||
+              reference.sourceType === "IMPLEMENTATION_CHECKPOINT",
+          );
+          if (
+            transition.projectId !== request.projectId ||
+            transition.bigTaskId !== request.bigTaskId ||
+            transition.candidateBinding !== request.candidateBinding ||
+            transition.subtaskId !== request.subtaskId ||
+            transition.resultingStage !== request.requestedNextStage ||
+            encodeWorkflowEvidenceReferences(callerReferences) !==
+              encodeWorkflowEvidenceReferences(request.evidenceReferences)
+          ) {
+            throw new TaskStorageError(
+              "CONFLICT",
+              "The durable workflow operation ID conflicts with prior history.",
+            );
+          }
+          const view = this.#readWorkflowControlView(request.subtaskId);
+          return deepFreeze({ kind: "TRANSITION_RECORDED", transition, view });
+        }
+        if (existingHumanRow !== undefined) {
+          const requirement = durableWorkflowHumanRequirementFromRow(
+            existingHumanRow,
+          );
+          const callerReferences = requirement.evidenceReferences.filter(
+            (reference): reference is DurableWorkflowEvidenceReference =>
+              reference.sourceType === "WORKFLOW_EVIDENCE" ||
+              reference.sourceType === "IMPLEMENTATION_CHECKPOINT",
+          );
+          if (
+            requirement.scope !== "SUBTASK" ||
+            requirement.projectId !== request.projectId ||
+            requirement.bigTaskId !== request.bigTaskId ||
+            requirement.candidateBinding !== request.candidateBinding ||
+            requirement.subtaskId !== request.subtaskId ||
+            requirement.requestedNextStage !== request.requestedNextStage ||
+            encodeWorkflowEvidenceReferences(callerReferences) !==
+              encodeWorkflowEvidenceReferences(request.evidenceReferences)
+          ) {
+            throw new TaskStorageError(
+              "CONFLICT",
+              "The durable workflow operation ID conflicts with prior history.",
+            );
+          }
+          const view = this.#readWorkflowControlView(request.subtaskId);
+          return deepFreeze({ kind: "HUMAN_REQUIRED", requirement, view });
+        }
+
+        const view = this.#readWorkflowControlView(request.subtaskId);
+        this.#assertWorkflowIdentity(request, view);
+        if (view.unresolvedHumanRequired !== null) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The workflow has an unresolved HUMAN_REQUIRED condition.",
+          );
+        }
+        const source = this.#readCanonicalTaskMaterialization(view.bigTaskId);
+        const graph = this.#workflowGraphFromSource(source);
+        const sequence = view.transitionCount + 1;
+        for (const reference of request.evidenceReferences) {
+          if (reference.sourceType === "WORKFLOW_EVIDENCE") {
+            const evidence = this.#getDurableWorkflowEvidenceById(
+              reference.sourceReference,
+            );
+            if (
+              evidence === null ||
+              evidence.projectId !== view.projectId ||
+              evidence.bigTaskId !== view.bigTaskId ||
+              evidence.planRevision !== view.planRevision ||
+              evidence.candidateBinding !== view.candidateBinding ||
+              evidence.subtaskId !== view.subtaskId ||
+              evidence.expectedSequence !== sequence ||
+              evidence.observedStage !== view.currentStage ||
+              evidence.observedRepairCyclesUsed !== view.repairCyclesUsed
+            ) {
+              throw new TaskStorageError(
+                "CONFLICT",
+                "The workflow evidence reference is stale or belongs to another authority scope.",
+              );
+            }
+          } else {
+            const checkpoint = this.#getSubtaskImplementationCheckpoint(
+              reference.sourceReference,
+            );
+            if (checkpoint === null || checkpoint.subtaskId !== view.subtaskId) {
+              throw new TaskStorageError(
+                "CONFLICT",
+                "The Implementation Checkpoint belongs to another Subtask.",
+              );
+            }
+          }
+        }
+        const references: DurableWorkflowTransitionEvidenceReference[] = [
+          ...request.evidenceReferences,
+        ];
+        if (view.currentStage === "MATERIALIZE") {
+          references.push(
+            {
+              sourceType: "CANONICAL_MATERIALIZATION",
+              sourceReference:
+                this.#canonicalMaterializationWorkflowReference(source),
+            },
+            {
+              sourceType: "PERSISTED_DEPENDENCY_READINESS",
+              sourceReference: this.#dependencyReadinessWorkflowReference(
+                source,
+                view.subtaskId,
+                sequence,
+              ),
+            },
+          );
+        }
+        const canonicalReferences =
+          canonicalWorkflowEvidenceReferences(references);
+        const previousAt =
+          view.transitions[view.transitions.length - 1]?.occurredAt ??
+          view.initializedAt;
+        const resolved = this.#resolveWorkflowTransitionEvidence(
+          source,
+          {
+            projectId: view.projectId,
+            bigTaskId: view.bigTaskId,
+            planRevision: view.planRevision,
+            candidateBinding: view.candidateBinding,
+            subtaskId: view.subtaskId,
+            initialStage: view.initialStage,
+            initialRepairCyclesUsed: view.initialRepairCyclesUsed,
+            initializedAt: this.#readWorkflowInitialization(view.bigTaskId)
+              .initializedAt,
+            profile: view.profile,
+            writeEnabled: view.writeEnabled,
+          },
+          view.currentStage,
+          view.repairCyclesUsed,
+          sequence,
+          previousAt,
+          canonicalReferences,
+        );
+        const decision = evaluateStageTransition({
+          graph,
+          subtaskId: view.subtaskId,
+          currentStage: view.currentStage,
+          requestedNextStage: request.requestedNextStage,
+          evidence: {
+            candidateBinding: view.candidateBinding,
+            subtaskId: view.subtaskId,
+            facts: resolved.facts,
+          },
+          repairCyclesUsed: view.repairCyclesUsed,
+        });
+        if (decision.kind === "BLOCKED") {
+          return deepFreeze({ kind: "BLOCKED", decision, view });
+        }
+
+        const targetRow = this.#database
+          .select()
+          .from(subtasksTable)
+          .where(eq(subtasksTable.id, view.subtaskId))
+          .get();
+        if (
+          targetRow === undefined ||
+          !isCanonicalUtcTimestamp(targetRow.updatedAt)
+        ) {
+          throw malformedStoredData();
+        }
+        const occurredAt = this.#workflowTimestampAtOrAfter(
+          previousAt,
+          resolved.latestEvidenceAt,
+          targetRow.updatedAt,
+        );
+        if (decision.kind === "HUMAN_REQUIRED") {
+          this.#database
+            .insert(durableWorkflowHumanRequirementsTable)
+            .values({
+              operationId: request.operationId,
+              projectId: view.projectId,
+              bigTaskId: view.bigTaskId,
+              planRevision: view.planRevision,
+              candidateBinding: view.candidateBinding,
+              scopeKind: "SUBTASK",
+              scopeKey: view.subtaskId,
+              subtaskId: view.subtaskId,
+              sequence,
+              currentStage: view.currentStage,
+              requestedNextStage: request.requestedNextStage,
+              repairCyclesUsed: view.repairCyclesUsed,
+              reason: decision.reason,
+              evidenceReferences: encodeWorkflowEvidenceReferences(
+                canonicalReferences,
+              ),
+              sourceReference: `stage-transition:${decision.reason}`,
+              createdAt: occurredAt,
+            })
+            .run();
+          const nextView = this.#readWorkflowControlView(view.subtaskId);
+          const requirement = nextView.unresolvedHumanRequired;
+          if (
+            requirement === null ||
+            requirement.operationId !== request.operationId
+          ) {
+            throw new TaskStorageError(
+              "STORAGE_OPERATION_FAILED",
+              "The HUMAN_REQUIRED condition was not persisted.",
+            );
+          }
+          return deepFreeze({
+            kind: "HUMAN_REQUIRED",
+            requirement,
+            view: nextView,
+          });
+        }
+
+        const lifecycle = this.#assertWorkflowLifecycleTransition(
+          view,
+          decision.nextStage,
+          resolved.boardEvidence,
+        );
+        this.#database
+          .insert(durableWorkflowTransitionsTable)
+          .values({
+            operationId: request.operationId,
+            projectId: view.projectId,
+            bigTaskId: view.bigTaskId,
+            planRevision: view.planRevision,
+            candidateBinding: view.candidateBinding,
+            subtaskId: view.subtaskId,
+            sequence,
+            priorStage: view.currentStage,
+            resultingStage: decision.nextStage,
+            priorRepairCyclesUsed: view.repairCyclesUsed,
+            resultingRepairCyclesUsed: decision.repairCyclesUsed,
+            evidenceReferences: encodeWorkflowEvidenceReferences(
+              canonicalReferences,
+            ),
+            occurredAt,
+          })
+          .run();
+        if (
+          lifecycle.status !== view.boardStatus ||
+          lifecycle.maturity !== view.deliveryMaturity
+        ) {
+          const update = this.#database
+            .update(subtasksTable)
+            .set({
+              status: lifecycle.status,
+              maturity: lifecycle.maturity,
+              updatedAt: occurredAt,
+            })
+            .where(
+              and(
+                eq(subtasksTable.id, view.subtaskId),
+                eq(subtasksTable.status, view.boardStatus),
+                eq(subtasksTable.maturity, view.deliveryMaturity),
+                eq(subtasksTable.updatedAt, targetRow.updatedAt),
+              ),
+            )
+            .run();
+          if (update.changes !== 1) {
+            throw new TaskStorageError(
+              "CONFLICT",
+              "The atomic workflow lifecycle composition could not be persisted.",
+            );
+          }
+        }
+        const nextView = this.#readWorkflowControlView(view.subtaskId);
+        const transition = nextView.transitions[nextView.transitions.length - 1];
+        if (
+          transition === undefined ||
+          transition.operationId !== request.operationId
+        ) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The durable workflow transition was not persisted.",
+          );
+        }
+        return deepFreeze({
+          kind: "TRANSITION_RECORDED",
+          transition,
+          view: nextView,
+        });
+      }),
+    );
+  }
+
+  requestDurableMaterializedGraphChange(
+    input: RequestDurableMaterializedGraphChangeInput,
+  ): RequestDurableMaterializedGraphChangeResult {
+    const request = parseRequestDurableMaterializedGraphChangeInput(input);
+    return this.#operation(() =>
+      this.#atomic(() => {
+        const existingTransition = this.#database
+          .select({ operationId: durableWorkflowTransitionsTable.operationId })
+          .from(durableWorkflowTransitionsTable)
+          .where(
+            eq(durableWorkflowTransitionsTable.operationId, request.operationId),
+          )
+          .get();
+        const existingHumanRow = this.#database
+          .select()
+          .from(durableWorkflowHumanRequirementsTable)
+          .where(
+            eq(
+              durableWorkflowHumanRequirementsTable.operationId,
+              request.operationId,
+            ),
+          )
+          .get();
+        if (existingTransition !== undefined) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The durable workflow operation ID conflicts with transition history.",
+          );
+        }
+        if (existingHumanRow !== undefined) {
+          const existing = durableWorkflowHumanRequirementFromRow(
+            existingHumanRow,
+          );
+          if (
+            existing.scope === "BIG_TASK" &&
+            existing.projectId === request.projectId &&
+            existing.bigTaskId === request.bigTaskId &&
+            existing.candidateBinding === request.candidateBinding &&
+            existing.sourceReference ===
+              `materialized-graph-change:${request.changeKind}`
+          ) {
+            return deepFreeze({ kind: "HUMAN_REQUIRED", requirement: existing });
+          }
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The durable workflow operation ID conflicts with prior history.",
+          );
+        }
+
+        const source = this.#readCanonicalTaskMaterialization(request.bigTaskId);
+        if (
+          source.projectId !== request.projectId ||
+          source.candidateBinding !== request.candidateBinding
+        ) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The graph-change request does not match canonical materialization authority.",
+          );
+        }
+        const graph = this.#workflowGraphFromSource(source);
+        const rejection = rejectMaterializedGraphChange(graph, request.changeKind);
+        if (
+          rejection.kind !== "HUMAN_REQUIRED" ||
+          rejection.reason !== "REPLAN_REQUIRED"
+        ) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The materialized graph change request is invalid.",
+          );
+        }
+        const views = this.#readWorkflowControlViews(source.bigTaskId);
+        if (views.some(({ unresolvedHumanRequired }) => unresolvedHumanRequired !== null)) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The workflow already has an unresolved HUMAN_REQUIRED condition.",
+          );
+        }
+        const previousTimestamps = views.flatMap(({ transitions }) =>
+          transitions.length === 0
+            ? []
+            : [transitions[transitions.length - 1]!.occurredAt],
+        );
+        const createdAt = this.#workflowTimestampAtOrAfter(
+          this.#readWorkflowInitialization(source.bigTaskId).initializedAt,
+          ...previousTimestamps,
+        );
+        this.#database
+          .insert(durableWorkflowHumanRequirementsTable)
+          .values({
+            operationId: request.operationId,
+            projectId: source.projectId,
+            bigTaskId: source.bigTaskId,
+            planRevision: source.planRevision,
+            candidateBinding: source.candidateBinding,
+            scopeKind: "BIG_TASK",
+            scopeKey: source.bigTaskId,
+            subtaskId: null,
+            sequence: null,
+            currentStage: null,
+            requestedNextStage: null,
+            repairCyclesUsed: null,
+            reason: "REPLAN_REQUIRED",
+            evidenceReferences: encodeWorkflowEvidenceReferences([]),
+            sourceReference: `materialized-graph-change:${request.changeKind}`,
+            createdAt,
+          })
+          .run();
+        const requirementRow = this.#database
+          .select()
+          .from(durableWorkflowHumanRequirementsTable)
+          .where(
+            eq(
+              durableWorkflowHumanRequirementsTable.operationId,
+              request.operationId,
+            ),
+          )
+          .get();
+        if (requirementRow === undefined) {
+          throw new TaskStorageError(
+            "STORAGE_OPERATION_FAILED",
+            "The graph-change HUMAN_REQUIRED condition was not persisted.",
+          );
+        }
+        return deepFreeze({
+          kind: "HUMAN_REQUIRED",
+          requirement: durableWorkflowHumanRequirementFromRow(requirementRow),
+        });
       }),
     );
   }
@@ -3840,6 +5098,656 @@ export class TaskStorage {
       new Date(row.initializedAt).getTime() >=
         new Date(source.materializedAt).getTime()
     );
+  }
+
+  #workflowGraphFromSource(
+    source: CanonicalTaskMaterialization,
+  ): MaterializedGraph {
+    return deepFreeze({
+      kind: "MATERIALIZED_GRAPH" as const,
+      projectId: source.projectId,
+      bigTaskId: source.bigTaskId,
+      planRevision: source.planRevision,
+      candidateBinding: source.candidateBinding,
+      subtasks: source.subtasks.map(
+        ({ subtaskId, taskContractRef, profile, writeEnabled }) => ({
+          id: subtaskId,
+          bigTaskId: source.bigTaskId,
+          profile,
+          taskContractRef,
+          writeEnabled,
+        }),
+      ),
+      dependencies: source.dependencies,
+    });
+  }
+
+  #canonicalMaterializationWorkflowReference(
+    source: CanonicalTaskMaterialization,
+  ): string {
+    return [
+      "canonical-materialization",
+      source.projectId,
+      source.bigTaskId,
+      String(source.planRevision),
+      source.candidateBinding,
+    ].join(":");
+  }
+
+  #dependencyReadinessWorkflowReference(
+    source: CanonicalTaskMaterialization,
+    subtaskId: SubtaskId,
+    sequence: number,
+  ): string {
+    return [
+      "persisted-dependency-readiness",
+      source.projectId,
+      source.bigTaskId,
+      String(source.planRevision),
+      source.candidateBinding,
+      subtaskId,
+      String(sequence),
+    ].join(":");
+  }
+
+  #getDurableWorkflowEvidenceById(
+    evidenceId: string,
+  ): DurableWorkflowEvidence | null {
+    const row = this.#database
+      .select()
+      .from(durableWorkflowEvidenceTable)
+      .where(eq(durableWorkflowEvidenceTable.evidenceId, evidenceId))
+      .get();
+    return row === undefined ? null : durableWorkflowEvidenceFromRow(row);
+  }
+
+  #resolveWorkflowTransitionEvidence(
+    source: CanonicalTaskMaterialization,
+    instance: DurableSubtaskWorkflowInstance,
+    currentStage: WorkflowStage,
+    repairCyclesUsed: 0 | 1,
+    sequence: number,
+    stageEnteredAt: string,
+    references: readonly DurableWorkflowTransitionEvidenceReference[],
+    transitionOccurredAt?: string,
+  ): Readonly<{
+    facts: Readonly<StageEvidenceFacts>;
+    boardEvidence: Readonly<{
+      noUnresolvedBlockingFinding: boolean;
+      handoffPresent: boolean;
+      promotedContextDispositionRecorded: boolean;
+    }>;
+    latestEvidenceAt: string;
+  }> {
+    if (!isActiveWorkflowStage(currentStage)) {
+      throw malformedStoredData();
+    }
+    const facts: { -readonly [Key in keyof StageEvidenceFacts]: StageEvidenceFacts[Key] } = {};
+    let noUnresolvedBlockingFinding = false;
+    let handoffPresent = false;
+    let promotedContextDispositionRecorded = false;
+    let latestEvidenceAt = stageEnteredAt;
+    const evidenceKinds = new Set<DurableWorkflowEvidenceKind>();
+    let implementationCheckpointSeen = false;
+
+    for (const reference of references) {
+      switch (reference.sourceType) {
+        case "CANONICAL_MATERIALIZATION": {
+          if (
+            Object.hasOwn(facts, "graphMaterialized") ||
+            reference.sourceReference !==
+              this.#canonicalMaterializationWorkflowReference(source)
+          ) {
+            throw malformedStoredData();
+          }
+          facts.graphMaterialized = true;
+          if (
+            new Date(source.materializedAt).getTime() >
+            new Date(latestEvidenceAt).getTime()
+          ) {
+            latestEvidenceAt = source.materializedAt;
+          }
+          break;
+        }
+        case "PERSISTED_DEPENDENCY_READINESS": {
+          if (
+            Object.hasOwn(facts, "dependenciesReady") ||
+            reference.sourceReference !==
+              this.#dependencyReadinessWorkflowReference(
+                source,
+                instance.subtaskId,
+                sequence,
+              )
+          ) {
+            throw malformedStoredData();
+          }
+          const readiness = this.evaluateStoredSubtaskDependencyReadiness(
+            instance.subtaskId,
+          );
+          facts.dependenciesReady = readiness.ready;
+          break;
+        }
+        case "IMPLEMENTATION_CHECKPOINT": {
+          const checkpointId = SubtaskImplementationCheckpointIdSchema.safeParse(
+            reference.sourceReference,
+          );
+          if (!checkpointId.success || implementationCheckpointSeen) {
+            throw malformedStoredData();
+          }
+          implementationCheckpointSeen = true;
+          const checkpoint = this.#getSubtaskImplementationCheckpoint(
+            checkpointId.data,
+          );
+          if (
+            checkpoint === null ||
+            checkpoint.id !== reference.sourceReference ||
+            checkpoint.subtaskId !== instance.subtaskId ||
+            new Date(checkpoint.occurredAt).getTime() <
+              new Date(stageEnteredAt).getTime()
+          ) {
+            throw malformedStoredData();
+          }
+          facts.executionEvidencePassed = true;
+          if (
+            new Date(checkpoint.occurredAt).getTime() >
+            new Date(latestEvidenceAt).getTime()
+          ) {
+            latestEvidenceAt = checkpoint.occurredAt;
+          }
+          break;
+        }
+        case "WORKFLOW_EVIDENCE": {
+          const evidence = this.#getDurableWorkflowEvidenceById(
+            reference.sourceReference,
+          );
+          if (
+            evidence === null ||
+            evidence.evidenceId !== reference.sourceReference ||
+            evidence.projectId !== instance.projectId ||
+            evidence.bigTaskId !== instance.bigTaskId ||
+            evidence.planRevision !== instance.planRevision ||
+            evidence.candidateBinding !== instance.candidateBinding ||
+            evidence.subtaskId !== instance.subtaskId ||
+            evidence.expectedSequence !== sequence ||
+            evidence.observedStage !== currentStage ||
+            evidence.observedRepairCyclesUsed !== repairCyclesUsed ||
+            !evidenceKindsForWorkflowStage(currentStage).includes(
+              evidence.kind,
+            ) ||
+            new Date(evidence.occurredAt).getTime() <
+              new Date(stageEnteredAt).getTime() ||
+            evidenceKinds.has(evidence.kind)
+          ) {
+            throw malformedStoredData();
+          }
+          evidenceKinds.add(evidence.kind);
+          switch (evidence.kind) {
+            case "REPOSITORY_PREFLIGHT_PASSED":
+              facts.repositoryPreflightPassed = evidence.outcome === "PASS";
+              break;
+            case "CONTEXT_PREFLIGHT_PASSED":
+              facts.contextPreflightPassed = evidence.outcome === "PASS";
+              break;
+            case "BUDGET_AVAILABLE":
+              facts.budgetAvailable = evidence.outcome === "PASS";
+              break;
+            case "CONCURRENCY_AVAILABLE":
+              facts.concurrencyAvailable = evidence.outcome === "PASS";
+              break;
+            case "WORKTREE_OWNERSHIP_AVAILABLE":
+              facts.worktreeOwnershipAvailable = evidence.outcome === "PASS";
+              break;
+            case "HUMAN_APPROVAL_SATISFIED":
+              facts.humanApprovalSatisfied = evidence.outcome === "PASS";
+              break;
+            case "VERIFICATION_EVIDENCE_PASSED":
+              facts.verificationEvidencePassed = evidence.outcome === "PASS";
+              break;
+            case "HARDENING_EVIDENCE_PASSED":
+              facts.hardeningEvidencePassed = evidence.outcome === "PASS";
+              break;
+            case "FRESH_QA_OUTCOME_RECORDED":
+              facts.freshQaOutcome = evidence.outcome;
+              break;
+            case "REPAIR_EVIDENCE_PASSED":
+              facts.repairEvidencePassed = evidence.outcome === "PASS";
+              break;
+            case "FOCUSED_RE_QA_OUTCOME_RECORDED":
+              facts.focusedReQaOutcome = evidence.outcome;
+              break;
+            case "NO_UNRESOLVED_BLOCKING_FINDING":
+              noUnresolvedBlockingFinding = evidence.outcome === "PASS";
+              break;
+            case "HANDOFF_PRESENT":
+              handoffPresent = evidence.outcome === "PASS";
+              break;
+            case "PROMOTED_CONTEXT_DISPOSITION_RECORDED":
+              promotedContextDispositionRecorded = evidence.outcome === "PASS";
+              break;
+          }
+          if (
+            new Date(evidence.acceptedAt).getTime() >
+            new Date(latestEvidenceAt).getTime()
+          ) {
+            latestEvidenceAt = evidence.acceptedAt;
+          }
+          break;
+        }
+      }
+    }
+
+    if (
+      transitionOccurredAt !== undefined &&
+      new Date(transitionOccurredAt).getTime() <
+        new Date(latestEvidenceAt).getTime()
+    ) {
+      throw malformedStoredData();
+    }
+    return deepFreeze({
+      facts,
+      boardEvidence: {
+        noUnresolvedBlockingFinding,
+        handoffPresent,
+        promotedContextDispositionRecorded,
+      },
+      latestEvidenceAt,
+    });
+  }
+
+  #readWorkflowControlViews(
+    bigTaskId: BigTaskId,
+  ): readonly DurableWorkflowControlView[] {
+    const initialization = this.#readWorkflowInitialization(bigTaskId);
+    const source = this.#readCanonicalTaskMaterialization(bigTaskId);
+    const graph = this.#workflowGraphFromSource(source);
+    const sourceSubtaskIds = source.subtasks.map(({ subtaskId }) => subtaskId);
+    const transitionRows = this.#database
+      .select()
+      .from(durableWorkflowTransitionsTable)
+      .where(
+        or(
+          eq(durableWorkflowTransitionsTable.bigTaskId, bigTaskId),
+          inArray(durableWorkflowTransitionsTable.subtaskId, sourceSubtaskIds),
+        ),
+      )
+      .orderBy(
+        asc(durableWorkflowTransitionsTable.subtaskId),
+        asc(durableWorkflowTransitionsTable.sequence),
+        asc(durableWorkflowTransitionsTable.operationId),
+      )
+      .all();
+    const humanRows = this.#database
+      .select()
+      .from(durableWorkflowHumanRequirementsTable)
+      .where(
+        or(
+          eq(durableWorkflowHumanRequirementsTable.bigTaskId, bigTaskId),
+          inArray(durableWorkflowHumanRequirementsTable.subtaskId, sourceSubtaskIds),
+        ),
+      )
+      .orderBy(
+        asc(durableWorkflowHumanRequirementsTable.scopeKind),
+        asc(durableWorkflowHumanRequirementsTable.scopeKey),
+      )
+      .all()
+      .map(durableWorkflowHumanRequirementFromRow);
+    const globalRequirements = humanRows.filter(
+      (requirement) => requirement.scope === "BIG_TASK",
+    );
+    if (globalRequirements.length > 1) {
+      throw malformedStoredData();
+    }
+
+    const views = initialization.workflowInstances.map((instance) => {
+      const subtask = source.subtasks.find(
+        ({ subtaskId }) => subtaskId === instance.subtaskId,
+      )?.subtask;
+      if (subtask === undefined) {
+        throw malformedStoredData();
+      }
+      const rows = transitionRows.filter(
+        (row) => row.subtaskId === instance.subtaskId,
+      );
+      let currentStage: WorkflowStage = instance.initialStage;
+      let repairCyclesUsed: 0 | 1 = instance.initialRepairCyclesUsed;
+      let previousOccurredAt = instance.initializedAt;
+      const usedEvidenceIds = new Set<string>();
+      const transitions = rows.map((row, index) => {
+        const transition = durableWorkflowTransitionFromRow(row);
+        if (
+          transition.projectId !== instance.projectId ||
+          transition.bigTaskId !== instance.bigTaskId ||
+          transition.planRevision !== instance.planRevision ||
+          transition.candidateBinding !== instance.candidateBinding ||
+          transition.subtaskId !== instance.subtaskId ||
+          transition.sequence !== index + 1 ||
+          transition.priorStage !== currentStage ||
+          transition.priorRepairCyclesUsed !== repairCyclesUsed ||
+          new Date(transition.occurredAt).getTime() <
+            new Date(previousOccurredAt).getTime()
+        ) {
+          throw malformedStoredData();
+        }
+        for (const reference of transition.evidenceReferences) {
+          if (reference.sourceType === "WORKFLOW_EVIDENCE") {
+            if (usedEvidenceIds.has(reference.sourceReference)) {
+              throw malformedStoredData();
+            }
+            usedEvidenceIds.add(reference.sourceReference);
+          }
+        }
+        const resolved = this.#resolveWorkflowTransitionEvidence(
+          source,
+          instance,
+          currentStage,
+          repairCyclesUsed,
+          transition.sequence,
+          previousOccurredAt,
+          transition.evidenceReferences,
+          transition.occurredAt,
+        );
+        const decision = evaluateStageTransition({
+          graph,
+          subtaskId: instance.subtaskId,
+          currentStage,
+          requestedNextStage: transition.resultingStage,
+          evidence: {
+            candidateBinding: instance.candidateBinding,
+            subtaskId: instance.subtaskId,
+            facts: resolved.facts,
+          },
+          repairCyclesUsed,
+        });
+        if (
+          decision.kind !== "ELIGIBLE" ||
+          decision.currentStage !== transition.priorStage ||
+          decision.nextStage !== transition.resultingStage ||
+          decision.repairCyclesUsed !== transition.resultingRepairCyclesUsed
+        ) {
+          throw malformedStoredData();
+        }
+        currentStage = transition.resultingStage;
+        repairCyclesUsed = transition.resultingRepairCyclesUsed;
+        previousOccurredAt = transition.occurredAt;
+        return transition;
+      });
+
+      const scopedRequirements = humanRows.filter(
+        (requirement) => requirement.subtaskId === instance.subtaskId,
+      );
+      if (scopedRequirements.length > 1) {
+        throw malformedStoredData();
+      }
+      const scopedRequirement = scopedRequirements[0] ?? null;
+      if (scopedRequirement !== null) {
+        if (
+          scopedRequirement.projectId !== instance.projectId ||
+          scopedRequirement.bigTaskId !== instance.bigTaskId ||
+          scopedRequirement.planRevision !== instance.planRevision ||
+          scopedRequirement.candidateBinding !== instance.candidateBinding ||
+          scopedRequirement.sequence !== transitions.length + 1 ||
+          scopedRequirement.currentStage !== currentStage ||
+          scopedRequirement.repairCyclesUsed !== repairCyclesUsed ||
+          scopedRequirement.requestedNextStage === null ||
+          scopedRequirement.sourceReference !==
+            `stage-transition:${scopedRequirement.reason}` ||
+          new Date(scopedRequirement.createdAt).getTime() <
+            new Date(previousOccurredAt).getTime()
+        ) {
+          throw malformedStoredData();
+        }
+        const resolved = this.#resolveWorkflowTransitionEvidence(
+          source,
+          instance,
+          currentStage,
+          repairCyclesUsed,
+          scopedRequirement.sequence,
+          previousOccurredAt,
+          scopedRequirement.evidenceReferences,
+          scopedRequirement.createdAt,
+        );
+        const decision = evaluateStageTransition({
+          graph,
+          subtaskId: instance.subtaskId,
+          currentStage,
+          requestedNextStage: scopedRequirement.requestedNextStage,
+          evidence: {
+            candidateBinding: instance.candidateBinding,
+            subtaskId: instance.subtaskId,
+            facts: resolved.facts,
+          },
+          repairCyclesUsed,
+        });
+        if (
+          decision.kind !== "HUMAN_REQUIRED" ||
+          decision.reason !== scopedRequirement.reason
+        ) {
+          throw malformedStoredData();
+        }
+      }
+
+      const globalRequirement = globalRequirements[0] ?? null;
+      if (
+        globalRequirement !== null &&
+        (globalRequirement.projectId !== instance.projectId ||
+          globalRequirement.bigTaskId !== instance.bigTaskId ||
+          globalRequirement.planRevision !== instance.planRevision ||
+          globalRequirement.candidateBinding !== instance.candidateBinding ||
+          globalRequirement.evidenceReferences.length !== 0 ||
+          new Date(globalRequirement.createdAt).getTime() <
+            new Date(previousOccurredAt).getTime() ||
+          !MATERIALIZED_GRAPH_CHANGE_KINDS.some(
+            (changeKind) =>
+              globalRequirement.sourceReference ===
+                `materialized-graph-change:${changeKind}` &&
+              rejectMaterializedGraphChange(graph, changeKind).kind ===
+                "HUMAN_REQUIRED",
+          ))
+      ) {
+        throw malformedStoredData();
+      }
+      if (globalRequirement !== null && scopedRequirement !== null) {
+        throw malformedStoredData();
+      }
+
+      const finalStage: WorkflowStage =
+        transitions[transitions.length - 1]?.resultingStage ??
+        instance.initialStage;
+      if (
+        (finalStage === "VERIFY" &&
+          (subtask.status !== "QA_DEBUG" ||
+            subtask.maturity !== "IMPLEMENTED")) ||
+        (finalStage === "HARDEN" &&
+          (subtask.status !== "QA_DEBUG" ||
+            subtask.maturity !== "IMPLEMENTED")) ||
+        ((finalStage === "FRESH_QA" ||
+          finalStage === "REPAIR" ||
+          finalStage === "FOCUSED_RE_QA") &&
+          (subtask.status !== "QA_DEBUG" || subtask.maturity !== "HARDENED")) ||
+        (finalStage === "COMPLETE" &&
+          (subtask.status !== "DONE" ||
+            (instance.profile === "HIGH_RISK_FOUNDATION"
+              ? subtask.maturity !== "ACCEPTED"
+              : subtask.maturity !== "IMPLEMENTED")))
+      ) {
+        throw malformedStoredData();
+      }
+
+      return deepFreeze({
+        projectId: instance.projectId,
+        bigTaskId: instance.bigTaskId,
+        planRevision: instance.planRevision,
+        candidateBinding: instance.candidateBinding,
+        subtaskId: instance.subtaskId,
+        profile: instance.profile,
+        writeEnabled: instance.writeEnabled,
+        initialStage: instance.initialStage,
+        initializedAt: instance.initializedAt,
+        currentStage: finalStage,
+        initialRepairCyclesUsed: instance.initialRepairCyclesUsed,
+        repairCyclesUsed,
+        boardStatus: subtask.status,
+        deliveryMaturity: subtask.maturity,
+        transitionCount: transitions.length,
+        transitions,
+        unresolvedHumanRequired: scopedRequirement ?? globalRequirement,
+      });
+    });
+
+    const sourceIds = new Set(sourceSubtaskIds);
+    if (
+      transitionRows.some((row) => !sourceIds.has(row.subtaskId as SubtaskId)) ||
+      humanRows.some(
+        (requirement) =>
+          requirement.scope === "SUBTASK" &&
+          (requirement.subtaskId === null ||
+            !sourceIds.has(requirement.subtaskId)),
+      )
+    ) {
+      throw malformedStoredData();
+    }
+    return deepFreeze(views);
+  }
+
+  #readWorkflowControlView(subtaskId: SubtaskId): DurableWorkflowControlView {
+    const instance = this.#database
+      .select({ bigTaskId: subtaskWorkflowInstancesTable.bigTaskId })
+      .from(subtaskWorkflowInstancesTable)
+      .where(eq(subtaskWorkflowInstancesTable.subtaskId, subtaskId))
+      .get();
+    if (instance === undefined) {
+      throw new TaskStorageError(
+        "PARENT_NOT_FOUND",
+        "The durable Subtask workflow does not exist.",
+      );
+    }
+    const bigTaskId = BigTaskIdSchema.safeParse(instance.bigTaskId);
+    if (!bigTaskId.success || bigTaskId.data !== instance.bigTaskId) {
+      throw malformedStoredData();
+    }
+    const view = this.#readWorkflowControlViews(bigTaskId.data).find(
+      (candidate) => candidate.subtaskId === subtaskId,
+    );
+    if (view === undefined) {
+      throw malformedStoredData();
+    }
+    return view;
+  }
+
+  #assertWorkflowIdentity(
+    input: Readonly<{
+      projectId: ProjectId;
+      bigTaskId: BigTaskId;
+      candidateBinding: string;
+      subtaskId: SubtaskId;
+    }>,
+    view: DurableWorkflowControlView,
+  ): void {
+    if (
+      input.projectId !== view.projectId ||
+      input.bigTaskId !== view.bigTaskId ||
+      input.candidateBinding !== view.candidateBinding ||
+      input.subtaskId !== view.subtaskId
+    ) {
+      throw new TaskStorageError(
+        "CONFLICT",
+        "The workflow authority binding does not match the canonical workflow.",
+      );
+    }
+  }
+
+  #assertWorkflowLifecycleTransition(
+    view: DurableWorkflowControlView,
+    nextStage: WorkflowStage,
+    boardEvidence: Readonly<{
+      noUnresolvedBlockingFinding: boolean;
+      handoffPresent: boolean;
+      promotedContextDispositionRecorded: boolean;
+    }>,
+  ): Readonly<{
+    status: Subtask["status"];
+    maturity: Subtask["maturity"];
+  }> {
+    let status = view.boardStatus;
+    let maturity = view.deliveryMaturity;
+    if (view.currentStage === "EXECUTE") {
+      if (status !== "QA_DEBUG" || maturity !== "IMPLEMENTED") {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "The accepted implementation checkpoint boundary is not complete.",
+        );
+      }
+    }
+    if (view.currentStage === "HARDEN" && nextStage === "FRESH_QA") {
+      if (status !== "QA_DEBUG" || maturity !== "IMPLEMENTED") {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "The Subtask is not eligible for durable hardening completion.",
+        );
+      }
+      const maturityTransition = validateSubtaskMaturityTransition(
+        maturity,
+        "HARDENED",
+      );
+      if (!maturityTransition.allowed) {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "The Subtask hardening maturity transition is not allowed.",
+          maturityTransition.errorCodes,
+        );
+      }
+      maturity = "HARDENED";
+    }
+    if (nextStage === "COMPLETE") {
+      const statusTransition = validateSubtaskTransition("QA_DEBUG", "DONE", {
+        requiredTestsPassed: true,
+        noUnresolvedBlockingIssue:
+          boardEvidence.noUnresolvedBlockingFinding,
+        handoffPresent: boardEvidence.handoffPresent,
+        promotedContextDispositionRecorded:
+          boardEvidence.promotedContextDispositionRecorded,
+      });
+      if (!statusTransition.allowed || status !== "QA_DEBUG") {
+        throw new TaskStorageError(
+          "CONFLICT",
+          "The Subtask completion evidence is incomplete.",
+          statusTransition.errorCodes,
+        );
+      }
+      status = "DONE";
+      if (view.profile === "HIGH_RISK_FOUNDATION") {
+        const maturityTransition = validateSubtaskMaturityTransition(
+          maturity,
+          "ACCEPTED",
+        );
+        if (!maturityTransition.allowed) {
+          throw new TaskStorageError(
+            "CONFLICT",
+            "The Subtask acceptance maturity transition is not allowed.",
+            maturityTransition.errorCodes,
+          );
+        }
+        maturity = "ACCEPTED";
+      }
+    }
+    return { status, maturity };
+  }
+
+  #workflowTimestampAtOrAfter(...previousTimestamps: readonly string[]): string {
+    const timestamp = this.#timestamp();
+    if (
+      previousTimestamps.some(
+        (previous) =>
+          !isCanonicalUtcTimestamp(previous) ||
+          new Date(timestamp).getTime() < new Date(previous).getTime(),
+      )
+    ) {
+      throw new TaskStorageError(
+        "STORAGE_OPERATION_FAILED",
+        "The storage clock cannot precede durable workflow authority.",
+      );
+    }
+    return timestamp;
   }
 
   #getProject(projectId: ProjectId): Project | null {

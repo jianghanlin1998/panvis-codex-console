@@ -1611,7 +1611,7 @@ describe("S1B2a migration and reopen hardening", () => {
               .prepare("SELECT count(*) AS count FROM __drizzle_migrations")
               .get() as { count: number }
           ).count,
-        ).toBe(14);
+        ).toBe(15);
         verify.close();
       }
     });

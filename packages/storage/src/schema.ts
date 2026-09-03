@@ -397,6 +397,13 @@ export const subtaskWorkflowInstancesTable = sqliteTable(
       table.bigTaskId,
       table.subtaskId,
     ),
+    uniqueIndex("subtask_workflow_instances_authority_unique").on(
+      table.projectId,
+      table.bigTaskId,
+      table.planRevision,
+      table.candidateBinding,
+      table.subtaskId,
+    ),
     foreignKey({
       name: "subtask_workflow_instances_materialization_fk",
       columns: [
@@ -487,6 +494,280 @@ export const workflowInitializationReceiptsTable = sqliteTable(
     check(
       "workflow_initialization_receipts_initialized_at_check",
       sql`length(${table.initializedAt}) >= 1`,
+    ),
+  ],
+);
+
+export const durableWorkflowEvidenceTable = sqliteTable(
+  "durable_workflow_evidence",
+  {
+    evidenceId: text("evidence_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    expectedSequence: integer("expected_sequence").notNull(),
+    observedStage: text("observed_stage").notNull(),
+    observedRepairCyclesUsed: integer("observed_repair_cycles_used").notNull(),
+    evidenceKind: text("evidence_kind").notNull(),
+    outcome: text("outcome").notNull(),
+    producer: text("producer").notNull(),
+    sourceReference: text("source_reference").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+    acceptedAt: text("accepted_at").notNull(),
+  },
+  (table) => [
+    index("durable_workflow_evidence_workflow_index").on(
+      table.subtaskId,
+      table.expectedSequence,
+      table.evidenceId,
+    ),
+    uniqueIndex("durable_workflow_evidence_source_unique").on(
+      table.subtaskId,
+      table.evidenceKind,
+      table.sourceReference,
+    ),
+    foreignKey({
+      name: "durable_workflow_evidence_workflow_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+        table.subtaskId,
+      ],
+      foreignColumns: [
+        subtaskWorkflowInstancesTable.projectId,
+        subtaskWorkflowInstancesTable.bigTaskId,
+        subtaskWorkflowInstancesTable.planRevision,
+        subtaskWorkflowInstancesTable.candidateBinding,
+        subtaskWorkflowInstancesTable.subtaskId,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "durable_workflow_evidence_id_check",
+      sql`length(${table.evidenceId}) between 5 and 128 and ${table.evidenceId} glob 'wfe_*'`,
+    ),
+    check(
+      "durable_workflow_evidence_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "durable_workflow_evidence_sequence_check",
+      sql`typeof(${table.expectedSequence}) = 'integer' and ${table.expectedSequence} >= 1`,
+    ),
+    check(
+      "durable_workflow_evidence_stage_check",
+      sql`${table.observedStage} in ('MATERIALIZE', 'EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA')`,
+    ),
+    check(
+      "durable_workflow_evidence_repair_check",
+      sql`typeof(${table.observedRepairCyclesUsed}) = 'integer'
+        and ${table.observedRepairCyclesUsed} in (0, 1)`,
+    ),
+    check(
+      "durable_workflow_evidence_kind_check",
+      sql`${table.evidenceKind} in (
+        'REPOSITORY_PREFLIGHT_PASSED',
+        'CONTEXT_PREFLIGHT_PASSED',
+        'BUDGET_AVAILABLE',
+        'CONCURRENCY_AVAILABLE',
+        'WORKTREE_OWNERSHIP_AVAILABLE',
+        'HUMAN_APPROVAL_SATISFIED',
+        'VERIFICATION_EVIDENCE_PASSED',
+        'HARDENING_EVIDENCE_PASSED',
+        'FRESH_QA_OUTCOME_RECORDED',
+        'REPAIR_EVIDENCE_PASSED',
+        'FOCUSED_RE_QA_OUTCOME_RECORDED',
+        'NO_UNRESOLVED_BLOCKING_FINDING',
+        'HANDOFF_PRESENT',
+        'PROMOTED_CONTEXT_DISPOSITION_RECORDED'
+      )`,
+    ),
+    check(
+      "durable_workflow_evidence_outcome_check",
+      sql`${table.outcome} in ('PASS', 'BLOCKING_FAIL')`,
+    ),
+    check(
+      "durable_workflow_evidence_qa_outcome_check",
+      sql`(${table.evidenceKind} in ('FRESH_QA_OUTCOME_RECORDED', 'FOCUSED_RE_QA_OUTCOME_RECORDED'))
+        or ${table.outcome} = 'PASS'`,
+    ),
+    check(
+      "durable_workflow_evidence_producer_check",
+      sql`${table.producer} in ('OPERATIONAL_GATE', 'WORKFLOW_ROLE', 'HUMAN_AUTHORITY', 'DELIVERY_CONTROL')`,
+    ),
+    check(
+      "durable_workflow_evidence_source_length_check",
+      sql`length(trim(${table.sourceReference})) between 1 and 2048`,
+    ),
+  ],
+);
+
+export const durableWorkflowTransitionsTable = sqliteTable(
+  "durable_workflow_transitions",
+  {
+    operationId: text("operation_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    subtaskId: text("subtask_id").notNull(),
+    sequence: integer("sequence").notNull(),
+    priorStage: text("prior_stage").notNull(),
+    resultingStage: text("resulting_stage").notNull(),
+    priorRepairCyclesUsed: integer("prior_repair_cycles_used").notNull(),
+    resultingRepairCyclesUsed: integer("resulting_repair_cycles_used").notNull(),
+    evidenceReferences: text("evidence_references").notNull(),
+    occurredAt: text("occurred_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("durable_workflow_transitions_sequence_unique").on(
+      table.subtaskId,
+      table.sequence,
+    ),
+    index("durable_workflow_transitions_workflow_order_index").on(
+      table.subtaskId,
+      table.sequence,
+      table.operationId,
+    ),
+    foreignKey({
+      name: "durable_workflow_transitions_workflow_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+        table.subtaskId,
+      ],
+      foreignColumns: [
+        subtaskWorkflowInstancesTable.projectId,
+        subtaskWorkflowInstancesTable.bigTaskId,
+        subtaskWorkflowInstancesTable.planRevision,
+        subtaskWorkflowInstancesTable.candidateBinding,
+        subtaskWorkflowInstancesTable.subtaskId,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "durable_workflow_transitions_id_check",
+      sql`length(${table.operationId}) between 5 and 128 and ${table.operationId} glob 'wop_*'`,
+    ),
+    check(
+      "durable_workflow_transitions_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "durable_workflow_transitions_sequence_check",
+      sql`typeof(${table.sequence}) = 'integer' and ${table.sequence} >= 1`,
+    ),
+    check(
+      "durable_workflow_transitions_stage_check",
+      sql`${table.priorStage} in ('MATERIALIZE', 'EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA')
+        and ${table.resultingStage} in ('EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA', 'COMPLETE')`,
+    ),
+    check(
+      "durable_workflow_transitions_repair_check",
+      sql`typeof(${table.priorRepairCyclesUsed}) = 'integer'
+        and typeof(${table.resultingRepairCyclesUsed}) = 'integer'
+        and ${table.priorRepairCyclesUsed} in (0, 1)
+        and ${table.resultingRepairCyclesUsed} in (0, 1)`,
+    ),
+    check(
+      "durable_workflow_transitions_evidence_check",
+      sql`length(${table.evidenceReferences}) between 2 and 16384`,
+    ),
+  ],
+);
+
+export const durableWorkflowHumanRequirementsTable = sqliteTable(
+  "durable_workflow_human_requirements",
+  {
+    operationId: text("operation_id").primaryKey(),
+    projectId: text("project_id").notNull(),
+    bigTaskId: text("big_task_id").notNull(),
+    planRevision: integer("plan_revision").notNull(),
+    candidateBinding: text("candidate_binding").notNull(),
+    scopeKind: text("scope_kind").notNull(),
+    scopeKey: text("scope_key").notNull(),
+    subtaskId: text("subtask_id"),
+    sequence: integer("sequence"),
+    currentStage: text("current_stage"),
+    requestedNextStage: text("requested_next_stage"),
+    repairCyclesUsed: integer("repair_cycles_used"),
+    reason: text("reason").notNull(),
+    evidenceReferences: text("evidence_references").notNull(),
+    sourceReference: text("source_reference").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("durable_workflow_human_requirements_scope_unique").on(
+      table.projectId,
+      table.bigTaskId,
+      table.scopeKey,
+    ),
+    index("durable_workflow_human_requirements_big_task_index").on(
+      table.bigTaskId,
+      table.scopeKind,
+      table.scopeKey,
+    ),
+    foreignKey({
+      name: "durable_workflow_human_requirements_materialization_fk",
+      columns: [
+        table.projectId,
+        table.bigTaskId,
+        table.planRevision,
+        table.candidateBinding,
+      ],
+      foreignColumns: [
+        canonicalTaskMaterializationsTable.projectId,
+        canonicalTaskMaterializationsTable.bigTaskId,
+        canonicalTaskMaterializationsTable.planRevision,
+        canonicalTaskMaterializationsTable.candidateBinding,
+      ],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    check(
+      "durable_workflow_human_requirements_id_check",
+      sql`length(${table.operationId}) between 5 and 128 and ${table.operationId} glob 'wop_*'`,
+    ),
+    check(
+      "durable_workflow_human_requirements_revision_check",
+      sql`typeof(${table.planRevision}) = 'integer' and ${table.planRevision} >= 1`,
+    ),
+    check(
+      "durable_workflow_human_requirements_scope_check",
+      sql`(${table.scopeKind} = 'BIG_TASK'
+          and ${table.scopeKey} = ${table.bigTaskId}
+          and ${table.subtaskId} is null
+          and ${table.sequence} is null
+          and ${table.currentStage} is null
+          and ${table.requestedNextStage} is null
+          and ${table.repairCyclesUsed} is null
+          and ${table.reason} = 'REPLAN_REQUIRED')
+        or (${table.scopeKind} = 'SUBTASK'
+          and ${table.scopeKey} = ${table.subtaskId}
+          and ${table.subtaskId} is not null
+          and typeof(${table.sequence}) = 'integer'
+          and ${table.sequence} >= 1
+          and ${table.currentStage} in ('MATERIALIZE', 'EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA')
+          and ${table.requestedNextStage} in ('EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA', 'COMPLETE')
+          and typeof(${table.repairCyclesUsed}) = 'integer'
+          and ${table.repairCyclesUsed} in (0, 1)
+          and ${table.reason} in ('REPAIR_REQA_EXHAUSTED', 'AUTHORITY_BLOCKED'))`,
+    ),
+    check(
+      "durable_workflow_human_requirements_evidence_check",
+      sql`length(${table.evidenceReferences}) between 2 and 16384`,
+    ),
+    check(
+      "durable_workflow_human_requirements_source_check",
+      sql`length(trim(${table.sourceReference})) between 1 and 2048`,
     ),
   ],
 );

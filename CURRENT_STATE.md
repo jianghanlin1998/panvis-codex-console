@@ -335,92 +335,32 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
 - Hanlin manual UI QA: PASS — explicit human product/workflow acceptance of implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
-- Roadmap Step 8: explicitly authorized by Hanlin; overall step NOT COMPLETE
+- Roadmap Step 8: in progress; overall step NOT COMPLETE
 - Repository Development Environment Preflight V0: PASS
-- Step 8A implementation SHA: `0a15fcb5953a42593741d6afa5ff7ef48de6fff5`
-- Step 8A Comprehensive Hardening: PASS
-- Step 8A Deterministic Orchestration Kernel V0 maturity: ACCEPTED
-- CTC-ORCH-HARD-001: CLOSED — review decisions bind the exact canonical Plan Candidate value
-- CTC-ORCH-HARD-002: CLOSED — revision ceiling, terminal states, and requirements fail closed
-- CTC-ORCH-HARD-003: CLOSED — stage/dispatch/completion snapshots and Project capacity are scoped and bound
-- CTC-ORCH-HARD-004: CLOSED — stage evidence and repair-counter composition are isolated
-- CTC-ORCH-HARD-005: CLOSED — impossible completion maturity cannot claim eligibility
-- CTC-ORCH-HARD-006: CLOSED — public results and constants are deeply immutable
-- CTC-ORCH-HARD-007: CLOSED — dependency tuple ordering is delimiter-safe and deterministic
-- Step 8A Fresh Independent QA on `70d8b6ddcf310f3178b226bf1af11fb837ce1a49`: FAIL — historical result
-- CTC-ORCH-FQA-001: CLOSED — repaired on `9d2030d815d40d51be0b79489f3185ed7bc450bd`
-- Step 8A Focused Fresh Independent Re-QA: PASS
-- Step 8A final controlled-worker regression: 112 / 112 files; 3,620 / 3,620 tests PASS
-- Step 8A ACCEPTED: YES
-- Step 8A accepted evidence SHA: `addc44200662cdddd69095065bee27eaeac43ddb`
-- Step 8B: STARTED / overall NOT COMPLETE
-- Step 8B1 implementation SHA: `6d1add21949d7bf03f287ed2a709c03ba99858fc`
-- Step 8B1 Comprehensive Hardening: PASS
-- Step 8B1 Fresh Independent QA: PASS
-- Step 8B1 Fresh Independent QA findings: NONE (`CTC-ORCH-B1-FQA-*`)
-- Step 8B1 Durable Orchestration Planning State V0 maturity: ACCEPTED
-- Step 8B1 accepted evidence SHA: `1b7714ddee0b79671c67972e132b61ec110fa12a`
-- CTC-ORCH-B1-HARD-001: CLOSED — durable review preserves accepted Step 8A graph-validation order
-- CTC-ORCH-B1-HARD-002: CLOSED — historical replay is isolated from later mutable status and proposed-ID collisions
-- CTC-ORCH-B1-HARD-003: CLOSED — nested planning mutations use savepoint-equivalent rollback isolation
-- CTC-ORCH-B1-HARD-004: CLOSED — durable artifact chronology and regressing clocks fail closed atomically
-- CTC-ORCH-B1-HARD-005: CLOSED — decisions and materializations require an exact candidate revision FK
-- Durable Plan Candidate / Reviewer Decision artifact persistence and deterministic review-state replay: IMPLEMENTED
-- Durable materialization authority and approved graph replay: IMPLEMENTED
-- Durable orchestration text policy: well-formed Unicode preserved exactly without normalization; C0/C1 controls and unpaired surrogates rejected
-- Step 8B2a Immutable Task Contract Authority V0: IMPLEMENTED
-- Step 8B2a implementation SHA: `f4c3c11d4df33f87fb3ed21f63460ae480da6da6`
-- Immutable Task Contract artifact persistence: IMPLEMENTED
-- Exact candidate revision / candidateBinding / Subtask contract association: IMPLEMENTED
-- Approved Task Contract authority derivation: IMPLEMENTED
-- Contract-aware Review bundle source: IMPLEMENTED
-- Step 8B2a Comprehensive Hardening: PASS
-- Step 8B2a Fresh Independent QA: PASS
-- Step 8B2a Fresh Independent QA findings: NONE
-- Step 8B2a Immutable Task Contract Authority V0 maturity: ACCEPTED
-- Step 8B2a accepted evidence SHA: `85be2b47a2f59302c7348877a25d4c613ebed388`
-- CTC-ORCH-B2A-HARD-001: CLOSED — immutable INSERT-conflict guards prevent SQLite replacement writes from retargeting Task Contract artifacts or candidate associations when `recursive_triggers` is disabled
-- Step 8B2b Atomic Canonical Subtask and Dependency Materialization V0: IMPLEMENTED
-- Step 8B2b implementation SHA: `da6e84570cadbac9f1fd685378bb64fcf2f93f61`
-- Canonical Task Contract → Subtask projection: IMPLEMENTED
-- Atomic approved dependency materialization: IMPLEMENTED
-- Step 8B2b completion evidence: IMPLEMENTED
-- Exact idempotent owned retry: IMPLEMENTED
-- Materialized stable Subtask-set protection: IMPLEMENTED
-- Materialized dependency-graph protection: IMPLEMENTED
-- Step 8B2b Comprehensive Hardening: PASS
-- Step 8B2b Fresh Independent QA: PASS
-- Step 8B2b Fresh Independent QA findings: NONE
-- Step 8B2b Atomic Canonical Subtask and Dependency Materialization V0 maturity: ACCEPTED
-- Step 8B2b accepted evidence SHA: `a35cec6195e6a350e6338457b19f48c114176174`
-- CTC-ORCH-B2B-HARD-001: CLOSED — owned completion evidence now classifies missing or downgraded upstream source authority as durable corruption
-- CTC-ORCH-B2B-HARD-002: CLOSED — canonical replay rejects lifecycle `updatedAt` values earlier than immutable creation/materialization provenance
-- Step 8B3a Durable Per-Subtask Workflow Instance and Stage Initialization Authority V0: IMPLEMENTED
-- Step 8B3a implementation SHA: `ee598d4e3e5f32db36571c7c0d09f9c43fc2d94f`
-- Step 8B3a per-Subtask immutable workflow bootstrap: IMPLEMENTED
-- Step 8B3a deterministic initial stage: IMPLEMENTED
-- Step 8B3a initial repair counter: IMPLEMENTED / 0
-- Step 8B3a Big-Task workflow initialization receipt: IMPLEMENTED
-- Step 8B3a atomic all-Subtask initialization: IMPLEMENTED
-- Step 8B3a exact idempotent initialization retry: IMPLEMENTED
+- Step 8A Deterministic Orchestration Kernel V0: ACCEPTED — evidence `addc44200662cdddd69095065bee27eaeac43ddb`
+- Step 8B1 Durable Planning / Review / Materialized-Graph Authority: ACCEPTED — evidence `1b7714ddee0b79671c67972e132b61ec110fa12a`
+- Step 8B2a Immutable Task Contract Authority: ACCEPTED — evidence `85be2b47a2f59302c7348877a25d4c613ebed388`
+- Step 8B2b Atomic Canonical Subtask / Dependency Materialization: ACCEPTED — evidence `a35cec6195e6a350e6338457b19f48c114176174`
+- Step 8B3a Durable Per-Subtask Workflow Bootstrap: ACCEPTED — evidence `6ba7ad8ae037685bba9937d23867d4869c4059a9`
 - Step 8B3a Comprehensive Hardening: PASS
-- Step 8B3a hardening findings: NONE (`CTC-ORCH-B3A-HARD-*`)
-- Step 8B3a Fresh Independent QA: PENDING
-- Step 8B3a maturity: HARDENED / NOT ACCEPTED
-- Step 8B3a stage/evidence advancement: NOT IMPLEMENTED
-- Step 8B3a TODO → IN_PROGRESS orchestration: NOT IMPLEMENTED
-- Step 8B3b typed source-backed evidence + atomic stage transitions: NOT STARTED / BLOCKED on Step 8B3a ACCEPTED
-- Step 8B downstream stage/evidence/lifecycle work: BLOCKED on Step 8B3a ACCEPTED
-- Real orchestration role execution: NOT IMPLEMENTED
-- Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
-- Roadmap Step 9: NOT AUTHORIZED
+- Step 8B3a Fresh Independent QA: PASS; findings NONE (`CTC-ORCH-B3A-FQA-*`)
+- Step 8C Durable Workflow Control Plane V0: IMPLEMENTED
+- Step 8C typed/source-backed evidence, immutable transition history, history-derived state, bounded Repair / Focused Re-QA, lifecycle/maturity composition, and durable HUMAN_REQUIRED authority: IMPLEMENTED
+- Step 8C implementation verification: focused workflow/migration coverage PASS; full suite 133 files / 4,103 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
+- Step 8C comprehensive hardening: PENDING
+- Step 8C Fresh Independent QA: NOT YET ELIGIBLE / PENDING HARDENING
+- Step 8D Operational Governed Execution V0: NOT STARTED / gated on safe Step 8C maturity
+- Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / gated on Step 8D
+- Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
+- Operational TODO → IN_PROGRESS dispatch, provider role execution, scheduling, worktree automation, and execution-role/thread/run linkage remain NOT IMPLEMENTED
+- Hanlin manual QA for Step 8C implementation: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Independent no-write QA of Step 8B3a. Do not begin Step 8B3b.
+**Next safe task:** fresh clean-context comprehensive write-enabled Step 8C hardening. Do not begin Step 8D.
 
 ## Not operational yet
 - browser Console UI
-- operational TODO -> IN_PROGRESS dispatch, repair/re-entry, or later maturity mutation
+- provider-driven TODO -> IN_PROGRESS dispatch, operational repair/re-entry execution, or standalone later-maturity commands
 - scheduling, concurrency control, or `WHEN_READY` execution
 - Focused Re-QA operational assembly
 - trusted locked-invariant source
