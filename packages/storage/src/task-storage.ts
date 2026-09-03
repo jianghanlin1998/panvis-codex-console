@@ -1056,15 +1056,9 @@ const isWorkflowLifecycleCompositionCompatible = (
     case "REVIEW":
       return false;
     case "MATERIALIZE":
-      return (
-        status === "DROPPED" ||
-        status === "ARCHIVED" ||
-        (status === "TODO" && maturity === "NOT_STARTED")
-      );
+      return status === "TODO" && maturity === "NOT_STARTED";
     case "EXECUTE":
       return (
-        status === "DROPPED" ||
-        status === "ARCHIVED" ||
         ((status === "TODO" || status === "IN_PROGRESS") &&
           maturity === "NOT_STARTED") ||
         (status === "QA_DEBUG" && maturity === "IMPLEMENTED")

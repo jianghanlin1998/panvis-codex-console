@@ -337,6 +337,16 @@ const setStoredSubtaskLifecycle = (
   sqlite.close();
 };
 
+const ACTIVE_SECONDARY_OUTCOME_CASES = (
+  ["MATERIALIZE", "EXECUTE"] as const
+).flatMap((stage) =>
+  (["DROPPED", "ARCHIVED"] as const).flatMap((status) =>
+    (["NOT_STARTED", "IMPLEMENTED", "HARDENED", "ACCEPTED"] as const).map(
+      (maturity) => [stage, status, maturity] as const,
+    ),
+  ),
+);
+
 const completeImplementation = (
   storage: TaskStorage,
   databasePath: string,
@@ -1541,7 +1551,7 @@ describe("durable workflow control plane", () => {
       );
       storage.close();
 
-      setStoredSubtaskLifecycle(databasePath, target, "DONE", "ACCEPTED");
+      setStoredSubtaskLifecycle(databasePath, target, "DROPPED", "ACCEPTED");
       storage = openTaskDatabase({
         databasePath,
         clock: incrementingClock(),
@@ -1566,18 +1576,139 @@ describe("durable workflow control plane", () => {
       expect(
         sqlite.prepare(
           `SELECT status, maturity,
-                  (SELECT count(*) FROM durable_workflow_transitions) AS transition_count
+                  (SELECT count(*) FROM durable_workflow_transitions) AS transition_count,
+                  (SELECT count(*) FROM durable_workflow_human_requirements) AS human_count
              FROM subtasks WHERE id = ?`,
         ).get(target),
       ).toEqual({
-        status: "DONE",
+        status: "DROPPED",
         maturity: "ACCEPTED",
         transition_count: 0,
+        human_count: 0,
       });
       sqlite.close();
       storage.close();
     });
   });
+
+  it.each(ACTIVE_SECONDARY_OUTCOME_CASES)(
+    "rejects active %s with unsupported %s / %s after reopen",
+    (stage, status, maturity) => {
+      withTemporaryDatabasePath((databasePath) => {
+        let storage = openTaskDatabase({
+          databasePath,
+          clock: incrementingClock(),
+        });
+        const suffix = `secondary_${stage}_${status}_${maturity}`.toLowerCase();
+        const { source } = seed(storage, {
+          suffix,
+          profiles: [stage === "MATERIALIZE" ? "STANDARD" : "LOW"],
+        });
+        const target = source.subtasks[0]!.subtaskId;
+        storage.close();
+
+        setStoredSubtaskLifecycle(databasePath, target, status, maturity);
+        storage = openTaskDatabase({
+          databasePath,
+          clock: incrementingClock(),
+        });
+        expectStorageError(
+          () => storage.getDurableWorkflowControlView(target),
+          "MALFORMED_STORED_DATA",
+        );
+        storage.close();
+      });
+    },
+  );
+
+  it("fails corrupted EXECUTE progression atomically without lifecycle or HUMAN_REQUIRED side effects", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      let storage = openTaskDatabase({
+        databasePath,
+        clock: incrementingClock(),
+      });
+      const { source } = seed(storage, {
+        suffix: "execute_secondary_atomic",
+        profiles: ["LOW"],
+      });
+      const target = source.subtasks[0]!.subtaskId;
+      const initial = viewFor(storage, target);
+      const implementation = completeImplementation(
+        storage,
+        databasePath,
+        initial,
+        "execute_secondary_atomic",
+      );
+      storage.close();
+
+      setStoredSubtaskLifecycle(databasePath, target, "ARCHIVED", "HARDENED");
+      storage = openTaskDatabase({
+        databasePath,
+        clock: incrementingClock(),
+      });
+      expectStorageError(
+        () => storage.getDurableWorkflowControlView(target),
+        "MALFORMED_STORED_DATA",
+      );
+      expectStorageError(
+        () =>
+          advance(
+            storage,
+            initial,
+            "wop_execute_secondary_atomic",
+            "VERIFY",
+            [checkpointReference(implementation.checkpoint.id)],
+          ),
+        "MALFORMED_STORED_DATA",
+      );
+
+      const sqlite = new DatabaseSync(databasePath, { readOnly: true });
+      expect(
+        sqlite.prepare(
+          `SELECT status, maturity,
+                  (SELECT count(*) FROM durable_workflow_transitions) AS transition_count,
+                  (SELECT count(*) FROM durable_workflow_human_requirements) AS human_count
+             FROM subtasks WHERE id = ?`,
+        ).get(target),
+      ).toEqual({
+        status: "ARCHIVED",
+        maturity: "HARDENED",
+        transition_count: 0,
+        human_count: 0,
+      });
+      sqlite.close();
+      storage.close();
+    });
+  });
+
+  it.each(["MATERIALIZE", "EXECUTE"] as const)(
+    "keeps CTC-ORCH-8C-FQA-001 closed for %s + DONE / ACCEPTED",
+    (stage) => {
+      withTemporaryDatabasePath((databasePath) => {
+        let storage = openTaskDatabase({
+          databasePath,
+          clock: incrementingClock(),
+        });
+        const { source } = seed(storage, {
+          suffix: `fqa001_${stage}`.toLowerCase(),
+          profiles: [stage === "MATERIALIZE" ? "STANDARD" : "LOW"],
+        });
+        const target = source.subtasks[0]!.subtaskId;
+        storage.close();
+
+        setStoredSubtaskLifecycle(databasePath, target, "DONE", "ACCEPTED");
+        storage = openTaskDatabase({
+          databasePath,
+          clock: incrementingClock(),
+        });
+        expectStorageError(
+          () => storage.getDurableWorkflowControlView(target),
+          "MALFORMED_STORED_DATA",
+        );
+        storage.close();
+      });
+    },
+  );
 
   it.each<
     readonly [WorkflowProfile, SubtaskStatus, SubtaskMaturity]
@@ -1623,7 +1754,7 @@ describe("durable workflow control plane", () => {
     },
   );
 
-  it("preserves all legitimate EXECUTE lifecycle compositions", () => {
+  it("preserves all legitimate active MATERIALIZE and EXECUTE lifecycle compositions", () => {
     withTemporaryDatabasePath((databasePath) => {
       let storage = openTaskDatabase({
         databasePath,
@@ -1631,9 +1762,9 @@ describe("durable workflow control plane", () => {
       });
       const { source } = seed(storage, {
         suffix: "execute_compositions",
-        profiles: ["LOW", "LOW", "LOW"],
+        profiles: ["STANDARD", "LOW", "LOW", "LOW"],
       });
-      const [todoTarget, inProgressTarget, implementedTarget] =
+      const [materializeTarget, todoTarget, inProgressTarget, implementedTarget] =
         source.subtasks.map(({ subtaskId }) => subtaskId);
       const implementedView = viewFor(storage, implementedTarget!);
       setStoredSubtaskLifecycle(
@@ -1653,6 +1784,11 @@ describe("durable workflow control plane", () => {
       storage = openTaskDatabase({
         databasePath,
         clock: incrementingClock(),
+      });
+      expect(viewFor(storage, materializeTarget!)).toMatchObject({
+        currentStage: "MATERIALIZE",
+        boardStatus: "TODO",
+        deliveryMaturity: "NOT_STARTED",
       });
       expect(viewFor(storage, todoTarget!)).toMatchObject({
         currentStage: "EXECUTE",

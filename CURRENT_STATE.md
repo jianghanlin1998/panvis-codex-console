@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-09-03
+Last reconciled: 2026-09-04
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -347,20 +347,22 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8C Durable Workflow Control Plane V0: IMPLEMENTED
 - Step 8C typed/source-backed evidence, immutable transition history, history-derived state, bounded Repair / Focused Re-QA, lifecycle/maturity composition, and durable HUMAN_REQUIRED authority: IMPLEMENTED
 - Step 8C implementation verification: focused workflow/migration coverage PASS; full suite 133 files / 4,103 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
-- Step 8C comprehensive hardening: PASS / HARDENED
+- Step 8C Comprehensive Hardening: PASS
 - Step 8C hardening finding `CTC-ORCH-8C-HARD-001`: CLOSED — callers cannot self-attest workflow evidence; accepted evidence now requires immutable source-backed authority provenance
 - Step 8C hardening verification: focused 16 files / 432 tests PASS; full suite 134 files / 4,156 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
-- Step 8C Fresh Independent QA: FAIL — `CTC-ORCH-8C-FQA-001` found that contradictory persisted MATERIALIZE / EXECUTE lifecycle composition did not fail closed
-- Step 8C bounded post-Fresh-QA repair: IMPLEMENTED — authoritative early-stage workflow / board / maturity compatibility is validated on read and before transition persistence; deterministic focused and canonical verification PASS
-- Step 8C maturity: REPAIRED / NOT ACCEPTED; fresh Focused Re-QA pending
-- Step 8D Operational Governed Execution V0: NOT STARTED / gated on Step 8C ACCEPTED
+- Step 8C Fresh Independent QA on `3d9785ff4f97436d10f528d042026825dc710ef0`: FAIL — historical result
+- `CTC-ORCH-8C-FQA-001`: CLOSED by repair `5aa395c8cba6e07588e5b7e59e6e4a11bd7cb142`; Focused Re-QA confirmed the original failure class closed
+- Step 8C Fresh Focused Re-QA on `5aa395c8cba6e07588e5b7e59e6e4a11bd7cb142`: FAIL
+- `CTC-ORCH-8C-FRQA-002`: repaired by the commit containing this file / awaiting fresh focused verification
+- Step 8C: REPAIRED / NOT ACCEPTED
+- Step 8D: NOT STARTED / BLOCKED on Step 8C ACCEPTED
 - Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / gated on Step 8D
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
 - Operational TODO → IN_PROGRESS dispatch, provider role execution, scheduling, worktree automation, and execution-role/thread/run linkage remain NOT IMPLEMENTED
-- Hanlin manual QA for Step 8C hardening: NOT REQUIRED
+- Hanlin manual QA: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** fresh clean-context no-write Focused Re-QA of the bounded `CTC-ORCH-8C-FQA-001` repair. Do not begin Step 8D.
+**Next safe task:** NEW CHAT Fresh Focused Re-QA of CTC-ORCH-8C-FRQA-002
 
 ## Not operational yet
 - browser Console UI
