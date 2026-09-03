@@ -577,4 +577,74 @@ describe("canonical materialization immutability and corruption replay", () => {
       storage.close();
     });
   });
+
+  it("CTC-ORCH-B2B-HARD-001 classifies owned source-authority loss as corruption", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      seedApprovedSource(storage, makePlan(1));
+      storage.materializeApprovedCanonicalTasks(BIG_TASK_ID);
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.exec("PRAGMA foreign_keys = OFF");
+      sqlite.prepare("DELETE FROM orchestration_materializations WHERE big_task_id = ?")
+        .run(BIG_TASK_ID);
+      sqlite.close();
+
+      expectStorageError(
+        () => storage.getCanonicalTaskMaterialization(BIG_TASK_ID),
+        "MALFORMED_STORED_DATA",
+      );
+      expectStorageError(
+        () => storage.materializeApprovedCanonicalTasks(BIG_TASK_ID),
+        "MALFORMED_STORED_DATA",
+      );
+      storage.close();
+    });
+  });
+
+  it("CTC-ORCH-B2B-HARD-002 rejects owned lifecycle timestamp regression", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      seedApprovedSource(storage, makePlan(1));
+      storage.materializeApprovedCanonicalTasks(BIG_TASK_ID);
+
+      const sqlite = new DatabaseSync(databasePath);
+      sqlite.prepare("UPDATE subtasks SET updated_at = ? WHERE id = ?")
+        .run("2026-08-08T23:59:59.999Z", "st_canonical_0");
+      sqlite.close();
+
+      expectStorageError(
+        () => storage.getCanonicalTaskMaterialization(BIG_TASK_ID),
+        "MALFORMED_STORED_DATA",
+      );
+      expectStorageError(
+        () => storage.materializeApprovedCanonicalTasks(BIG_TASK_ID),
+        "MALFORMED_STORED_DATA",
+      );
+      storage.close();
+    });
+  });
+
+  it("blocks replacement-style movement of an owned zero-edge Subtask", () => {
+    withTemporaryDatabasePath((databasePath) => {
+      const storage = openTaskDatabase({ databasePath, clock: fixedClock });
+      seedApprovedSource(storage, makePlan(1));
+      storage.createBigTask(makeBigTask("bt_replace_destination", PROJECT_ID));
+      storage.materializeApprovedCanonicalTasks(BIG_TASK_ID);
+
+      const sqlite = new DatabaseSync(databasePath);
+      expect(() => sqlite.prepare(`INSERT OR REPLACE INTO subtasks
+        SELECT id, 'bt_replace_destination', title, goal, scope_in, scope_out,
+               acceptance_criteria, untouched_areas, status, maturity, start_policy,
+               delegation_policy, recommended_reasoning_level, prompt_seed, created_at, updated_at
+          FROM subtasks WHERE id = 'st_canonical_0'`).run()).toThrow();
+      sqlite.close();
+
+      expect(storage.getCanonicalTaskMaterialization(BIG_TASK_ID)).not.toBeNull();
+      expect(storage.listSubtasksByBigTask(
+        BigTaskIdSchema.parse("bt_replace_destination"),
+      )).toEqual([]);
+      storage.close();
+    });
+  });
 });

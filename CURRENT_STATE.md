@@ -381,23 +381,27 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8B2a accepted evidence SHA: `85be2b47a2f59302c7348877a25d4c613ebed388`
 - CTC-ORCH-B2A-HARD-001: CLOSED — immutable INSERT-conflict guards prevent SQLite replacement writes from retargeting Task Contract artifacts or candidate associations when `recursive_triggers` is disabled
 - Step 8B2b Atomic Canonical Subtask and Dependency Materialization V0: IMPLEMENTED
+- Step 8B2b implementation SHA: `da6e84570cadbac9f1fd685378bb64fcf2f93f61`
 - Canonical Task Contract → Subtask projection: IMPLEMENTED
 - Atomic approved dependency materialization: IMPLEMENTED
 - Step 8B2b completion evidence: IMPLEMENTED
 - Exact idempotent owned retry: IMPLEMENTED
 - Materialized stable Subtask-set protection: IMPLEMENTED
 - Materialized dependency-graph protection: IMPLEMENTED
-- Step 8B2b Comprehensive Hardening: NOT RUN
-- Step 8B2b Fresh Independent QA: NOT RUN
-- Orchestration stage/evidence persistence: NOT IMPLEMENTED
-- Later orchestration maturity transitions: NOT IMPLEMENTED
+- Step 8B2b Comprehensive Hardening: PASS
+- Step 8B2b Atomic Canonical Subtask and Dependency Materialization V0 maturity: HARDENED
+- CTC-ORCH-B2B-HARD-001: CLOSED — owned completion evidence now classifies missing or downgraded upstream source authority as durable corruption
+- CTC-ORCH-B2B-HARD-002: CLOSED — canonical replay rejects lifecycle `updatedAt` values earlier than immutable creation/materialization provenance
+- Step 8B2b Fresh Independent QA: PENDING
+- Orchestration stage/evidence persistence: NOT STARTED / BLOCKED on Step 8B2b ACCEPTED
+- Later orchestration maturity transitions: NOT STARTED / BLOCKED on Step 8B2b ACCEPTED
 - Real orchestration role execution: NOT IMPLEMENTED
 - Step 8 serial write-dispatch policy: deterministic kernel implemented only; not operational
 - Step 8B downstream stage/evidence/lifecycle work: BLOCKED on Step 8B2b ACCEPTED
 - Roadmap Step 9: NOT AUTHORIZED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Comprehensive Hardening of Step 8B2b. Do not begin the later stage/evidence/lifecycle slice.
+**Next safe task:** NEW CHAT Fresh Independent no-write QA of Step 8B2b. Do not begin the later stage/evidence/lifecycle slice.
 
 ## Not operational yet
 - browser Console UI

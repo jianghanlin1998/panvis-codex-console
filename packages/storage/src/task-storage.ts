@@ -3323,7 +3323,10 @@ export class TaskStorage {
       .get() !== undefined;
   }
 
-  #readCanonicalTaskMaterializationSource(bigTaskId: BigTaskId): {
+  #readCanonicalTaskMaterializationSource(
+    bigTaskId: BigTaskId,
+    ownedMaterializationExists = false,
+  ): {
     readonly graph: MaterializedGraph;
     readonly authority: Extract<
       ApprovedTaskContractAuthority,
@@ -3333,6 +3336,9 @@ export class TaskStorage {
   } {
     const snapshot = this.#orchestrationPlanning.getSnapshot(bigTaskId);
     if (snapshot === null) {
+      if (ownedMaterializationExists) {
+        throw malformedStoredData();
+      }
       throw new TaskStorageError(
         "PARENT_NOT_FOUND",
         "The durable orchestration planning authority does not exist.",
@@ -3346,6 +3352,9 @@ export class TaskStorage {
       authority.taskContractAuthorityReadiness !== "TASK_CONTRACT_AUTHORITY_READY" ||
       !authority.materialized
     ) {
+      if (ownedMaterializationExists) {
+        throw malformedStoredData();
+      }
       throw new TaskStorageError(
         "CONFLICT",
         "The approved canonical task materialization authority is not ready.",
@@ -3408,7 +3417,7 @@ export class TaskStorage {
     if (evidence === undefined) {
       throw malformedStoredData();
     }
-    const source = this.#readCanonicalTaskMaterializationSource(bigTaskId);
+    const source = this.#readCanonicalTaskMaterializationSource(bigTaskId, true);
     this.#validateCanonicalTaskMaterializationEvidence(evidence, source.graph);
     if (
       new Date(evidence.materializedAt).getTime() <
@@ -3439,6 +3448,7 @@ export class TaskStorage {
       if (
         row.createdAt !== evidence.materializedAt ||
         !isCanonicalUtcTimestamp(row.updatedAt) ||
+        new Date(row.updatedAt).getTime() < new Date(row.createdAt).getTime() ||
         subtask.id !== contract.subtaskId ||
         subtask.bigTaskId !== contract.bigTaskId ||
         subtask.title !== contract.title ||
