@@ -109,12 +109,15 @@ describe("database lifecycle and migrations", () => {
           "governed_dispatch_receipts",
           "governed_finding_resolutions",
           "governed_findings",
+          "governed_gate_observations",
           "governed_gate_sources",
           "governed_handoffs",
           "governed_manual_start_authorities",
           "governed_promoted_context_dispositions",
           "governed_promotion_candidates",
           "governed_provider_claims",
+          "governed_provider_input_observations",
+          "governed_provider_turn_starts",
           "governed_result_provenance",
           "governed_role_authorizations",
           "governed_role_execution_links",
@@ -149,7 +152,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(19);
+        expect(row.count).toBe(20);
       } finally {
         sqlite.close();
       }
@@ -166,7 +169,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(19);
+        expect(row.count).toBe(20);
       } finally {
         sqlite.close();
       }
@@ -741,7 +744,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           after.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 19 });
+        ).toEqual({ count: 20 });
       } finally {
         after.close();
       }
@@ -861,7 +864,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           migrated.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 19 });
+        ).toEqual({ count: 20 });
       } finally {
         migrated.close();
       }

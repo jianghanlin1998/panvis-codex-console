@@ -1,3 +1,4 @@
+import { GATE_KINDS, assertGateOwner, assertProviderTurnSource, inputHash, readGateObservation } from "./governed-occurrence-provenance.js";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { DurableWorkflowEvidence } from "./workflow-control.js";
@@ -24,6 +25,15 @@ export function assertGovernedEvidenceSource(sqlite: DatabaseSync, evidence: Dur
     const source = sqlite.prepare("SELECT * FROM governed_gate_sources WHERE authority_id = ?").get(evidence.authorityId);
     if (source?.source_type !== evidence.authoritySourceType || source.source_reference !== evidence.sourceReference ||
         source.payload !== JSON.stringify(values)) malformed();
+    const observation = readGateObservation(sqlite, evidence.sourceReference);
+    const o = observation.owner;
+    const kinds = { REPOSITORY_PREFLIGHT: "repository", CONTEXT_PREFLIGHT: "context", BUDGET_GATE: "budget",
+      CONCURRENCY_GATE: "concurrency", WORKTREE_OWNERSHIP: "worktree", HUMAN_APPROVAL: "human-policy" } as const;
+    if (!(evidence.authoritySourceType in kinds) || observation.kind !== kinds[evidence.authoritySourceType as keyof typeof kinds] ||
+        o.projectId !== evidence.projectId || o.bigTaskId !== evidence.bigTaskId || o.planRevision !== evidence.planRevision ||
+        o.candidateBinding !== evidence.candidateBinding || o.subtaskId !== evidence.subtaskId ||
+        o.workflowSequence !== evidence.expectedSequence || o.workflowStage !== evidence.observedStage ||
+        o.occurrenceId !== governedStableId("gdr", governedStableId("gdo", evidence.subtaskId, evidence.expectedSequence))) malformed();
     return;
   }
   let resultId = evidence.sourceReference;
@@ -58,6 +68,8 @@ export function assertGovernedEvidenceSource(sqlite: DatabaseSync, evidence: Dur
       row.occurred_at !== evidence.occurredAt || row.usage_present !== 1 || row.total_tokens === null ||
       row.actual_thread_id !== row.provider_thread_id || row.actual_run_id !== row.provider_run_id ||
       row.actual_model_id !== row.provider_model_id) malformed();
+  const resultAuthorization = sqlite.prepare("SELECT authorization_id FROM governed_role_results WHERE result_id = ?").get(resultId);
+  assertProviderTurnSource(sqlite, String(resultAuthorization!.authorization_id));
   const expectedOutcome = row.role === "REPAIR" ? "READY" : evidence.outcome;
   if (row.outcome !== expectedOutcome) malformed();
   try {
@@ -101,10 +113,32 @@ export function assertGovernedDispatchSource(sqlite: DatabaseSync, subtaskId: st
   let refs: string[];
   try { refs = JSON.parse(String(snapshot.gate_references)); } catch { malformed(); }
   if (!Array.isArray(refs) || refs.length !== 7 || new Set(refs).size !== 7 ||
-      JSON.stringify([...refs].sort()) !== snapshot.gate_references ||
-      !refs.includes(`dependency:${subtaskId}:${row.workflow_sequence}`) ||
-      !refs.includes(`repository:${row.worktree_ownership_id}:${snapshot.candidate_sha}`) ||
-      !refs.includes(`worktree:${row.worktree_ownership_id}:${snapshot.candidate_sha}`)) malformed();
+      JSON.stringify([...refs].sort()) !== snapshot.gate_references) malformed();
+  const owner = {
+    projectId: String(row.project_id), bigTaskId: String(row.big_task_id), planRevision: Number(row.plan_revision),
+    candidateBinding: String(row.candidate_binding), subtaskId, workflowSequence: Number(row.workflow_sequence),
+    workflowStage: "EXECUTE", occurrenceId: String(row.receipt_id), worktreeOwnershipId: String(row.worktree_ownership_id),
+    candidateSha: String(snapshot.candidate_sha),
+  };
+  const observations = refs.map(reference => readGateObservation(sqlite, reference));
+  for (const kind of GATE_KINDS) {
+    const found = observations.filter(observation => observation.kind === kind);
+    if (found.length !== 1) malformed();
+    const observation = found[0]!;
+    assertGateOwner(observation, owner, kind);
+    const value = observation.value as unknown as Record<string, unknown>;
+    if (kind === "context" && (typeof value.text !== "string" || value.hash !== inputHash(value.text) ||
+        value.bytes !== Buffer.byteLength(value.text, "utf8") || value.authorizationId !== governedStableId("gra",
+          owner.projectId, owner.bigTaskId, owner.planRevision, owner.candidateBinding, subtaskId, owner.workflowSequence, 0, "EXECUTE"))) malformed();
+    if ((kind === "repository" || kind === "worktree") &&
+        (value.ownershipId !== owner.worktreeOwnershipId || value.candidateSha !== owner.candidateSha)) malformed();
+    if (kind === "concurrency" && (value.projectId !== owner.projectId || !Number.isSafeInteger(value.activeCoding) ||
+        !Number.isSafeInteger(value.activeWrite) || Number(value.activeCoding) < 0 || Number(value.activeCoding) >= 2 ||
+        Number(value.activeWrite) < 0 || Number(value.activeWrite) > 1 || (row.write_enabled === 1 && value.activeWrite !== 0))) malformed();
+    if (kind === "budget" && (value.subtaskId !== subtaskId || typeof value.budget !== "object" || value.budget === null ||
+        !(value.budget as {allowed?: boolean}).allowed)) malformed();
+    if (kind === "human-policy" && (value.startPolicy !== row.start_policy || value.manualStartAuthorityId !== row.manual_start_authority_id)) malformed();
+  }
   const resolutions = sqlite.prepare(`SELECT r.*, a.subtask_id AS resolving_subtask, rr.role, rr.outcome,
     rr.occurred_at, c.target_finding_ids FROM governed_finding_resolutions r
     JOIN governed_findings f ON f.finding_id = r.finding_id

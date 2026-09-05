@@ -29,6 +29,8 @@ import type {
   WorkflowStage,
 } from "@codex-task-console/orchestration";
 
+import { assertProviderTurnSource, inputHash, provenanceId, readProviderInput, recordGateObservations, type GateObservation } from "./governed-occurrence-provenance.js";
+import { assertGovernedDispatchSource } from "./governed-evidence-validation.js";
 import { withGovernedCheckpointWriter } from "./governed-evidence-validation.js";
 import { compileGovernedFocusedContext } from "./governed-focused-context.js";
 import { assertGovernedSchemaIntegrity } from "./governed-schema-integrity.js";
@@ -1287,14 +1289,43 @@ export class GovernedExecutionStore {
       if (sqlite.prepare("SELECT 1 FROM governed_provider_claims WHERE authorization_id = ?").get(authorizationId)) {
         throw conflict("The provider start is already claimed; ambiguous starts cannot retry.");
       }
+      const claimedAt = this.#timestampAtOrAfter(input.authorization.authorizedAt);
       sqlite.prepare(`INSERT INTO governed_provider_claims
         (authorization_id, execution_run_id, candidate_sha, input_hash, input_bytes, target_finding_ids, claimed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`).run(authorizationId, input.attempt.executionRunId,
           input.authorization.candidateSha,
           createHash("sha256").update(input.preflight.text, "utf8").digest("hex"),
           input.preflight.utf8Bytes, JSON.stringify(targets),
-          this.#timestampAtOrAfter(input.authorization.authorizedAt));
+          claimedAt);
+      const observation = { authorization: input.authorization, executionRunId: input.attempt.executionRunId,
+        chatThreadId: input.attempt.chatThreadId, text: input.preflight.text, targetFindingIds: targets, claimedAt };
+      sqlite.prepare("INSERT INTO governed_provider_input_observations (authorization_id, observation_id, payload) VALUES (?, ?, ?)")
+        .run(authorizationId, provenanceId("gpi", observation), JSON.stringify(observation));
       return input;
+    });
+  }
+
+  validateRoleProviderTurnStart(authorizationId: string, actualText: string): void {
+    this.#storage.runInTransaction(() => {
+      const authorization = this.getRoleAuthorization(authorizationId);
+      if (authorization === null) throw malformed();
+      this.#assertRoleAuthorizationCurrent(authorization);
+      this.#requireProviderClaim(authorization);
+      const link = this.#requiredRoleLink(authorizationId);
+      const run = this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(link.execution_run_id));
+      const thread = this.#storage.getChatThreadById(ChatThreadIdSchema.parse(link.chat_thread_id));
+      const observed = readProviderInput(this.#access().sqlite, authorizationId);
+      const current = this.#compileRoleInput(authorization);
+      this.revalidateRoleCandidate(authorizationId);
+      if (run?.status !== "CREATED" || thread?.status !== "OPEN" || thread.providerThread === null ||
+          !current.allowed || current.text !== observed.text || actualText !== observed.text ||
+          !this.#deriveAggregateBudget(authorization.subtaskId, true).allowed) {
+        throw conflict("The exact governed provider-start authority changed.");
+      }
+      this.#access().sqlite.prepare(`INSERT INTO governed_provider_turn_starts
+        (authorization_id, observation_id, provider_thread_id, validated_at) VALUES (?, ?, ?, ?)`)
+        .run(authorizationId, observed.observationId, thread.providerThread.providerThreadId,
+          this.#timestampAtOrAfter(authorization.authorizedAt));
     });
   }
 
@@ -1367,6 +1398,7 @@ export class GovernedExecutionStore {
     }
     this.#assertRoleAuthorizationCurrent(authorization);
     this.#requireProviderClaim(authorization);
+    assertProviderTurnSource(this.#access().sqlite, authorizationId);
     const link = this.#requiredRoleLink(authorization.authorizationId);
     this.#storage.startExecutionRun({
       executionRunId: ExecutionRunIdSchema.parse(link.execution_run_id),
@@ -1405,25 +1437,8 @@ export class GovernedExecutionStore {
       const findingsToPersist = parsed.findings;
       const existing = this.#getRoleResult(authorization.authorizationId);
       if (existing !== null) {
-        const findings = this.#recordRoleFindingRows(existing.resultId);
-        if (
-          existing.role !== authorization.role ||
-          existing.outcome !== parsed.outcome ||
-          existing.summary !== parsed.summary ||
-          findings.length !== findingsToPersist.length ||
-          findings.some((finding, index) => {
-            const expected = findingsToPersist[index];
-            return (
-              expected === undefined ||
-              finding.ordinal !== index ||
-              finding.provider_finding_key !== expected.findingId ||
-              finding.blocking !== (expected.blocking ? 1 : 0) ||
-              finding.violated_invariant !== expected.violatedInvariant ||
-              finding.affected_contract !== expected.affectedContract ||
-              finding.reproduction !== expected.reproduction
-            );
-          })
-        ) {
+        const provenance = this.#access().sqlite.prepare("SELECT structured_result FROM governed_result_provenance WHERE result_id = ?").get(existing.resultId);
+        if (provenance?.structured_result !== JSON.stringify({schemaVersion: 1, ...parsed})) {
           throw conflict("The governed role result conflicts with prior history.");
         }
         return existing;
@@ -1436,6 +1451,7 @@ export class GovernedExecutionStore {
         throw conflict("Only the exact running governed role may report a result.");
       }
       this.#requireProviderClaim(authorization);
+      assertProviderTurnSource(this.#access().sqlite, authorizationId);
       const usage = NormalizedUsageSchema.safeParse(normalizedUsage);
       if (!usage.success || usage.data.totalTokens === undefined || providerModel === undefined ||
           run.providerRun === undefined || run.providerRun === null ||
@@ -1796,6 +1812,7 @@ export class GovernedExecutionStore {
     gates: Readonly<{
       budget: AggregateSubtaskUsageBudget;
       references: readonly string[];
+      observations: readonly GateObservation[];
     }>,
   ): GovernedDispatchReceipt {
     return this.#storage.runInTransaction(() => {
@@ -1901,6 +1918,7 @@ export class GovernedExecutionStore {
           reservedAt,
           reservedAt,
         );
+      recordGateObservations(access.sqlite, refreshed.observations);
       access.sqlite.prepare(`INSERT INTO governed_dispatch_gate_snapshots
         (receipt_id, gate_references, candidate_sha, recorded_at) VALUES (?, ?, ?, ?)`)
         .run(receiptId, JSON.stringify([...refreshed.references].sort()), refreshedWorktree.currentHeadSha, reservedAt);
@@ -2488,8 +2506,10 @@ export class GovernedExecutionStore {
     gates: Readonly<{
       budget: AggregateSubtaskUsageBudget;
       references: readonly string[];
+      observations: readonly GateObservation[];
     }>,
   ): readonly DurableWorkflowEvidence[] {
+    recordGateObservations(this.#access().sqlite, gates.observations);
     const sourceTypes = [
       "REPOSITORY_PREFLIGHT",
       "CONTEXT_PREFLIGHT",
@@ -2519,6 +2539,7 @@ export class GovernedExecutionStore {
   ): Readonly<{
     budget: AggregateSubtaskUsageBudget;
     references: readonly string[];
+    observations: readonly GateObservation[];
   }> {
     const readiness = this.#storage.evaluateStoredSubtaskDependencyReadiness(
       view.subtaskId,
@@ -2626,23 +2647,24 @@ export class GovernedExecutionStore {
       );
     }
     const extension = this.#getBudgetExtension(view.subtaskId);
-    const contextHash = createHash("sha256")
-      .update(preflight.allowed ? preflight.text : "", "utf8")
-      .digest("hex");
-    return freeze({
-      budget,
-      references: Object.freeze([
-        `dependency:${view.subtaskId}:${view.transitionCount + 1}`,
-        `repository:${worktree.ownership.id}:${worktree.currentHeadSha}`,
-        `context:${authorizationId}:${contextHash}:${preflight.utf8Bytes}`,
-        `budget:${view.subtaskId}:${budget.totalTokens ?? "unknown"}:${budget.effectiveLimitTokens}:${extension?.authorityId ?? "none"}`,
-        `concurrency:${view.projectId}:${activeCoding.count}:${activeWrite.count}`,
-        `worktree:${worktree.ownership.id}:${worktree.currentHeadSha}`,
-        this.#storage.getSubtaskById(view.subtaskId)?.startPolicy === "MANUAL"
-          ? `human-policy:${view.subtaskId}:manual:${this.#getManualStart(view.subtaskId)?.authorityId ?? "missing"}`
-          : `human-policy:${view.subtaskId}:routine-not-required`,
-      ]),
-    });
+    const owner = {
+      projectId: view.projectId, bigTaskId: view.bigTaskId, planRevision: view.planRevision,
+      candidateBinding: view.candidateBinding, subtaskId: view.subtaskId,
+      workflowSequence: view.transitionCount + 1, workflowStage: view.currentStage,
+      occurrenceId: stableId("gdr", stableId("gdo", view.subtaskId, view.transitionCount + 1)),
+      worktreeOwnershipId: worktree.ownership.id, candidateSha: worktree.currentHeadSha,
+    };
+    const observations: readonly GateObservation[] = [
+      { owner, kind: "dependency", value: { readiness } },
+      { owner, kind: "repository", value: { ownershipId: worktree.ownership.id, candidateSha: worktree.currentHeadSha, clean: true } },
+      { owner, kind: "context", value: { authorizationId, text: preflight.text, hash: inputHash(preflight.text), bytes: preflight.utf8Bytes } },
+      { owner, kind: "budget", value: { subtaskId: view.subtaskId, budget, extensionAuthorityId: extension?.authorityId ?? null } },
+      { owner, kind: "concurrency", value: { projectId: view.projectId, activeCoding: activeCoding.count, activeWrite: activeWrite.count } },
+      { owner, kind: "worktree", value: { ownershipId: worktree.ownership.id, candidateSha: worktree.currentHeadSha, status: "ACTIVE" } },
+      { owner, kind: "human-policy", value: { startPolicy: this.#storage.getSubtaskById(view.subtaskId)!.startPolicy,
+        manualStartAuthorityId: this.#getManualStart(view.subtaskId)?.authorityId ?? null } },
+    ];
+    return freeze({ budget, observations, references: observations.map(observation => provenanceId("ggo", observation)) });
   }
 
   #deriveAggregateBudget(
@@ -2888,6 +2910,7 @@ export class GovernedExecutionStore {
       throw malformed();
     }
     this.#requireProviderClaim(authorization);
+    assertProviderTurnSource(this.#access().sqlite, authorizationId);
     const provenance = this.#access().sqlite.prepare("SELECT * FROM governed_result_provenance WHERE result_id = ?")
       .get(result.resultId) as { authorization_id: string; provider_thread_id: string; provider_run_id: string;
         provider_model_id: string; normalized_usage: string; structured_result: string; candidate_sha: string; recorded_at: string } | undefined;
@@ -2918,6 +2941,7 @@ export class GovernedExecutionStore {
   }
 
   #requireProviderClaim(authorization: GovernedRoleAuthorization): void {
+    readProviderInput(this.#access().sqlite, authorization.authorizationId);
     const claim = this.#access().sqlite.prepare("SELECT * FROM governed_provider_claims WHERE authorization_id = ?")
       .get(authorization.authorizationId) as { execution_run_id: string; candidate_sha: string; input_hash: string;
         input_bytes: number; target_finding_ids: string; claimed_at: string } | undefined;
@@ -3046,17 +3070,7 @@ export class GovernedExecutionStore {
     receipt: GovernedDispatchReceipt,
     view: DurableWorkflowControlView,
   ): void {
-    const source = this.#access().sqlite.prepare("SELECT * FROM governed_dispatch_gate_snapshots WHERE receipt_id = ?")
-      .get(receipt.receiptId) as { gate_references: string; candidate_sha: string; recorded_at: string } | undefined;
-    if (source === undefined || source.gate_references !== JSON.stringify(receipt.gateEvidenceReferences) ||
-        source.recorded_at !== receipt.reservedAt || !isCommitSha(source.candidate_sha) ||
-        receipt.gateEvidenceReferences.length !== 7 ||
-        !receipt.gateEvidenceReferences.includes(`worktree:${receipt.worktreeOwnershipId}:${source.candidate_sha}`) ||
-        !receipt.gateEvidenceReferences.includes(`repository:${receipt.worktreeOwnershipId}:${source.candidate_sha}`) ||
-        !receipt.gateEvidenceReferences.includes(`dependency:${receipt.subtaskId}:${receipt.workflowSequence}`) ||
-        !receipt.gateEvidenceReferences.includes(receipt.manualStartAuthorityId === null
-          ? `human-policy:${receipt.subtaskId}:routine-not-required`
-          : `human-policy:${receipt.subtaskId}:manual:${receipt.manualStartAuthorityId}`)) throw malformed();
+    assertGovernedDispatchSource(this.#access().sqlite, view.subtaskId);
     const subtask = this.#storage.getSubtaskById(view.subtaskId);
     const executeEntrySequence =
       view.initialStage === "EXECUTE"
@@ -3249,6 +3263,22 @@ export class GovernedExecutionStore {
     );
     const allComplete = views.every(view => view.currentStage === "COMPLETE" && view.boardStatus === "DONE" &&
       view.unresolvedHumanRequired === null && this.#getDispatchReceiptForSubtask(view.subtaskId)?.status === "COMPLETED");
+    if (allComplete) {
+      for (const view of views) {
+        const final = this.#access().sqlite.prepare(`SELECT a.authorization_id, h.candidate_sha AS handoff_sha
+          FROM governed_handoffs h JOIN governed_role_results r ON r.result_id = h.role_result_id
+          JOIN governed_role_authorizations a ON a.authorization_id = r.authorization_id WHERE h.subtask_id = ?`).get(view.subtaskId);
+        if (final === undefined) throw malformed();
+        const assessed = this.#getRoleResult(String(final.authorization_id));
+        const authorization = this.getRoleAuthorization(String(final.authorization_id));
+        const candidate = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(view.subtaskId);
+        if (assessed === null || authorization === null || final.handoff_sha !== assessed.candidateSha ||
+            candidate.ownership.id !== authorization.worktreeOwnershipId || candidate.currentHeadSha !== assessed.candidateSha ||
+            !candidateIsClean(candidate.ownership.worktreePath)) {
+          throw conflict("The completed candidate no longer matches its final governed assessment.");
+        }
+      }
+    }
     if (existing !== undefined) {
       if (!allComplete || bigTask.status !== "DONE" || existing.candidate_binding !== materialization.candidateBinding ||
           existing.project_id !== materialization.projectId || existing.plan_revision !== materialization.planRevision ||
@@ -3353,6 +3383,9 @@ export class GovernedExecutionStore {
       this.#assertDispatchAuthority(receipt, view);
       const link = this.#getRoleLink(authorization.authorizationId);
       if (link !== null) this.#attemptFromLink(link, authorization);
+      if (sqlite.prepare("SELECT 1 FROM governed_provider_claims WHERE authorization_id = ?").get(authorization.authorizationId)) {
+        this.#requireProviderClaim(authorization);
+      }
       this.#getRoleResult(authorization.authorizationId);
     }
   }

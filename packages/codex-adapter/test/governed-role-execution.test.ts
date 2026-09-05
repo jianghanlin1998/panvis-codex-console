@@ -1,4 +1,5 @@
 import { createGovernedExecutionStoreForTest as createGovernedExecutionStore } from "../../storage/src/governed-execution-public.js";
+import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
@@ -15,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  ChatThreadIdSchema, ExecutionProviderIdSchema, ExecutionRunIdSchema, ProviderThreadReferenceSchema, ProviderRunReferenceSchema,
   BigTaskIdSchema,
   ProjectIdSchema,
   ProjectSchema,
@@ -460,4 +462,75 @@ describe("Step 8D mock execution ownership and liveness", () => {
       expect(fixture.governed.prepareNextRole(BIG_TASK_ID).kind).toBe("BLOCKED");
     }finally{cleanup(fixture);}
   },10_000);
+});
+
+
+describe("Step 8D final provider-start freshness",()=>{
+  it.each(["spawn","pre-turn"])("rejects changed canonical context at %s",async timing=>{
+    const fixture=createFixture();let scans=0;let turns=0;
+    try {
+      const prepared=authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));const deps=dependencies("EXECUTE");
+      const change=()=>{const db=new DatabaseSync(join(fixture.directory,"console.sqlite"));db.exec("UPDATE projects SET name = 'Changed canonical Project'");db.close();};
+      const result=await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,prepared.authorization.authorizationId,{
+        ...deps,
+        spawnAppServer:(...args)=>{
+          if(timing==="spawn") change();
+          const child=deps.spawnAppServer(...args);
+          const write=child.stdin.write.bind(child.stdin);
+          child.stdin.write=((...parts:Parameters<typeof child.stdin.write>)=>{
+            if(String(parts[0]).includes('"method":"turn/start"')) turns++;
+            return write(...parts);
+          }) as typeof child.stdin.write;
+          return child;
+        },
+        validateWorktreeFilesystem:path=>{deps.validateWorktreeFilesystem?.(path);if(++scans===3&&timing==="pre-turn") change();},
+      });
+      expect(result.success).toBe(false);expect(result.roleResult).toBeNull();expect(turns).toBe(0);
+    }finally{cleanup(fixture);}
+  });
+});
+
+
+describe("Step 8D provider-start aggregate budget timing",()=>{
+  it.each([
+    {total:119_999,extend:false,allowed:true},
+    {total:120_000,extend:false,allowed:false},
+    {total:120_000,extend:true,allowed:true},
+    {total:160_000,extend:false,allowed:false},
+    {total:null,extend:false,allowed:false},
+  ])("rechecks $total usage after provider setup (extension $extend)",async({total,extend,allowed})=>{
+    const fixture=createFixture();let scans=0;let turns=0;
+    try{
+      const providerId=ExecutionProviderIdSchema.parse("codex-app-server");
+      const chatThreadId=ChatThreadIdSchema.parse("thr_adapter_budget");
+      const executionRunId=ExecutionRunIdSchema.parse("run_adapter_budget");
+      const providerThread=ProviderThreadReferenceSchema.parse({providerId,providerThreadId:"provider-budget-history"});
+      fixture.storage.createChatThread({id:chatThreadId,subtaskId:SUBTASK_ID,providerId});
+      fixture.storage.bindChatThreadProviderReference({chatThreadId,providerThread});
+      fixture.storage.createExecutionRun({id:executionRunId,chatThreadId});
+      fixture.storage.startExecutionRun({executionRunId,providerRun:ProviderRunReferenceSchema.parse({...providerThread,providerRunId:"provider-budget-run"})});
+      fixture.storage.finalizePrimaryExecutionAttempt({executionRunId,status:"SUCCEEDED",normalizedUsage:{inputTokens:1,cachedInputTokens:0,outputTokens:0,reasoningTokens:0,totalTokens:1}});
+      const prepared=authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));const deps=dependencies("EXECUTE");
+      const result=await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,prepared.authorization.authorizationId,{
+        ...deps,
+        spawnAppServer:(...args)=>{
+          const child=deps.spawnAppServer(...args);const write=child.stdin.write.bind(child.stdin);
+          child.stdin.write=((...parts:Parameters<typeof child.stdin.write>)=>{if(String(parts[0]).includes('"method":"turn/start"'))turns++;return write(...parts);}) as typeof child.stdin.write;
+          return child;
+        },
+        validateWorktreeFilesystem:path=>{
+          deps.validateWorktreeFilesystem?.(path);
+          if(++scans!==3)return;
+          const db=new DatabaseSync(join(fixture.directory,"console.sqlite"));
+          const guards=db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger' AND tbl_name='execution_runs'").all();
+          for(const guard of guards)db.exec(`DROP TRIGGER "${guard.name}"`);
+          db.exec(total===null?"UPDATE execution_runs SET usage_present=0,input_tokens=NULL,cached_input_tokens=NULL,output_tokens=NULL,reasoning_tokens=NULL,total_tokens=NULL WHERE id='run_adapter_budget'":`UPDATE execution_runs SET input_tokens=${total},total_tokens=${total} WHERE id='run_adapter_budget'`);
+          for(const guard of guards)db.exec(String(guard.sql));db.close();
+          if(extend)fixture.governed.authorizeOneTimeBudgetExtension(SUBTASK_ID);
+        },
+      });
+      expect(result.success).toBe(allowed);expect(turns).toBe(allowed?1:0);
+      if(!allowed){expect(result.roleResult).toBeNull();expect(fixture.storage.listExecutionRunsForChatThread(result.chatThreadId!).map(run=>run.status)).toEqual(["FAILED"]);}
+    }finally{cleanup(fixture);}
+  });
 });

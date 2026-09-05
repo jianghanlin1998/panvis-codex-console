@@ -1,3 +1,4 @@
+import { GATE_KINDS, provenanceId, readGateObservation } from "../src/governed-occurrence-provenance.js";
 import { createGovernedExecutionStoreForTesting as createGovernedExecutionStore } from "../src/governed-execution.js";
 import type { GovernedExecutionStore } from "../src/governed-execution.js";
 import { createHash } from "node:crypto";
@@ -15,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   BigTaskIdSchema,
@@ -49,6 +50,10 @@ import type {
 } from "../src/index.js";
 import { createWorktreeOwnershipManagerForTesting } from "../src/worktree-ownership.js";
 import { makeBigTask, makeContextItem, makeContextDigest } from "./fixtures.js";
+
+// Long synchronous SQLite/Git matrices must let Vitest deliver task updates.
+// This yields between isolated cases; it does not change their timeout or work.
+afterEach(async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
 
 const PROVIDER_ID = ExecutionProviderIdSchema.parse("codex-app-server");
 const MODEL = ProviderModelReferenceSchema.parse({
@@ -223,7 +228,9 @@ const governedFor = (
   scenario: Scenario,
   preprovisionBigTaskIds: readonly BigTaskId[] = [],
 ): GovernedExecutionStore => {
-  let next = 0;
+  const db = new DatabaseSync(scenario.databasePath, {readOnly:true});
+  let next = Number(db.prepare("SELECT count(*) AS count FROM worktree_ownerships").get()!.count);
+  db.close();
   const worktrees = createWorktreeOwnershipManagerForTesting(scenario.storage, {
     worktreeRoot: scenario.worktreeRoot,
     idGenerator: () => `wt_${(++next).toString(16).padStart(32, "0")}`,
@@ -320,12 +327,13 @@ const completeRole = (
   const attempt = governed.reserveRoleExecutionAttempt(
     authorization.authorizationId,
   );
-  governed.claimRoleProviderExecution(authorization.authorizationId);
+  const input = governed.claimRoleProviderExecution(authorization.authorizationId);
   const providerThread = ProviderThreadReferenceSchema.parse({
     providerId: PROVIDER_ID,
     providerThreadId: `provider-thread-${authorization.workflowSequence}`,
   });
   governed.bindRoleProviderThread(authorization.authorizationId, providerThread);
+  governed.validateRoleProviderTurnStart(authorization.authorizationId, input.preflight.text);
   governed.startRoleProviderRun(
     authorization.authorizationId,
     ProviderRunReferenceSchema.parse({
@@ -559,18 +567,8 @@ describe("Operational Governed Execution V0", () => {
     }
   });
 
-  it("runs one bounded HIGH_RISK repair path with focused no-write re-QA", () => {
-    const scenario = createScenario();
-    try {
-      const { bigTaskId } = seed(scenario, {
-        profiles: ["HIGH_RISK_FOUNDATION"],
-      });
-      const governed = governedFor(scenario);
-      completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "READY");
-      const harden = authorized(governed.prepareNextRole(bigTaskId));
+  withFreshRoleTest("runs one bounded HIGH_RISK repair path with focused no-write re-QA", ({scenario,bigTaskId,governed,harden,fresh})=>{
       expect(harden.authorization.role).toBe("HARDEN");
-      completeRole(governed, harden, "PASS");
-      const fresh = authorized(governed.prepareNextRole(bigTaskId));
       expect(fresh.authorization.contextProfile).toBe("FRESH_INDEPENDENT_QA");
       completeRole(governed, fresh, "BLOCKING_FAIL", [
         {
@@ -608,20 +606,9 @@ describe("Operational Governed Execution V0", () => {
           .get(),
       ).toEqual({ findings: 1, resolutions: 1, handoffs: 1, dispositions: 1 });
       sqlite.close();
-    } finally {
-      cleanupScenario(scenario);
-    }
   });
 
-  it("stops a failed focused Re-QA at HUMAN_REQUIRED without a second repair", () => {
-    const scenario = createScenario();
-    try {
-      const { bigTaskId, subtaskIds } = seed(scenario, {
-        profiles: ["HIGH_RISK_FOUNDATION"],
-      });
-      const governed = governedFor(scenario);
-      completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "READY");
-      completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "PASS");
+  withFreshRoleTest("stops a failed focused Re-QA at HUMAN_REQUIRED without a second repair", ({ scenario, bigTaskId, subtaskIds, governed }) => {
       completeRole(
         governed,
         authorized(governed.prepareNextRole(bigTaskId)),
@@ -670,9 +657,6 @@ describe("Operational Governed Execution V0", () => {
         { role: "REPAIR", count: 1 },
       ]);
       sqlite.close();
-    } finally {
-      cleanupScenario(scenario);
-    }
   });
 
   it("fails closed for unknown usage and enforces warning and absolute ceilings", () => {
@@ -767,8 +751,9 @@ describe("Operational Governed Execution V0", () => {
         providerId: PROVIDER_ID,
         providerThreadId: "provider-thread-resume",
       });
-      governed.claimRoleProviderExecution(resumed.authorization.authorizationId);
+      const input = governed.claimRoleProviderExecution(resumed.authorization.authorizationId);
       governed.bindRoleProviderThread(resumed.authorization.authorizationId, providerThread);
+      governed.validateRoleProviderTurnStart(resumed.authorization.authorizationId, input.preflight.text);
       governed.startRoleProviderRun(
         resumed.authorization.authorizationId,
         ProviderRunReferenceSchema.parse({
@@ -1030,19 +1015,26 @@ const freshRole = (scenario: Scenario, options: Parameters<typeof seed>[1] = {})
   const seeded = seed(scenario, { ...options, profiles: ["HIGH_RISK_FOUNDATION"] });
   const governed = governedFor(scenario);
   completeRole(governed, authorized(governed.prepareNextRole(seeded.bigTaskId)), "READY");
-  completeRole(governed, authorized(governed.prepareNextRole(seeded.bigTaskId)), "PASS");
-  return { ...seeded, governed, fresh: authorized(governed.prepareNextRole(seeded.bigTaskId)) };
+  const harden = authorized(governed.prepareNextRole(seeded.bigTaskId));
+  completeRole(governed, harden, "PASS");
+  return { ...seeded, governed, harden, fresh: authorized(governed.prepareNextRole(seeded.bigTaskId)) };
 };
 
 describe("Step 8D comprehensive hardening regressions", () => {
-  it.each([
-    [hardeningFinding("A"), hardeningFinding("B")],
-    [hardeningFinding("C"), hardeningFinding("D", false)],
-    Array.from({ length: 16 }, (_, i) => hardeningFinding(`BATCH-${i}`, i < 12)),
-  ])("repairs and retests the exact bounded Fresh-QA batch %# in one cycle", (...findings) => {
+  describe.each([
+    { findings: [hardeningFinding("A"), hardeningFinding("B")] },
+    { findings: [hardeningFinding("C"), hardeningFinding("D", false)] },
+    { findings: Array.from({ length: 16 }, (_, i) => hardeningFinding(`BATCH-${i}`, i < 12)) },
+  ])("bounded batch repair %#", ({findings}) => {
+  const fixtures = new WeakMap<object, ReturnType<typeof freshRole> & { scenario: Scenario }>();
+  beforeEach(context => {
     const scenario = createScenario();
-    try {
-      const { governed, bigTaskId, subtaskIds, fresh } = freshRole(scenario);
+    try { fixtures.set(context, { ...freshRole(scenario), scenario }); }
+    catch (error) { cleanupScenario(scenario); throw error; }
+  });
+  afterEach(context => { const fixture = fixtures.get(context); if (fixture) cleanupScenario(fixture.scenario); });
+  it("repairs and retests the exact bounded Fresh-QA batch in one cycle", testContext => {
+      const { governed, bigTaskId, subtaskIds, fresh, scenario } = fixtures.get(testContext)!;
       completeRole(governed, fresh, "BLOCKING_FAIL", findings);
       const repair = authorized(governed.prepareNextRole(bigTaskId));
       governed.reserveRoleExecutionAttempt(repair.authorization.authorizationId);
@@ -1069,7 +1061,7 @@ describe("Step 8D comprehensive hardening regressions", () => {
       expect(db.prepare("SELECT count(*) AS count FROM governed_role_authorizations WHERE role = 'REPAIR'").get()).toEqual({ count: 1 });
       expect(scenario.storage.getDurableWorkflowControlView(subtaskIds[0]!)?.repairCyclesUsed).toBe(1);
       db.close();
-    } finally { cleanupScenario(scenario); }
+  });
   });
 
   it.each(["HARDEN", "FRESH_QA", "VERIFY"] as const)("permits %s PASS with bounded non-blocking findings", role => {
@@ -1085,16 +1077,12 @@ describe("Step 8D comprehensive hardening regressions", () => {
     } finally { cleanupScenario(scenario); }
   });
 
-  it("persists a new bounded blocker found by focused Re-QA and escalates without another repair", () => {
-    const scenario = createScenario();
-    try {
-      const { governed, bigTaskId, fresh } = freshRole(scenario);
+  withFreshRoleTest("persists a new bounded blocker found by focused Re-QA and escalates without another repair", ({ bigTaskId, governed, fresh }) => {
       completeRole(governed, fresh, "BLOCKING_FAIL", [hardeningFinding("FIRST"), hardeningFinding("SECOND")]);
       completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "READY");
       expect(completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "BLOCKING_FAIL",
         [hardeningFinding("FIRST"), hardeningFinding("NEW-REPAIRED-SURFACE"), hardeningFinding("DEFER", false)]).kind).toBe("HUMAN_REQUIRED");
       expect(governed.prepareNextRole(bigTaskId)).toMatchObject({ kind: "HUMAN_REQUIRED", reason: "REPAIR_REQA_EXHAUSTED" });
-    } finally { cleanupScenario(scenario); }
   });
 
   it("records source-backed promotion candidates for human review without auto-accepting them", () => {
@@ -1205,9 +1193,7 @@ describe("Step 8D bounded persisted-state matrix", () => {
     } finally { cleanupScenario(scenario); }
   });
 
-  it("rejects replacement, upsert, update and delete on every populated immutable authority table", async () => {
-    const scenario = createScenario();
-    try {
+  withPreparedScenario("rejects replacement, upsert, update and delete on every populated immutable authority table", scenario=>{
       const { bigTaskId, subtaskIds } = seed(scenario, {profiles:["HIGH_RISK_FOUNDATION"], startPolicy:"MANUAL"});
       const governed = governedFor(scenario);
       expect(governed.prepareNextRole(bigTaskId).kind).toBe("HUMAN_REQUIRED");
@@ -1216,13 +1202,15 @@ describe("Step 8D bounded persisted-state matrix", () => {
       governed.authorizeOneTimeBudgetExtension(subtaskIds[0]!);
       completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "READY", [], undefined, "Candidate for explicit review.");
       completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "PASS");
+      return {bigTaskId,governed};
+  }, async ({scenario,bigTaskId,governed})=>{
       completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "BLOCKING_FAIL", [hardeningFinding("A"), hardeningFinding("B")]);
       completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "READY");
       completeRole(governed, authorized(governed.prepareNextRole(bigTaskId)), "PASS");
       governed.prepareNextRole(bigTaskId);
       const db = new DatabaseSync(scenario.databasePath);
       const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name GLOB 'governed_*'").all();
-      expect(tables).toHaveLength(16);
+      expect(tables).toHaveLength(19);
       let attempts = 0;
       for (const recursive of ["ON", "OFF"]) {
         db.exec(`PRAGMA recursive_triggers = ${recursive}`);
@@ -1245,11 +1233,10 @@ describe("Step 8D bounded persisted-state matrix", () => {
           expect(() => db.exec(`DELETE FROM ${table}`), table).toThrow(); attempts++;
         }
       }
-      expect(attempts).toBe(160);
+      expect(attempts).toBe(190);
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       db.close();
       expect(governed.inspectBigTask(bigTaskId).status).toBe("DONE");
-    } finally { cleanupScenario(scenario); }
   });
 
   it("rejects malformed bounded findings without changing durable results", () => {
@@ -1258,8 +1245,9 @@ describe("Step 8D bounded persisted-state matrix", () => {
       const { governed, fresh } = freshRole(scenario);
       const a = fresh.authorization;
       governed.reserveRoleExecutionAttempt(a.authorizationId);
-      governed.claimRoleProviderExecution(a.authorizationId);
+      const input = governed.claimRoleProviderExecution(a.authorizationId);
       governed.bindRoleProviderThread(a.authorizationId, ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"invalid-result-thread"}));
+      governed.validateRoleProviderTurnStart(a.authorizationId, input.preflight.text);
       governed.startRoleProviderRun(a.authorizationId, ProviderRunReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"invalid-result-thread",providerRunId:"invalid-result-run"}), MODEL);
       for (const [outcome, findings] of [
         ["PASS", [hardeningFinding("blocking")]], ["BLOCKING_FAIL", []],
@@ -1286,6 +1274,7 @@ describe("Step 8D bounded persisted-state matrix", () => {
       governed.reserveRoleExecutionAttempt(a.authorizationId);
       const input = governed.claimRoleProviderExecution(a.authorizationId);
       governed.bindRoleProviderThread(a.authorizationId,ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"candidate-thread"}));
+      governed.validateRoleProviderTurnStart(a.authorizationId, input.preflight.text);
       governed.startRoleProviderRun(a.authorizationId,ProviderRunReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"candidate-thread",providerRunId:"candidate-run"}),MODEL);
       governed.persistSuccessfulRoleResult(a.authorizationId,JSON.stringify({schemaVersion:1,outcome:"READY",summary:"Candidate ready.",findings:[],promotionCandidate:null}),MODEL,ZERO_USAGE);
       writeFileSync(join(input.worktree.ownership.worktreePath,"uncommitted.txt"),"uncommitted\n",{encoding:"utf-8"});
@@ -1296,7 +1285,7 @@ describe("Step 8D bounded persisted-state matrix", () => {
 });
 
 describe("Step 8D exact context, restart and operation matrices", () => {
-  it("measures the final UTF-8 role input at 40000/40001/64000/64001 bytes", () => {
+  it.each([40_000,40_001,64_000,64_001])("measures the final UTF-8 role input at %i bytes", bytes => {
     const baseline = createScenario();
     let overhead: number;
     try {
@@ -1306,7 +1295,7 @@ describe("Step 8D exact context, restart and operation matrices", () => {
       governed.reserveRoleExecutionAttempt(a.authorizationId);
       overhead = governed.resolveRoleExecutionInput(a.authorizationId).preflight.utf8Bytes - 1;
     } finally {cleanupScenario(baseline);}
-    for (const bytes of [40_000,40_001,64_000,64_001]) {
+    {
       const scenario = createScenario();
       try {
         const {bigTaskId,subtaskIds} = seed(scenario,{profiles:["LOW"],promptSeed:"x".repeat(bytes-overhead)});
@@ -1324,7 +1313,10 @@ describe("Step 8D exact context, restart and operation matrices", () => {
           expect(input.preflight).toMatchObject({utf8Bytes:bytes,status:bytes <= 40_000 ? "WITHIN_TARGET" : "ABOVE_TARGET"});
           expect(input.preflight.text).toContain('"instruction":');
           expect(input.preflight.text).toContain('"candidateSha":');
-          expect(authorized(prepared).receipt.gateEvidenceReferences).toContain(`context:${a.authorizationId}:${createHash("sha256").update(input.preflight.text,"utf8").digest("hex")}:${bytes}`);
+          const db = new DatabaseSync(scenario.databasePath);
+          const context = authorized(prepared).receipt.gateEvidenceReferences.map(ref => readGateObservation(db, ref)).find(o => o.kind === "context");
+          expect(context?.value).toEqual({authorizationId:a.authorizationId,text:input.preflight.text,hash:createHash("sha256").update(input.preflight.text,"utf8").digest("hex"),bytes});
+          db.close();
         }
       } finally {cleanupScenario(scenario);}
     }
@@ -1343,7 +1335,7 @@ describe("Step 8D exact context, restart and operation matrices", () => {
       const a=authorized(governed.prepareNextRole(bigTaskId));
       expect(a.authorization.writeEnabled).toBe(false);
       expect(a.receipt.manualStartAuthorityId).toBe(manual.authorityId);
-      expect(a.receipt.gateEvidenceReferences).toContain(`human-policy:${subtaskIds[0]}:manual:${manual.authorityId}`);
+      expect(a.receipt.gateEvidenceReferences.map(ref=>readGateObservation(db,ref)).find(o=>o.kind==="human-policy")?.value).toEqual({startPolicy:"MANUAL",manualStartAuthorityId:manual.authorityId});
       expect(a.receipt.gateEvidenceReferences.join(" ")).not.toContain("routine-not-required");
       db.close();
     } finally {cleanupScenario(scenario);}
@@ -1356,8 +1348,9 @@ describe("Step 8D exact context, restart and operation matrices", () => {
       const governed=governedFor(scenario);
       const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
       const attempt=governed.reserveRoleExecutionAttempt(a.authorizationId);
-      governed.claimRoleProviderExecution(a.authorizationId);
+      const input = governed.claimRoleProviderExecution(a.authorizationId);
       if (seam!=="CLAIMED") governed.bindRoleProviderThread(a.authorizationId,ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"restart-thread"}));
+      if (["RUNNING","FAILED","INTERRUPTED"].includes(seam)) governed.validateRoleProviderTurnStart(a.authorizationId, input.preflight.text);
       if (["RUNNING","FAILED","INTERRUPTED"].includes(seam)) governed.startRoleProviderRun(a.authorizationId,ProviderRunReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"restart-thread",providerRunId:"restart-run"}),MODEL);
       if (seam==="FAILED" || seam==="INTERRUPTED") scenario.storage.finishExecutionRun({executionRunId:attempt.executionRunId,status:seam});
       scenario.storage.close();
@@ -1429,10 +1422,7 @@ describe("Step 8D exact context, restart and operation matrices", () => {
 });
 
 describe("Step 8D durable source and completion checks", () => {
-  it("keeps Fresh QA, Repair and Focused Re-QA free of Active Context, Digest and prior reasoning", () => {
-    const scenario=createScenario();
-    try {
-      const {bigTaskId,subtaskIds,governed,fresh}=freshRole(scenario);
+  withFreshRoleTest("keeps Fresh QA, Repair and Focused Re-QA free of Active Context, Digest and prior reasoning", ({scenario,bigTaskId,subtaskIds,governed,fresh})=>{
       const scope=ContextScopeSchema.parse({scopeType:"SUBTASK",projectId:"prj_governed",bigTaskId,subtaskId:subtaskIds[0]});
       scenario.storage.createContextItem(makeContextItem("ctx_reasoning_canary",scope,{body:"BUILDER_RAW_CANARY HARDENER_RAW_CANARY REPAIR_RAW_CANARY PRIOR_HANDOFF_CANARY SELF_ASSESSMENT_CANARY"}));
       scenario.storage.createContextDigest(makeContextDigest("dgt_reasoning_canary",scope,{body:"DIGEST_CANARY RAW_HISTORY_CANARY"}));
@@ -1448,23 +1438,31 @@ describe("Step 8D durable source and completion checks", () => {
         completeRole(governed,prepared,index===0?"BLOCKING_FAIL":index===1?"READY":"PASS",index===0?[hardeningFinding("target-a"),hardeningFinding("target-b")]:[]);
       }
       expect(governed.prepareNextRole(bigTaskId).kind).toBe("BIG_TASK_COMPLETE");
-    } finally {cleanupScenario(scenario);}
   });
 
-  it.each([
+  for (const [table,mutation] of [
     ["governed_findings","affected_contract = 'contract/unrelated'"],
     ["governed_finding_resolutions","role_result_id = (SELECT result_id FROM governed_role_results WHERE role = 'HARDEN')"],
     ["governed_provider_claims","target_finding_ids = '[]' WHERE authorization_id IN (SELECT authorization_id FROM governed_role_authorizations WHERE role = 'FOCUSED_RE_QA')"],
     ["governed_promotion_candidates","summary = 'Changed candidate conclusion.'"],
     ["governed_gate_sources","source_reference = 'wrong-gate-source'"],
     ["governed_big_task_completion_receipts","subtask_count = 2"],
-  ])("rejects %s source corruption after reopen with original schema restored", (table,mutation) => {
-    const scenario=createScenario();let reopened:TaskStorage|undefined;
-    try {
-      const {bigTaskId,governed,fresh}=freshRole(scenario);
-      completeRole(governed,fresh,"BLOCKING_FAIL",[hardeningFinding("A"),hardeningFinding("B")]);
+  ] as const) {
+    withPreparedScenario(`rejects ${table} source corruption after reopen with original schema restored`,scenario=>{
+      const shortPath = ["governed_promotion_candidates", "governed_gate_sources", "governed_big_task_completion_receipts"].includes(table);
+      const {bigTaskId}=seed(scenario,{profiles:[shortPath ? "STANDARD" : "HIGH_RISK_FOUNDATION"]});
+      const governed=governedFor(scenario);
       completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"READY",[],undefined,"Pending candidate conclusion.");
       completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"PASS");
+      return {shortPath,bigTaskId,governed};
+    },({scenario,shortPath,bigTaskId,governed})=>{
+      let reopened:TaskStorage|undefined;
+      try {
+      if (!shortPath) {
+        completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"BLOCKING_FAIL",[hardeningFinding("A"),hardeningFinding("B")]);
+        completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"READY");
+        completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"PASS");
+      }
       governed.prepareNextRole(bigTaskId);
       scenario.storage.close();
       const db=new DatabaseSync(scenario.databasePath);db.exec("PRAGMA foreign_keys = OFF");
@@ -1476,8 +1474,9 @@ describe("Step 8D durable source and completion checks", () => {
       const next=governedFor({...scenario,storage:reopened});
       expect(()=>next.prepareNextRole(bigTaskId)).toThrow();
       expect(()=>next.inspectBigTask(bigTaskId)).toThrow();
-    } finally {reopened?.close();cleanupScenario(scenario);}
-  });
+      } finally {reopened?.close();}
+    });
+  }
 
   it.each([
     ["subtasks","status = 'TODO'"],
@@ -1543,4 +1542,305 @@ it("does not expose governed checkpoint replay as a public authority path",()=>{
     completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"PASS");
     expect(governed.prepareNextRole(bigTaskId).kind).toBe("BIG_TASK_COMPLETE");
   }finally{cleanupScenario(scenario);}
+});
+
+
+describe("Step 8D post-FQA repair", () => {
+  it.each(["input_hash = '" + "a".repeat(64) + "'", "input_bytes = input_bytes + 1"])("rejects inconsistent provider claim %s", mutation => {
+    const scenario=createScenario();
+    try {
+      const {bigTaskId}=seed(scenario); const governed=governedFor(scenario);
+      const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
+      governed.reserveRoleExecutionAttempt(a.authorizationId);
+      const input = governed.claimRoleProviderExecution(a.authorizationId);
+      const thread=ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"repro-thread"});
+      governed.bindRoleProviderThread(a.authorizationId,thread);
+      governed.validateRoleProviderTurnStart(a.authorizationId, input.preflight.text);
+      governed.startRoleProviderRun(a.authorizationId,ProviderRunReferenceSchema.parse({...thread,providerRunId:"repro-run"}),MODEL);
+      corrupt(scenario,"governed_provider_claims",mutation);
+      expect(()=>governed.persistSuccessfulRoleResult(a.authorizationId,JSON.stringify({schemaVersion:1,outcome:"READY",summary:"ready",findings:[],promotionCandidate:null}),MODEL,ZERO_USAGE)).toThrow();
+    } finally {cleanupScenario(scenario);}
+  });
+  it("rejects jointly replaced gate references",()=>{
+    const scenario=createScenario();
+    try {
+      const {bigTaskId}=seed(scenario);const governed=governedFor(scenario);
+      const prepared=authorized(governed.prepareNextRole(bigTaskId));
+      const refs=[...prepared.receipt.gateEvidenceReferences]; refs[0]="ggo_"+"f".repeat(48);refs.sort();
+      corrupt(scenario,"governed_dispatch_receipts",`gate_evidence_references = '${JSON.stringify(refs)}'`);
+      corrupt(scenario,"governed_dispatch_gate_snapshots",`gate_references = '${JSON.stringify(refs)}'`);
+      expect(()=>governed.inspectBigTask(bigTaskId)).toThrow();
+    } finally {cleanupScenario(scenario);}
+  });
+  it("blocks new candidate commit at Big Task completion",()=>{
+    const scenario=createScenario();
+    try {
+      const {bigTaskId}=seed(scenario);const governed=governedFor(scenario);
+      const a=authorized(governed.prepareNextRole(bigTaskId));
+      completeRole(governed,a,"READY");completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"PASS");
+      const path=join(scenario.worktreeRoot,a.authorization.worktreeOwnershipId);
+      git(path,["commit","--allow-empty","-m","after assessment"]);
+      expect(()=>governed.prepareNextRole(bigTaskId)).toThrow();
+    } finally {cleanupScenario(scenario);}
+  });
+  it.each(["STANDARD","HIGH_RISK_FOUNDATION","LOW"] as const)("progresses serial %s to STANDARD across reopen",profile=>{
+    const scenario=createScenario();let reopened:TaskStorage|undefined;
+    try {
+      const {bigTaskId,subtaskIds}=seed(scenario,{profiles:[profile,"STANDARD"]});let governed=governedFor(scenario);
+      let first: Extract<GovernedPreparationResult,{kind:"ROLE_AUTHORIZED"}> | undefined;
+      for(const outcome of profile==="HIGH_RISK_FOUNDATION"?["READY","PASS","PASS"] as const:["READY","PASS"] as const) {
+        const prepared=authorized(governed.prepareNextRole(bigTaskId));first ??= prepared;completeRole(governed,prepared,outcome);
+      }
+      scenario.storage.close();reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});
+      governed=governedFor({...scenario,storage:reopened});
+      const second=authorized(governed.prepareNextRole(bigTaskId));
+      expect(second.authorization.subtaskId).toBe(subtaskIds[1]);
+      expect(reopened.getSubtaskById(subtaskIds[1]!)?.status).toBe("IN_PROGRESS");
+      const db=new DatabaseSync(scenario.databasePath);
+      const capacity=[first!,second].map(p=>p.receipt.gateEvidenceReferences.map(ref=>({ref,observation:readGateObservation(db,ref)})).find(o=>o.observation.kind==="concurrency")!);
+      expect(capacity[0]!.ref).not.toBe(capacity[1]!.ref);
+      for(const source of capacity)expect(source.observation.value).toMatchObject({activeCoding:0,activeWrite:0});
+      expect(db.prepare("SELECT status FROM governed_dispatch_receipts WHERE subtask_id=?").get(subtaskIds[0]!)).toEqual({status:"COMPLETED"});
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);db.close();
+    } finally {reopened?.close();cleanupScenario(scenario);}
+  });
+  it("rejects changed promotion conclusion on semantic replay",()=>{
+    const scenario=createScenario();
+    try {
+      const {bigTaskId}=seed(scenario);const governed=governedFor(scenario);
+      const a=authorized(governed.prepareNextRole(bigTaskId));completeRole(governed,a,"READY",[],undefined,"Conclusion A");
+      const exact=JSON.stringify({schemaVersion:1,outcome:"READY",summary:"EXECUTE completed.",findings:[],promotionCandidate:"Conclusion A"});
+      const result=governed.persistSuccessfulRoleResult(a.authorization.authorizationId,exact,MODEL,ZERO_USAGE);
+      expect(governed.persistSuccessfulRoleResult(a.authorization.authorizationId,exact,MODEL,ZERO_USAGE)).toEqual(result);
+      expect(()=>governed.persistSuccessfulRoleResult(a.authorization.authorizationId,JSON.stringify({schemaVersion:1,outcome:"READY",summary:"EXECUTE completed.",findings:[],promotionCandidate:"Conclusion B"}),MODEL,ZERO_USAGE)).toThrow();
+    } finally {cleanupScenario(scenario);}
+  });
+});
+
+function corrupt(scenario: Scenario, table: string, mutation: string): void {
+  const db=new DatabaseSync(scenario.databasePath);
+  db.exec("PRAGMA foreign_keys = OFF");
+  const triggers=db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger' AND tbl_name=?").all(table);
+  try {
+    for(const t of triggers) db.exec(`DROP TRIGGER "${t.name}"`);
+    db.exec(`UPDATE ${table} SET ${mutation}`);
+  } finally {for(const t of triggers) db.exec(String(t.sql));db.close();}
+}
+
+describe("Step 8D occurrence ownership matrix", () => {
+  it.each(GATE_KINDS.flatMap(kind => ["subtaskId", "bigTaskId", "projectId", "planRevision", "candidateBinding", "candidateSha", "workflowSequence", "workflowStage", "occurrenceId"].map(field => ({kind, field}))))("rejects $kind observation with changed $field even when references agree", ({kind, field}) => {
+      const scenario=createScenario();let reopened:TaskStorage|undefined;
+      try {
+        const {bigTaskId}=seed(scenario,{suffix:`_${kind.replaceAll("-", "_")}_${field.toLowerCase()}`});const governed=governedFor(scenario);
+        const receipt=authorized(governed.prepareNextRole(bigTaskId)).receipt;
+        const db=new DatabaseSync(scenario.databasePath);
+        const exact=receipt.gateEvidenceReferences.map(ref=>({ref,observation:readGateObservation(db,ref)})).find(o=>o.observation.kind===kind)!;
+        db.close();
+        const owner={...exact.observation.owner,[field]:(field==="workflowSequence"||field==="planRevision")?99:field==="candidateSha"?"b".repeat(40):field==="workflowStage"?"VERIFY":`unrelated_${field}`};
+        const altered={...exact.observation,owner};const ref=provenanceId("ggo",altered);
+        const escaped=JSON.stringify(altered).replaceAll("'","''");
+        corrupt(scenario,"governed_gate_observations",`source_reference='${ref}', payload='${escaped}', subtask_id='${owner.subtaskId}', workflow_sequence=${owner.workflowSequence} WHERE source_reference='${exact.ref}'`);
+        const refs=receipt.gateEvidenceReferences.map(r=>r===exact.ref?ref:r).sort();
+        corrupt(scenario,"governed_dispatch_receipts",`gate_evidence_references='${JSON.stringify(refs)}'`);
+        corrupt(scenario,"governed_dispatch_gate_snapshots",`gate_references='${JSON.stringify(refs)}'`);
+        expect(()=>governed.inspectBigTask(bigTaskId)).toThrow();
+        scenario.storage.close();reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});
+        expect(()=>governedFor({...scenario,storage:reopened!}).inspectBigTask(bigTaskId)).toThrow();
+      }finally{reopened?.close();cleanupScenario(scenario);}
+    });
+});
+
+describe("Step 8D exact provider provenance and budget",()=>{
+  it.each([
+    ["hash and bytes",`input_hash='${"b".repeat(64)}',input_bytes=input_bytes+1`],
+    ["targets","target_finding_ids='[\"foreign-finding\"]'"],
+    ["execution run","execution_run_id='run_budget_sibling'"],
+    ["candidate",`candidate_sha='${"b".repeat(40)}'`],
+  ])("rejects changed %s before turn and after reopen",(_name,mutation)=>{
+    const scenario=createScenario();let reopened:TaskStorage|undefined;
+    try {
+      const {bigTaskId,subtaskIds}=seed(scenario);const governed=governedFor(scenario);
+      recordUsage(scenario,subtaskIds[0]!,"sibling",0);
+      const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
+      governed.reserveRoleExecutionAttempt(a.authorizationId);governed.claimRoleProviderExecution(a.authorizationId);
+      corrupt(scenario,"governed_provider_claims",mutation!);
+      expect(()=>governed.bindRoleProviderThread(a.authorizationId,ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"exact-test"}))).toThrow();
+      scenario.storage.close();reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});
+      expect(()=>governedFor({...scenario,storage:reopened!}).inspectBigTask(bigTaskId)).toThrow();
+    }finally{reopened?.close();cleanupScenario(scenario);}
+  });
+  it.each([
+    {total:119_999,extension:false,allowed:true},
+    {total:120_000,extension:false,allowed:false},
+    {total:120_000,extension:true,allowed:true},
+    {total:160_000,extension:false,allowed:false},
+    {total:null,extension:false,allowed:false},
+  ])("rechecks changed aggregate budget $total (extension $extension)",({total,extension,allowed})=>{
+    const scenario=createScenario();
+    try {
+      const {bigTaskId,subtaskIds}=seed(scenario);const governed=governedFor(scenario);
+      recordUsage(scenario,subtaskIds[0]!,"freshness",1);
+      const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
+      governed.reserveRoleExecutionAttempt(a.authorizationId);const input=governed.claimRoleProviderExecution(a.authorizationId);
+      governed.bindRoleProviderThread(a.authorizationId,ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"budget-freshness"}));
+      corrupt(scenario,"execution_runs",total===null
+        ? "usage_present=0,input_tokens=NULL,cached_input_tokens=NULL,output_tokens=NULL,reasoning_tokens=NULL,total_tokens=NULL WHERE id='run_budget_freshness'"
+        : `input_tokens=${total},total_tokens=${total} WHERE id='run_budget_freshness'`);
+      if(extension) governed.authorizeOneTimeBudgetExtension(subtaskIds[0]!);
+      const start=()=>governed.validateRoleProviderTurnStart(a.authorizationId,input.preflight.text);
+      if(allowed)expect(start).not.toThrow();else expect(start).toThrow();
+    }finally{cleanupScenario(scenario);}
+  });
+  it("binds the exact claimed text and rejects a second turn or altered text",()=>{
+    const scenario=createScenario();
+    try{
+      const {bigTaskId}=seed(scenario);const governed=governedFor(scenario);const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
+      const attempt=governed.reserveRoleExecutionAttempt(a.authorizationId);const input=governed.claimRoleProviderExecution(a.authorizationId);
+      const db=new DatabaseSync(scenario.databasePath);const row=db.prepare("SELECT * FROM governed_provider_claims").get()!;
+      expect(row).toMatchObject({authorization_id:a.authorizationId,execution_run_id:attempt.executionRunId,candidate_sha:a.candidateSha,
+        input_hash:createHash("sha256").update(input.preflight.text,"utf8").digest("hex"),input_bytes:Buffer.byteLength(input.preflight.text,"utf8"),target_finding_ids:"[]"});db.close();
+      governed.bindRoleProviderThread(a.authorizationId,ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"exact-input"}));
+      expect(()=>governed.validateRoleProviderTurnStart(a.authorizationId,input.preflight.text+"stale")).toThrow();
+      expect(()=>governed.validateRoleProviderTurnStart(a.authorizationId,input.preflight.text)).not.toThrow();
+      expect(()=>governed.validateRoleProviderTurnStart(a.authorizationId,input.preflight.text)).toThrow();
+    }finally{cleanupScenario(scenario);}
+  });
+});
+
+describe("Step 8D final candidate completion matrix",()=>{
+  it.each(["unchanged","dirty","released","handoff","reopen"])("checks %s candidate authority",mode=>{
+    const scenario=createScenario();let reopened:TaskStorage|undefined;
+    try{
+      const {bigTaskId}=seed(scenario);let governed=governedFor(scenario);const a=authorized(governed.prepareNextRole(bigTaskId));
+      completeRole(governed,a,"READY");completeRole(governed,authorized(governed.prepareNextRole(bigTaskId)),"PASS");
+      const path=join(scenario.worktreeRoot,a.authorization.worktreeOwnershipId);
+      if(mode==="dirty")writeFileSync(join(path,"after-assessment.txt"),"changed",{encoding:"utf8"});
+      if(mode==="released")createWorktreeOwnershipManagerForTesting(scenario.storage,{worktreeRoot:scenario.worktreeRoot,idGenerator:()=>`wt_${"d".repeat(32)}`}).releaseOwnedWorktreeForSubtask(a.authorization.subtaskId);
+      if(mode==="handoff")corrupt(scenario,"governed_handoffs",`candidate_sha='${"c".repeat(40)}'`);
+      if(mode==="reopen"){
+        scenario.storage.close();reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});governed=governedFor({...scenario,storage:reopened});
+      }
+      if(mode==="unchanged"||mode==="reopen"){
+        const result=governed.prepareNextRole(bigTaskId);expect(result.kind).toBe("BIG_TASK_COMPLETE");expect(governed.prepareNextRole(bigTaskId)).toEqual(result);
+      }else expect(()=>governed.prepareNextRole(bigTaskId)).toThrow();
+    }finally{reopened?.close();cleanupScenario(scenario);}
+  });
+});
+
+
+it("rejects a changed bounded Repair target after claim",()=>{
+  const scenario=createScenario();
+  try{
+    const {bigTaskId,governed,fresh}=freshRole(scenario);
+    completeRole(governed,fresh,"BLOCKING_FAIL",[hardeningFinding("original-target")]);
+    const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
+    governed.reserveRoleExecutionAttempt(a.authorizationId);const input=governed.claimRoleProviderExecution(a.authorizationId);
+    governed.bindRoleProviderThread(a.authorizationId,ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"bounded-target-drift"}));
+    corrupt(scenario,"governed_findings","reproduction='A different bounded target.'");
+    expect(()=>governed.validateRoleProviderTurnStart(a.authorizationId,input.preflight.text)).toThrow();
+    const db=new DatabaseSync(scenario.databasePath);expect(db.prepare("SELECT count(*) AS count FROM governed_provider_turn_starts WHERE authorization_id=?").get(a.authorizationId)).toEqual({count:0});db.close();
+  }finally{cleanupScenario(scenario);}
+});
+
+
+// Each test gets a newly constructed private repository/database. Setup is a
+// separately bounded phase; no fixture is shared or reused by another test.
+function withPreparedScenario<T>(name: string, prepare: (scenario: Scenario) => T, body: (fixture: T & {scenario: Scenario}) => void | Promise<void>): void {
+  describe(name, () => {
+    const fixtures = new WeakMap<object, T & {scenario: Scenario}>();
+    beforeEach(context => {
+      const scenario=createScenario();
+      try { fixtures.set(context,{scenario,...prepare(scenario)}); }
+      catch(error){cleanupScenario(scenario);throw error;}
+    });
+    afterEach(context=>{const fixture=fixtures.get(context);if(fixture)cleanupScenario(fixture.scenario);});
+    it("preserves the exact bounded outcome and history", context=>body(fixtures.get(context)!));
+  });
+}
+function withFreshRoleTest(name: string, body: (fixture: ReturnType<typeof freshRole> & {scenario: Scenario}) => void): void {
+  withPreparedScenario(name, scenario=>freshRole(scenario), body);
+}
+
+it("upgrades predecessor-format claims without inventing input or gate provenance",()=>{
+  const scenario=createScenario();let reopened:TaskStorage|undefined;
+  try{
+    const {bigTaskId}=seed(scenario);const governed=governedFor(scenario);const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
+    governed.reserveRoleExecutionAttempt(a.authorizationId);governed.claimRoleProviderExecution(a.authorizationId);
+    scenario.storage.close();
+    const db=new DatabaseSync(scenario.databasePath);
+    const claim=db.prepare("SELECT * FROM governed_provider_claims").get();
+    // Reconstruct the exact prior schema, preserving predecessor-format rows.
+    // No parsing or backfill may upgrade these records to the new source model.
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("DROP TABLE governed_provider_turn_starts");
+    db.exec("DROP TABLE governed_provider_input_observations");
+    db.exec("DROP TABLE governed_gate_observations");
+    db.exec("DELETE FROM __drizzle_migrations WHERE id=(SELECT max(id) FROM __drizzle_migrations)");
+    db.close();
+    for(let i=0;i<2;i++){
+      reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});
+      expect(()=>governedFor({...scenario,storage:reopened!}).inspectBigTask(bigTaskId)).toThrow();
+      const inspect=new DatabaseSync(scenario.databasePath);
+      expect(inspect.prepare("SELECT * FROM governed_provider_claims").get()).toEqual(claim);
+      for(const table of ["governed_provider_turn_starts","governed_provider_input_observations","governed_gate_observations"])
+        expect(inspect.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({count:0});
+      expect(inspect.prepare("PRAGMA foreign_key_check").all()).toEqual([]);inspect.close();reopened.close();
+    }
+  }finally{reopened?.close();cleanupScenario(scenario);}
+});
+
+it("keeps a completed Subtask's assessed identity when its sibling candidate changes",()=>{
+  const scenario=createScenario();
+  try{
+    const {bigTaskId,subtaskIds}=seed(scenario,{profiles:["STANDARD","STANDARD"]});
+    const governed=governedFor(scenario,[bigTaskId]);
+    const first=authorized(governed.prepareNextRole(bigTaskId));completeRole(governed,first,"READY");
+    const assessment=authorized(governed.prepareNextRole(bigTaskId));completeRole(governed,assessment,"PASS");
+    const manager=createWorktreeOwnershipManagerForTesting(scenario.storage,{worktreeRoot:scenario.worktreeRoot,idGenerator:()=>`wt_${"e".repeat(32)}`});
+    const sibling=manager.resolveActiveOwnedWorktreeForSubtask(subtaskIds[1]!);
+    git(sibling.ownership.worktreePath,["commit","--allow-empty","-m","sibling candidate"]);
+    const unchanged=governed.persistSuccessfulRoleResult(assessment.authorization.authorizationId,JSON.stringify({schemaVersion:1,outcome:"PASS",summary:"VERIFY completed.",findings:[],promotionCandidate:null}),MODEL,ZERO_USAGE);
+    expect(unchanged.candidateSha).toBe(first.authorization.candidateSha);
+    const next=authorized(governed.prepareNextRole(bigTaskId));
+    expect(next.authorization.subtaskId).toBe(subtaskIds[1]);
+    expect(next.authorization.candidateSha).not.toBe(unchanged.candidateSha);
+  }finally{cleanupScenario(scenario);}
+});
+
+describe.each(["SUBTASK","BIG_TASK","PROJECT"] as const)("Step 8D legitimate %s gate-source substitution", relation=>{
+  for(const kind of GATE_KINDS){
+    withPreparedScenario(`rejects a valid sibling ${kind} source`,scenario=>{
+      const first=seed(scenario,{suffix:"_owner",profiles:relation==="SUBTASK"?["LOW","LOW"]:["LOW"],writeEnabled:false});
+      const secondBigTask=relation==="SUBTASK"?first.bigTaskId:seed(scenario,{
+        suffix:"_sibling",projectId:relation==="BIG_TASK"?"prj_governed_owner":"prj_governed_sibling",profiles:["LOW"],writeEnabled:false,
+      }).bigTaskId;
+      const governed=governedFor(scenario);
+      const firstRole=authorized(governed.prepareNextRole(first.bigTaskId));
+      const aid=firstRole.authorization.authorizationId;
+      governed.reserveRoleExecutionAttempt(aid);const input=governed.claimRoleProviderExecution(aid);
+      const thread=ProviderThreadReferenceSchema.parse({providerId:PROVIDER_ID,providerThreadId:"sibling-source-thread"});
+      governed.bindRoleProviderThread(aid,thread);governed.validateRoleProviderTurnStart(aid,input.preflight.text);
+      governed.startRoleProviderRun(aid,ProviderRunReferenceSchema.parse({...thread,providerRunId:"sibling-source-run"}),MODEL);
+      if(relation==="SUBTASK") {
+        governed.persistSuccessfulRoleResult(aid,JSON.stringify({schemaVersion:1,outcome:"READY",summary:"Source candidate ready.",findings:[],promotionCandidate:null}),MODEL,ZERO_USAGE);
+        governed.reconcileRoleResult(aid);
+        completeRole(governed,authorized(governed.prepareNextRole(first.bigTaskId)),"PASS");
+      }
+      const secondRole=authorized(governed.prepareNextRole(secondBigTask));
+      expect(secondRole.authorization.subtaskId).not.toBe(firstRole.authorization.subtaskId);
+      return {governed,bigTaskId:first.bigTaskId,firstRole,secondRole};
+    },({scenario,governed,bigTaskId,firstRole,secondRole})=>{
+      const db=new DatabaseSync(scenario.databasePath);
+      const source=(receipt: typeof firstRole.receipt)=>receipt.gateEvidenceReferences.find(ref=>readGateObservation(db,ref).kind===kind)!;
+      const original=source(firstRole.receipt);const sibling=source(secondRole.receipt);
+      expect(sibling).not.toBe(original);expect(readGateObservation(db,sibling).owner.subtaskId).toBe(secondRole.authorization.subtaskId);
+      db.close();
+      const refs=firstRole.receipt.gateEvidenceReferences.map(ref=>ref===original?sibling:ref).sort();
+      corrupt(scenario,"governed_dispatch_receipts",`gate_evidence_references='${JSON.stringify(refs)}' WHERE receipt_id='${firstRole.receipt.receiptId}'`);
+      corrupt(scenario,"governed_dispatch_gate_snapshots",`gate_references='${JSON.stringify(refs)}' WHERE receipt_id='${firstRole.receipt.receiptId}'`);
+      expect(()=>governed.inspectBigTask(bigTaskId)).toThrow();
+      scenario.storage.close();const reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});
+      try{expect(()=>governedFor({...scenario,storage:reopened}).inspectBigTask(bigTaskId)).toThrow();}finally{reopened.close();}
+    });
+  }
 });

@@ -48,6 +48,7 @@ const ALL_MIGRATIONS = [
   "20260903184138_omniscient_lyja",
   "20260905045319_governed_hardening",
   "20260905050930_governed_gate_sources",
+  "20260905103249_governed_occurrence_provenance",
 ] as const;
 const REQUIRED_TASK_CONTRACT_TRIGGERS = [
   "candidate_task_contract_bindings_immutable_delete",
@@ -501,7 +502,7 @@ describe("Immutable Task Contract authority migration", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 19 });
+      ).toEqual({ count: 20 });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM task_contracts").get(),
       ).toEqual({ count: 0 });

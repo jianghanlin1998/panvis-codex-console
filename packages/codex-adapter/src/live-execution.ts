@@ -1562,6 +1562,11 @@ async function executeGovernedRoleCodexWithDependencies(
     if (promptText === null) {
       throw new GovernedLiveExecutionError("GOVERNED_AUTHORITY_REQUIRED");
     }
+    try {
+      governed.validateRoleProviderTurnStart(authorizationId, promptText);
+    } catch {
+      throw new GovernedLiveExecutionError("GOVERNED_AUTHORITY_REQUIRED");
+    }
     const turnResult = await client.request(
       4,
       "turn/start",

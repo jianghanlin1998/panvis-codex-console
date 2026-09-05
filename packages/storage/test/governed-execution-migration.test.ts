@@ -43,12 +43,15 @@ const governedTables = [
   "governed_dispatch_receipts",
   "governed_finding_resolutions",
   "governed_findings",
-  "governed_gate_sources",
+  "governed_gate_observations",
+          "governed_gate_sources",
   "governed_handoffs",
   "governed_manual_start_authorities",
   "governed_promoted_context_dispositions",
   "governed_promotion_candidates",
   "governed_provider_claims",
+          "governed_provider_input_observations",
+          "governed_provider_turn_starts",
   "governed_result_provenance",
   "governed_role_authorizations",
   "governed_role_execution_links",
@@ -56,11 +59,11 @@ const governedTables = [
 ] as const;
 
 describe("Operational Governed Execution V0 migration", () => {
-  it.each(["STEP_8C", "STEP_8D_IMPLEMENTED", "STEP_8D_LEGACY_AUTHORITY"])("preserves %s without fabricating new governed authority", predecessor => {
+  it.each(["STEP_8C", "STEP_8D_IMPLEMENTED", "STEP_8D_LEGACY_AUTHORITY", "STEP_8D_HARDENED"])("preserves %s without fabricating new governed authority", predecessor => {
     withTemporaryDatabasePath((databasePath) => {
       const priorFolder = join(databasePath, "..", "step8d-prior-migrations");
       mkdirSync(priorFolder, { recursive: true });
-      for (const name of [...acceptedStep8cMigrationNames, ...(predecessor !== "STEP_8C" ? ["20260903184138_omniscient_lyja"] : [])]) {
+      for (const name of [...acceptedStep8cMigrationNames, ...(predecessor !== "STEP_8C" ? ["20260903184138_omniscient_lyja"] : []), ...(predecessor === "STEP_8D_HARDENED" ? ["20260905045319_governed_hardening", "20260905050930_governed_gate_sources"] : [])]) {
         cpSync(join(migrationsRoot, name), join(priorFolder, name), {
           recursive: true,
         });
@@ -129,7 +132,7 @@ describe("Operational Governed Execution V0 migration", () => {
       storage.initializeDurableSubtaskWorkflows(bigTaskId);
       const before = storage.getDurableWorkflowControlView(subtaskId);
       storage.close();
-      const legacy = predecessor === "STEP_8D_LEGACY_AUTHORITY";
+      const legacy = predecessor === "STEP_8D_LEGACY_AUTHORITY" || predecessor === "STEP_8D_HARDENED";
       if (legacy) {
         // Implementation-format evidence has the exact old producer shape but no
         // new durable gate source. Migration must preserve it without adopting it.
@@ -147,6 +150,10 @@ describe("Operational Governed Execution V0 migration", () => {
           (evidence_id,authority_id,project_id,big_task_id,plan_revision,candidate_binding,subtask_id,expected_sequence,
            observed_stage,observed_repair_cycles_used,evidence_kind,outcome,producer,source_reference,occurred_at,accepted_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(governedStableId("wfe",aid),aid,...values,before!.initializedAt);
+        if (predecessor === "STEP_8D_HARDENED") {
+          db.prepare("INSERT INTO governed_gate_sources (authority_id, source_type, source_reference, payload) VALUES (?, ?, ?, ?)")
+            .run(aid,"REPOSITORY_PREFLIGHT",source,JSON.stringify(values));
+        }
         db.close();
       }
 
@@ -160,11 +167,11 @@ describe("Operational Governed Execution V0 migration", () => {
       for (const table of governedTables) {
         expect(
           sqlite.prepare(`SELECT count(*) AS count FROM ${table}`).get(),
-        ).toEqual({ count: 0 });
+        ).toEqual({ count: table === "governed_gate_sources" && predecessor === "STEP_8D_HARDENED" ? 1 : 0 });
       }
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 19 });
+      ).toEqual({ count: 20 });
       sqlite.close();
 
       storage = openTaskDatabase({ databasePath, clock: fixedClock });

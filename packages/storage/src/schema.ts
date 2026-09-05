@@ -2140,3 +2140,28 @@ export const governedGateSourcesTable = sqliteTable("governed_gate_sources", {
   sourceReference: text("source_reference").notNull(),
   payload: text("payload").notNull(),
 });
+
+
+export const governedGateObservationsTable = sqliteTable("governed_gate_observations", {
+  sourceReference: text("source_reference").primaryKey().notNull(),
+  subtaskId: text("subtask_id").notNull().references(() => subtasksTable.id, { onUpdate: "restrict", onDelete: "restrict" }),
+  workflowSequence: integer("workflow_sequence").notNull(),
+  gateKind: text("gate_kind").notNull(),
+  payload: text("payload").notNull(),
+}, table => [
+  uniqueIndex("governed_gate_observation_occurrence_unique").on(table.subtaskId, table.workflowSequence, table.gateKind),
+  check("governed_gate_observation_sequence_check", sql`${table.workflowSequence} > 0`),
+  check("governed_gate_observation_kind_check", sql`${table.gateKind} IN ('dependency','repository','context','budget','concurrency','worktree','human-policy')`),
+  check("governed_gate_observation_payload_check", sql`json_valid(${table.payload})`),
+]);
+export const governedProviderInputObservationsTable = sqliteTable("governed_provider_input_observations", {
+  authorizationId: text("authorization_id").primaryKey().notNull().references(() => governedProviderClaimsTable.authorizationId, { onUpdate: "restrict", onDelete: "restrict" }),
+  observationId: text("observation_id").notNull().unique(),
+  payload: text("payload").notNull(),
+}, table => [check("governed_input_observation_payload_check", sql`json_valid(${table.payload})`)]);
+export const governedProviderTurnStartsTable = sqliteTable("governed_provider_turn_starts", {
+  authorizationId: text("authorization_id").primaryKey().notNull().references(() => governedProviderInputObservationsTable.authorizationId, { onUpdate: "restrict", onDelete: "restrict" }),
+  observationId: text("observation_id").notNull().references(() => governedProviderInputObservationsTable.observationId, { onUpdate: "restrict", onDelete: "restrict" }),
+  providerThreadId: text("provider_thread_id").notNull(),
+  validatedAt: text("validated_at").notNull(),
+});
