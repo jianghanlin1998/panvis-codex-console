@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-09-04
+Last reconciled: 2026-09-05
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -357,22 +357,25 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8D durable authority: trusted gate derivation, atomic dispatch receipt and TODO -> IN_PROGRESS ownership, exact role/thread/run/result linkage, aggregate budgets, serial Project write dispatch, bounded repair/Re-QA, findings/Handoff/disposition, crash reconciliation, and durable Big Task completion
 - Step 8D operational surface: bounded local-control inspect, advance-one-role, manual-start, and one-time budget-extension operations; no generic prompt/role/path/evidence authority
 - Step 8D implementation verification: focused governed storage/migration/mock-App-Server coverage 16 tests PASS; full suite 138 files / 4,202 tests PASS; public hygiene, lint, typecheck, build, and `git diff --check` PASS
-- Step 8D Comprehensive Hardening: PENDING
-- Step 8D Fresh Independent QA: NOT YET ELIGIBLE / pending hardening
+- Step 8D Comprehensive Hardening: PASS / HARDENED
+- Step 8D hardening code evidence SHA: `58f0dace445b5e70c0a73cc74dd405a046747771`; tree `000c724fb04017c430650657fad1cf3cef4e257a`
+- `CTC-ORCH-8D-HARD-001` through `CTC-ORCH-8D-HARD-011`: CLOSED; [bounded findings and verification evidence](docs/STEP_8D_HARDENING.md)
+- Step 8D hardening verification: 139 files / 4,287 tests PASS; 100 direct governed tests; 89 trigger/index loss checks; 160 mutation attempts; public:check, lint, typecheck, build and diff checks PASS
+- Step 8D Fresh Independent QA: PENDING / ELIGIBLE; Step 8D ACCEPTED: NO
 - Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / blocked on Step 8D ACCEPTED
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
 - Real Step 8D provider/model turns: 0; real target orchestration: NONE
 - Hanlin manual QA: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** NEW CHAT comprehensive write-enabled Step 8D hardening
+**Next safe task:** NEW CHAT Fresh Independent no-write Step 8D QA
 
 ## Not operational yet
 - browser Console UI
 - background scheduling or infinite `WHEN_READY` daemon execution
 - standalone later-maturity commands
 - trusted locked-invariant source
-- trusted bounded-retest-target source
+- general bounded-retest-target intake outside governed QA result lineage
 - accepted Promoted Context retrieval or injection
 - Digest integration or raw-history injection
 - token-based pre-execution metering or automatic budget pruning
