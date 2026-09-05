@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { evaluateCompiledContextByteBudget } from "@codex-task-console/domain";
-import type { SubtaskId } from "@codex-task-console/domain";
+import type { SubtaskId, JitContextPacket } from "@codex-task-console/domain";
 
 import {
   OperationalJitContextAssembler,
@@ -114,6 +114,12 @@ export class ExecutionInputPreflight {
       throw assemblyFailed();
     }
 
+    return serializeOperationalPacket(packet, profile);
+  }
+}
+
+// Package-private serializer shared by the governed focused profile.
+export function serializeOperationalPacket<Profile extends string>(packet: JitContextPacket, profile: Profile) {
     let text: string;
     try {
       const payload = JSON.stringify(packet);
@@ -153,5 +159,4 @@ export class ExecutionInputPreflight {
           status: decision.status,
           allowed: false,
         });
-  }
 }

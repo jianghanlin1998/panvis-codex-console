@@ -1,10 +1,10 @@
+import { createGovernedExecutionStoreForTesting as createGovernedExecutionStore } from "../src/governed-execution.js";
 import { existsSync, writeFileSync } from "node:fs";
 
 import { expect, it } from "vitest";
 
 import { BigTaskIdSchema } from "@codex-task-console/domain";
 import {
-  createGovernedExecutionStore,
   openTaskDatabase,
   TaskStorageError,
 } from "../src/index.js";
@@ -50,6 +50,13 @@ it("runs only as the bounded cross-process governed-dispatch worker", () => {
     let outcome: Readonly<Record<string, unknown>>;
     for (let retry = 0; ; retry += 1) {
       try {
+        const operation = process.env.CTC_8D_PROCESS_OPERATION;
+        if (operation === "EXTEND" || operation === "MANUAL") {
+          const subtaskId = storage.getCanonicalTaskMaterialization(bigTaskId)!.subtasks[0]!.subtaskId;
+          const authority = operation === "EXTEND" ? governed.authorizeOneTimeBudgetExtension(subtaskId) : governed.authorizeManualStart(subtaskId);
+          outcome = {kind:"OPERATOR_AUTHORIZED",authorityId:authority.authorityId};
+          break;
+        }
         const result = governed.prepareNextRole(bigTaskId);
         outcome =
           result.kind === "ROLE_AUTHORIZED"

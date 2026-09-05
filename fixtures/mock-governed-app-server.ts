@@ -4,7 +4,8 @@ type JsonRecord = Record<string, unknown>;
 
 const role = process.argv.find((value) => value.startsWith("--role="))?.slice(7);
 const malformed = process.argv.includes("--malformed");
-const writeEnabled = role === "EXECUTE" || role === "HARDEN" || role === "REPAIR";
+const scenario = process.argv.find(value => value.startsWith("--scenario="))?.slice(11);
+const writeEnabled = scenario !== "read-only" && (role === "EXECUTE" || role === "HARDEN" || role === "REPAIR");
 const threadId = `thread-governed-${role ?? "unknown"}`;
 const turnId = `turn-governed-${role ?? "unknown"}`;
 let initialized = false;
@@ -12,6 +13,18 @@ let accountRead = false;
 let threadStarted = false;
 
 const send = (value: JsonRecord): void => {
+  if (scenario === "missing-usage" && value.method === "thread/tokenUsage/updated") return;
+  if (scenario === "malformed-initialization" && value.id === 1) value.result = {};
+  if (value.id === 3) {
+    const result = record(value.result);
+    if (scenario === "wrong-cwd") result.cwd = "/unrelated";
+    if (scenario === "wrong-sandbox") result.sandbox = { type: "dangerFullAccess" };
+  }
+  if (value.method === "turn/completed") {
+    const params = record(value.params);
+    if (scenario === "wrong-thread") params.threadId = "unrelated-thread";
+    if (scenario === "wrong-turn") record(params.turn).id = "unrelated-turn";
+  }
   process.stdout.write(`${JSON.stringify(value)}\n`);
 };
 
@@ -142,7 +155,7 @@ lines.on("line", (line) => {
       resultContract.schemaVersion !== 1 ||
       !Array.isArray(resultContract.exactKeys) ||
       resultContract.exactKeys.join(",") !==
-        "schemaVersion,outcome,summary,findings" ||
+        "schemaVersion,outcome,summary,findings,promotionCandidate" ||
       !validSandbox
     ) {
       error(id);
@@ -153,6 +166,31 @@ lines.on("line", (line) => {
       method: "turn/started",
       params: { threadId, turn: { id: turnId, status: "inProgress" } },
     });
+    if (scenario === "timeout") return;
+    if (scenario === "process-exit") { process.exit(1); }
+    if (scenario === "approval-request") send({id: "approval", method: "item/commandExecution/requestApproval", params: {threadId, turnId}});
+    if (scenario === "read-write-tool") send({method: "item/started", params: {threadId, turnId,
+      item: {id: "write-tool", type: "fileChange", status: "inProgress", changes: [{path: "AGENTS.md", kind: {type: "update"}, diff: "+changed"}]}}});
+    const finding = (id: string, blocking = true) => ({findingId: id, blocking,
+      violatedInvariant: `Invariant ${id}.`, affectedContract: "contract/governed-adapter", reproduction: `Retest ${id}.`});
+    const result = {
+      schemaVersion: 1,
+      promotionCandidate: null,
+      outcome: role === "EXECUTE" || role === "REPAIR" ? "READY" : "PASS",
+      summary: `${role} completed.`,
+      findings: [] as ReturnType<typeof finding>[],
+    };
+    if (scenario === "two-blockers" || scenario === "remaining-new") {
+      result.outcome = "BLOCKING_FAIL";
+      result.findings = scenario === "two-blockers" ? [finding("A"), finding("B"), finding("defer", false)] : [finding("A"), finding("NEW")];
+    }
+    if (scenario === "wrong-outcome") result.outcome = "ACCEPTED";
+    if (scenario === "nonblocking") result.findings = [finding("defer", false)];
+    let resultText = JSON.stringify(result);
+    if (scenario === "duplicate-key") resultText = resultText.replace('"outcome":', '"outcome":"PASS","outcome":');
+    if (scenario === "wrong-fields") resultText = resultText.replace('"schemaVersion":1', '"unexpected":true,"schemaVersion":1');
+    if (scenario === "oversized") resultText = "x".repeat(17 * 1024);
+    if (scenario === "malformed-unicode") resultText = resultText.replace(`${role} completed.`, "\\ud800");
     send({
       method: "item/completed",
       params: {
@@ -162,18 +200,12 @@ lines.on("line", (line) => {
           id: "governed-agent-message",
           type: "agentMessage",
           status: "completed",
-          text: malformed
-            ? "not-json"
-            : JSON.stringify({
-                schemaVersion: 1,
-                outcome:
-                  role === "EXECUTE" || role === "REPAIR" ? "READY" : "PASS",
-                summary: `${role} completed.`,
-                findings: [],
-              }),
+          text: malformed ? "not-json" : resultText,
         },
       },
     });
+    if (scenario === "duplicate-item") send({method: "item/completed", params: {threadId, turnId,
+      item: {id: "governed-agent-message", type: "agentMessage", status: "completed", text: resultText}}});
     send({
       method: "thread/tokenUsage/updated",
       params: {
@@ -197,6 +229,7 @@ lines.on("line", (line) => {
       method: "turn/completed",
       params: { threadId, turn: { id: turnId, status: "completed" } },
     });
+    if (scenario === "post-terminal") send({method: "item/started", params: {threadId, turnId, item: {id:"late",type:"reasoning"}}});
     return;
   }
   if (message.method === "turn/interrupt") {

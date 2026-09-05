@@ -1,6 +1,8 @@
+import { createGovernedExecutionStoreForTest as createGovernedExecutionStore } from "../../storage/src/governed-execution-public.js";
 import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
+  linkSync,
   mkdtempSync,
   realpathSync,
   rmSync,
@@ -20,7 +22,6 @@ import {
   TaskContractV0Schema,
 } from "@codex-task-console/domain";
 import {
-  createGovernedExecutionStore,
   openTaskDatabase,
 } from "@codex-task-console/storage";
 import type {
@@ -185,6 +186,7 @@ const authorization = (
 const dependencies = (
   role: string,
   malformed = false,
+  scenario?: string,
 ): Dependencies => ({
   checkCompatibility: () => true,
   resolveRuntime: () => ({
@@ -209,7 +211,7 @@ const dependencies = (
   spawnAppServer: (_executable, _arguments_, options) =>
     spawn(
       process.execPath,
-      [MOCK_PATH, `--role=${role}`, ...(malformed ? ["--malformed"] : [])],
+      [MOCK_PATH, `--role=${role}`, ...(malformed ? ["--malformed"] : []), ...(scenario ? [`--scenario=${scenario}`] : [])],
       options,
     ),
   sourceEnvironment: { LANG: "en_US.UTF-8" },
@@ -340,4 +342,122 @@ describe("governed Codex role execution", () => {
       cleanup(fixture);
     }
   });
+});
+
+describe("Step 8D governed provider hardening", () => {
+  it.each([
+    "malformed-initialization", "wrong-cwd", "wrong-sandbox", "approval-request",
+    "duplicate-item", "wrong-thread", "wrong-turn", "post-terminal", "duplicate-key",
+    "wrong-fields", "wrong-outcome", "oversized", "malformed-unicode", "missing-usage", "process-exit",
+  ])("rejects synthetic protocol/result scenario %s with no semantic retry", async scenario => {
+    const fixture = createFixture();
+    try {
+      const prepared = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,
+        prepared.authorization.authorizationId, dependencies("EXECUTE", false, scenario));
+      expect(result.success, scenario).toBe(false);
+      expect(result.roleResult).toBeNull();
+      expect(result.appServerChildCleaned).toBe(true);
+      expect(result.transientRuntimeCleaned).toBe(true);
+      expect(fixture.storage.getSubtaskById(SUBTASK_ID)?.maturity).toBe("NOT_STARTED");
+      expect(fixture.governed.prepareNextRole(BIG_TASK_ID)).toMatchObject({kind:"BLOCKED",reason:"PROVIDER_ROLE_FAILED"});
+    } finally { cleanup(fixture); }
+  });
+
+  it("runs every role in the bounded batch-repair path through a distinct mock App Server", async () => {
+    const fixture = createFixture("HIGH_RISK_FOUNDATION");
+    try {
+      const seenThreads = new Set(); const seenRuns = new Set();
+      for (const role of ["EXECUTE", "HARDEN", "FRESH_QA", "REPAIR", "FOCUSED_RE_QA"]) {
+        const prepared = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+        expect(prepared.authorization.role).toBe(role);
+        const result = await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,
+          prepared.authorization.authorizationId, dependencies(role, false, role === "FRESH_QA" ? "two-blockers" : undefined));
+        expect(result.success, JSON.stringify(result)).toBe(true);
+        expect(seenThreads.has(result.chatThreadId)).toBe(false); seenThreads.add(result.chatThreadId);
+        expect(seenRuns.has(result.executionRunId)).toBe(false); seenRuns.add(result.executionRunId);
+        expect(result.threadPolicy?.sandbox).toBe(["FRESH_QA", "FOCUSED_RE_QA"].includes(role) ? "readOnly" : "workspaceWrite");
+        expect(result.threadPolicy?.networkAccess).toBe(false);
+      }
+      expect(seenThreads.size).toBe(5);
+      expect(fixture.governed.prepareNextRole(BIG_TASK_ID).kind).toBe("BIG_TASK_COMPLETE");
+    } finally { cleanup(fixture); }
+  }, 20_000);
+
+  it("rejects a write-tool lifecycle in a read-only VERIFY turn", async () => {
+    const fixture = createFixture();
+    try {
+      const execute = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      expect((await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,
+        execute.authorization.authorizationId, dependencies("EXECUTE"))).success).toBe(true);
+      const verify = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,
+        verify.authorization.authorizationId, dependencies("VERIFY", false, "read-write-tool"));
+      expect(result.success).toBe(false);
+      expect(result.roleResult).toBeNull();
+      expect(fixture.storage.getSubtaskById(SUBTASK_ID)?.status).toBe("QA_DEBUG");
+    } finally { cleanup(fixture); }
+  });
+
+  it("does not persist success when transient-runtime cleanup fails", async () => {
+    const fixture = createFixture();
+    let retained: string | undefined;
+    try {
+      const prepared = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const deps = dependencies("EXECUTE");
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,
+        prepared.authorization.authorizationId, {...deps, removeWorkspace: path => { retained = path; throw new Error("synthetic cleanup failure"); }});
+      expect(result.success).toBe(false);
+      expect(result.roleResult).toBeNull();
+      expect(result.failureCode).toBe("WORKSPACE_CLEANUP_FAILED");
+      expect(result.transientRuntimeCleaned).toBe(false);
+    } finally { if (retained) rmSync(retained, {recursive:true,force:true}); cleanup(fixture); }
+  });
+});
+
+
+describe("Step 8D mock execution ownership and liveness", () => {
+  it.each([1,4])("rejects unsafe hardlinks at governed filesystem gate %i", async gate => {
+    const fixture=createFixture();let scans=0;let spawns=0;
+    try {
+      const prepared=authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const deps=dependencies("EXECUTE");
+      const result=await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,prepared.authorization.authorizationId,{
+        ...deps,
+        spawnAppServer:(...args)=>{spawns++;return deps.spawnAppServer(...args);},
+        validateWorktreeFilesystem:path=>{
+          scans++;
+          if(scans===gate)linkSync(join(path,"AGENTS.md"),join(fixture.directory,"outside-hardlink"));
+          validateOwnedWorktreeHardlinkSafety(path);
+        },
+      });
+      expect(result.success).toBe(false);expect(result.roleResult).toBeNull();
+      expect(scans).toBe(gate);expect(spawns).toBe(gate===1?0:1);
+      expect(fixture.storage.getSubtaskById(SUBTASK_ID)?.maturity).toBe("NOT_STARTED");
+    } finally {cleanup(fixture);}
+  });
+
+  it("permits exactly one mock provider claimant for concurrent identical role requests",async()=>{
+    const fixture=createFixture();let spawns=0;
+    try {
+      const prepared=authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));const deps=dependencies("EXECUTE");
+      const counted={...deps,spawnAppServer:(...args:Parameters<Dependencies["spawnAppServer"]>)=>{spawns++;return deps.spawnAppServer(...args);}};
+      const results=await Promise.all([0,1].map(()=>executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,prepared.authorization.authorizationId,counted)));
+      expect(results.filter(r=>r.success)).toHaveLength(1);expect(spawns).toBe(1);
+      expect(fixture.governed.prepareNextRole(BIG_TASK_ID)).toMatchObject({kind:"ROLE_AUTHORIZED",authorization:{role:"VERIFY"}});
+    }finally{cleanup(fixture);}
+  });
+
+  it("bounds a silent mock turn with one interrupt and no semantic retry",async()=>{
+    const fixture=createFixture();let spawns=0;
+    try {
+      const prepared=authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));const deps=dependencies("EXECUTE",false,"timeout");
+      const result=await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,prepared.authorization.authorizationId,{
+        ...deps,spawnAppServer:(...args)=>{spawns++;return deps.spawnAppServer(...args);},
+      });
+      expect(result.success).toBe(false);expect(result.roleResult).toBeNull();expect(spawns).toBe(1);
+      expect(result.appServerChildCleaned).toBe(true);expect(result.transientRuntimeCleaned).toBe(true);
+      expect(fixture.governed.prepareNextRole(BIG_TASK_ID).kind).toBe("BLOCKED");
+    }finally{cleanup(fixture);}
+  },10_000);
 });

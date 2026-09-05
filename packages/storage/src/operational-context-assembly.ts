@@ -125,40 +125,9 @@ export class OperationalJitContextAssembler {
       throw unsupportedProfile();
     }
 
-    const storageSnapshotA = this.#readStorageSnapshot(subtaskId, profile);
-    let repositorySnapshot;
-    try {
-      repositorySnapshot =
-        this.#repositorySourceReader.readTrustedRepositorySourceSnapshotForSubtask(
-          subtaskId,
-        );
-    } catch {
-      throw trustedRepositorySourceFailed();
-    }
-    const storageSnapshotB = this.#readStorageSnapshot(subtaskId, profile);
-
-    if (!isDeepStrictEqual(storageSnapshotA, storageSnapshotB)) {
-      throw sourceDrift();
-    }
-    if (
-      repositorySnapshot.projectId !== storageSnapshotA.project.id ||
-      !isDeepStrictEqual(
-        repositorySnapshot.repository,
-        storageSnapshotA.project.repository,
-      )
-    ) {
-      throw sourceDrift();
-    }
-
-    const sharedInput = {
-      project: storageSnapshotA.project,
-      bigTask: storageSnapshotA.bigTask,
-      subtask: storageSnapshotA.subtask,
-      canonicalProjectRules: [...repositorySnapshot.canonicalProjectRules],
-      repositoryRuntimeEvidence: [
-        ...repositorySnapshot.repositoryRuntimeEvidence,
-      ],
-    };
+    const {storageSnapshot: storageSnapshotA, sharedInput} = readOperationalSources(
+      this.#storage, this.#repositorySourceReader, subtaskId, profile,
+    );
     const compilationInput: JitContextPacketCompilationInput =
       storageSnapshotA.profile === "STANDARD_SUBTASK_EXECUTION"
         ? {
@@ -177,28 +146,46 @@ export class OperationalJitContextAssembler {
             qaInstructions: [FRESH_QA_POLICY],
             boundedRetestTargets: [],
           };
-    const compilationResult = compileJitContextPacket(compilationInput);
-
-    if (!compilationResult.compiled) {
-      throw packetCompilationFailed();
-    }
-    return compilationResult.packet;
+    return compileOperationalPacket(compilationInput);
   }
+}
 
-  #readStorageSnapshot(
-    subtaskId: SubtaskId,
-    profile: OperationalJitContextProfile,
-  ): JitContextStorageSourceSnapshot {
+// Package-private shared owners for governed focused composition. These are not
+// supported package exports and do not confer evidence or provider authority.
+export function compileOperationalPacket(input: JitContextPacketCompilationInput): JitContextPacket {
+  const result = compileJitContextPacket(input);
+  if (!result.compiled) throw packetCompilationFailed();
+  return result.packet;
+}
+
+export function readOperationalSources(
+  storage: TaskStorage,
+  repositoryReader: TrustedRepositorySourceReader,
+  subtaskId: SubtaskId,
+  profile: JitContextPacketCompilationInput["profile"],
+) {
+  const readSnapshot = (): JitContextStorageSourceSnapshot => {
     try {
-      return this.#storage.readJitContextSourceSnapshotForSubtask(
-        subtaskId,
-        profile,
-      );
+      return storage.readJitContextSourceSnapshotForSubtask(subtaskId, profile);
     } catch (error) {
-      if (error instanceof TaskStorageError && error.code === "INVALID_INPUT") {
-        throw invalidInput();
-      }
+      if (error instanceof TaskStorageError && error.code === "INVALID_INPUT") throw invalidInput();
       throw trustedStorageSourceFailed();
     }
-  }
+  };
+  const storageSnapshotA = readSnapshot();
+  let repositorySnapshot;
+  try {
+    repositorySnapshot = repositoryReader.readTrustedRepositorySourceSnapshotForSubtask(subtaskId);
+  } catch { throw trustedRepositorySourceFailed(); }
+  const storageSnapshotB = readSnapshot();
+  if (!isDeepStrictEqual(storageSnapshotA, storageSnapshotB) ||
+      repositorySnapshot.projectId !== storageSnapshotA.project.id ||
+      !isDeepStrictEqual(repositorySnapshot.repository, storageSnapshotA.project.repository)) throw sourceDrift();
+  return {storageSnapshot: storageSnapshotA, sharedInput: {
+    project: storageSnapshotA.project,
+    bigTask: storageSnapshotA.bigTask,
+    subtask: storageSnapshotA.subtask,
+    canonicalProjectRules: [...repositorySnapshot.canonicalProjectRules],
+    repositoryRuntimeEvidence: [...repositorySnapshot.repositoryRuntimeEvidence],
+  }};
 }

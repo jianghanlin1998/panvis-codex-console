@@ -1291,6 +1291,7 @@ export const governedBudgetExtensionsTable = sqliteTable(
     candidateBinding: text("candidate_binding").notNull(),
     subtaskId: text("subtask_id").notNull(),
     grantedTokens: integer("granted_tokens").notNull(),
+    usageAtGrant: integer("usage_at_grant"),
     authorizedAt: text("authorized_at").notNull(),
   },
   (table) => [
@@ -2084,3 +2085,58 @@ export const auditEventsTable = sqliteTable(
     ),
   ],
 );
+
+// No provenance is backfilled from pre-hardening execution-shaped rows.
+export const governedProviderClaimsTable = sqliteTable("governed_provider_claims", {
+  authorizationId: text("authorization_id").primaryKey().references(() => governedRoleAuthorizationsTable.authorizationId, { onUpdate: "restrict", onDelete: "restrict" }),
+  executionRunId: text("execution_run_id").notNull().references(() => executionRunsTable.id, { onUpdate: "restrict", onDelete: "restrict" }),
+  candidateSha: text("candidate_sha").notNull(),
+  inputHash: text("input_hash").notNull(),
+  inputBytes: integer("input_bytes").notNull(),
+  targetFindingIds: text("target_finding_ids").notNull(),
+  claimedAt: text("claimed_at").notNull(),
+}, (table) => [
+  uniqueIndex("governed_provider_claim_run_unique").on(table.executionRunId),
+  check("governed_provider_claim_bytes_check", sql`typeof(${table.inputBytes}) = 'integer' and ${table.inputBytes} between 1 and 64000`),
+  check("governed_provider_claim_hash_check", sql`length(${table.inputHash}) = 64 and ${table.inputHash} not glob '*[^0-9a-f]*'`),
+]);
+
+export const governedResultProvenanceTable = sqliteTable("governed_result_provenance", {
+  resultId: text("result_id").primaryKey().references(() => governedRoleResultsTable.resultId, { onUpdate: "restrict", onDelete: "restrict" }),
+  authorizationId: text("authorization_id").notNull().references(() => governedProviderClaimsTable.authorizationId, { onUpdate: "restrict", onDelete: "restrict" }),
+  providerThreadId: text("provider_thread_id").notNull(),
+  providerRunId: text("provider_run_id").notNull(),
+  providerModelId: text("provider_model_id").notNull(),
+  normalizedUsage: text("normalized_usage").notNull(),
+  structuredResult: text("structured_result").notNull(),
+  candidateSha: text("candidate_sha").notNull(),
+  recordedAt: text("recorded_at").notNull(),
+}, (table) => [
+  uniqueIndex("governed_result_provenance_authorization_unique").on(table.authorizationId),
+  uniqueIndex("governed_result_provenance_thread_unique").on(table.providerThreadId),
+  uniqueIndex("governed_result_provenance_run_unique").on(table.providerRunId),
+  check("governed_result_provenance_size_check", sql`length(${table.structuredResult}) between 2 and 16384`),
+]);
+
+export const governedDispatchGateSnapshotsTable = sqliteTable("governed_dispatch_gate_snapshots", {
+  receiptId: text("receipt_id").primaryKey().references(() => governedDispatchReceiptsTable.receiptId, { onUpdate: "restrict", onDelete: "restrict" }),
+  gateReferences: text("gate_references").notNull(),
+  candidateSha: text("candidate_sha").notNull(),
+  recordedAt: text("recorded_at").notNull(),
+});
+
+export const governedPromotionCandidatesTable = sqliteTable("governed_promotion_candidates", {
+  resultId: text("result_id").primaryKey().references(() => governedRoleResultsTable.resultId, { onUpdate: "restrict", onDelete: "restrict" }),
+  summary: text("summary").notNull(),
+  disposition: text("disposition").notNull(),
+}, (table) => [
+  check("governed_promotion_candidate_disposition_check", sql`${table.disposition} = 'PENDING_HUMAN_REVIEW'`),
+  check("governed_promotion_candidate_summary_check", sql`length(${table.summary}) between 1 and 1000`),
+]);
+
+export const governedGateSourcesTable = sqliteTable("governed_gate_sources", {
+  authorityId: text("authority_id").primaryKey().references(() => durableWorkflowEvidenceAuthoritiesTable.authorityId, { onUpdate: "restrict", onDelete: "restrict" }),
+  sourceType: text("source_type").notNull(),
+  sourceReference: text("source_reference").notNull(),
+  payload: text("payload").notNull(),
+});

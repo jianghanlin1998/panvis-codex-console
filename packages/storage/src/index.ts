@@ -39,9 +39,9 @@ export {
 
 export {
   createGovernedExecutionStore,
-  GOVERNED_SUBTASK_ROLES,
   GovernedExecutionStore,
-} from "./governed-execution.js";
+} from "./governed-execution-public.js";
+export { GOVERNED_SUBTASK_ROLES } from "./governed-execution.js";
 export type {
   AggregateSubtaskUsageBudget,
   GovernedBudgetExtensionAuthority,

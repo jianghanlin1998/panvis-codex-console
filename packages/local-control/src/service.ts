@@ -250,7 +250,7 @@ class ProductionLocalControlService implements LocalControlService {
     this.#storage = storage;
     this.#worktrees = worktrees;
     this.#execute = execute;
-    this.#governed = createGovernedExecutionStore(storage, worktrees);
+    this.#governed = createGovernedExecutionStore(storage);
     this.#executeGoverned = executeGoverned;
   }
 

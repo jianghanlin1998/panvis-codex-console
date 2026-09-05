@@ -5,6 +5,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "../../storage/dist/governed-execution-public.js": fileURLToPath(
+        new URL("./packages/storage/src/governed-execution-public.ts", import.meta.url),
+      ),
       "@codex-task-console/codex-adapter": fileURLToPath(
         new URL("./packages/codex-adapter/src/index.ts", import.meta.url),
       ),

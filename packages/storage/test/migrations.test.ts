@@ -105,12 +105,17 @@ describe("database lifecycle and migrations", () => {
           "execution_runs",
           "governed_big_task_completion_receipts",
           "governed_budget_extensions",
+          "governed_dispatch_gate_snapshots",
           "governed_dispatch_receipts",
           "governed_finding_resolutions",
           "governed_findings",
+          "governed_gate_sources",
           "governed_handoffs",
           "governed_manual_start_authorities",
           "governed_promoted_context_dispositions",
+          "governed_promotion_candidates",
+          "governed_provider_claims",
+          "governed_result_provenance",
           "governed_role_authorizations",
           "governed_role_execution_links",
           "governed_role_results",
@@ -144,7 +149,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(17);
+        expect(row.count).toBe(19);
       } finally {
         sqlite.close();
       }
@@ -161,7 +166,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(17);
+        expect(row.count).toBe(19);
       } finally {
         sqlite.close();
       }
@@ -736,7 +741,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           after.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 17 });
+        ).toEqual({ count: 19 });
       } finally {
         after.close();
       }
@@ -856,7 +861,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           migrated.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 17 });
+        ).toEqual({ count: 19 });
       } finally {
         migrated.close();
       }

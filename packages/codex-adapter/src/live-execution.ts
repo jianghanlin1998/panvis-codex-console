@@ -34,7 +34,7 @@ import {
 import {
   createWorktreeOwnershipManager,
   ExecutionInputPreflight,
-  GovernedExecutionStore,
+  type GovernedExecutionStore,
   type GovernedRoleAuthorization,
   type GovernedRoleContextProfile,
   type GovernedRoleReconciliationResult,
@@ -44,6 +44,8 @@ import {
   type ResolvedActiveOwnedWorktree,
   TaskStorage,
 } from "@codex-task-console/storage";
+
+import { getGovernedProviderBridge } from "../../storage/dist/governed-execution-public.js";
 
 import { TESTED_CODEX_VERSION } from "./compatibility.js";
 import { checkOwnedCodexCompatibility } from "./c-lite-compatibility.js";
@@ -1353,10 +1355,16 @@ export async function executeGovernedRoleCodexWithDependenciesForTest(
 }
 
 async function executeGovernedRoleCodexWithDependencies(
-  governed: GovernedExecutionStore,
+  handle: GovernedExecutionStore,
   authorizationId: string,
   dependencies: OwnedWorktreeExecutionDependencies,
 ): Promise<GovernedRoleCodexExecutionResult> {
+  let governed: ReturnType<typeof getGovernedProviderBridge>;
+  try {
+    governed = getGovernedProviderBridge(handle);
+  } catch {
+    return immediateGovernedRoleFailure("INVALID_INPUT");
+  }
   const diagnostics = emptyDiagnostics();
   let authorization: GovernedRoleAuthorization | null = null;
   let runtimeSummary: RuntimeSummary | null = null;
@@ -1385,14 +1393,13 @@ async function executeGovernedRoleCodexWithDependencies(
 
   try {
     if (
-      !(governed instanceof GovernedExecutionStore) ||
       typeof authorizationId !== "string"
     ) {
       throw new LiveExecutionError("INVALID_INPUT");
     }
     try {
       const attempt = governed.reserveRoleExecutionAttempt(authorizationId);
-      const input = governed.resolveRoleExecutionInput(authorizationId);
+      const input = governed.claimRoleProviderExecution(authorizationId);
       if (
         attempt.chatThreadId !== input.attempt.chatThreadId ||
         attempt.executionRunId !== input.attempt.executionRunId

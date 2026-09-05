@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import {
   ChatThreadIdSchema,
+  NormalizedUsageSchema,
   DEFAULT_V1_BUDGET_POLICY,
   ExecutionProviderIdSchema,
   ExecutionRunIdSchema,
@@ -27,6 +28,10 @@ import type {
   WorkflowProfile,
   WorkflowStage,
 } from "@codex-task-console/orchestration";
+
+import { withGovernedCheckpointWriter } from "./governed-evidence-validation.js";
+import { compileGovernedFocusedContext } from "./governed-focused-context.js";
+import { assertGovernedSchemaIntegrity } from "./governed-schema-integrity.js";
 
 import { TaskStorageError } from "./errors.js";
 import { ExecutionInputPreflight } from "./execution-input-preflight.js";
@@ -247,6 +252,7 @@ interface ParsedGovernedRoleResult {
   readonly outcome: GovernedRoleResult["outcome"];
   readonly summary: string;
   readonly findings: readonly GovernedRoleFindingInput[];
+  readonly promotionCandidate: string | null;
 }
 
 interface ManualStartRow {
@@ -268,6 +274,7 @@ interface BudgetExtensionRow {
   readonly candidate_binding: string;
   readonly subtask_id: string;
   readonly granted_tokens: number;
+  readonly usage_at_grant: number | null;
   readonly authorized_at: string;
 }
 
@@ -395,6 +402,11 @@ const parseBoundedText = (
   maximum: number,
 ): string | null =>
   typeof value === "string" &&
+  !/[\ud800-\udfff]/u.test(value) &&
+  !Array.from(value).some(character => {
+    const code = character.charCodeAt(0);
+    return (code < 32 && code !== 9 && code !== 10 && code !== 13) || (code >= 127 && code <= 159);
+  }) &&
   value.trim() === value &&
   value.length >= 1 &&
   value.length <= maximum
@@ -436,28 +448,30 @@ const roleInstruction = (role: GovernedSubtaskRole): string => {
     case "FRESH_QA":
       return "Perform fresh independent no-write QA against canonical evidence only. Exclude builder and hardener reasoning. Return only the governed JSON result contract.";
     case "REPAIR":
-      return "Repair only the supplied bounded blocking invariant in the owned candidate. Leave a clean committed candidate. Return only the governed JSON result contract.";
+      return "Repair only the supplied exact bounded blocking finding batch in the owned candidate. Leave a clean committed candidate. Return only the governed JSON result contract.";
     case "FOCUSED_RE_QA":
-      return "Perform fresh read-only retesting of only the supplied bounded target plus required canonical evidence. Exclude repair reasoning. Return only the governed JSON result contract.";
+      return "Perform fresh read-only retesting of only the supplied exact bounded target batch plus required canonical evidence. Exclude repair reasoning. Return only the governed JSON result contract.";
   }
 };
 
 const roleResultContract = (role: GovernedSubtaskRole): Readonly<object> =>
   role === "EXECUTE" || role === "REPAIR"
     ? freeze({
-        exactKeys: ["schemaVersion", "outcome", "summary", "findings"],
+        exactKeys: ["schemaVersion", "outcome", "summary", "findings", "promotionCandidate"],
         schemaVersion: 1,
         outcome: ["READY", "BLOCKED"],
         summary: "non-empty trimmed string, maximum 1000 characters",
         findings: "must be []",
+        promotionCandidate: "null or a compact candidate conclusion of at most 1000 characters; never an accepted decision",
       })
     : freeze({
-        exactKeys: ["schemaVersion", "outcome", "summary", "findings"],
+        exactKeys: ["schemaVersion", "outcome", "summary", "findings", "promotionCandidate"],
         schemaVersion: 1,
         outcome: ["PASS", "BLOCKING_FAIL"],
         summary: "non-empty trimmed string, maximum 1000 characters",
         findings:
-          "PASS requires no blocking finding; BLOCKING_FAIL requires exactly one blocking finding",
+          "At most 16 unique findings. PASS permits only non-blocking findings. BLOCKING_FAIL requires at least one blocking finding; non-blocking findings may coexist.",
+        promotionCandidate: "null or a compact candidate conclusion of at most 1000 characters; never an accepted decision",
         findingExactKeys: [
           "findingId",
           "blocking",
@@ -466,6 +480,28 @@ const roleResultContract = (role: GovernedSubtaskRole): Readonly<object> =>
           "reproduction",
         ],
       });
+
+const parseUniqueJson = (text: string): unknown => {
+  const decoded: unknown = JSON.parse(text);
+  const stack: Array<Set<string> | null> = [];
+  let expectingKey = false;
+  for (const match of text.matchAll(/"(?:\\.|[^"\\])*"|[{}[\],:]|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/gu)) {
+    const token = match[0];
+    if (token === "{") { stack.push(new Set()); expectingKey = true; }
+    else if (token === "[") { stack.push(null); expectingKey = false; }
+    else if (token === "}" || token === "]") { stack.pop(); expectingKey = false; }
+    else if (token === ",") { expectingKey = stack.at(-1) !== null; }
+    else if (token === ":") { expectingKey = false; }
+    else if (expectingKey && token.startsWith('"')) {
+      const key: string = JSON.parse(token);
+      const keys = stack.at(-1);
+      if (keys?.has(key)) throw invalid("Duplicate governed result key.");
+      keys?.add(key);
+      expectingKey = false;
+    }
+  }
+  return decoded;
+};
 
 const parseGovernedRoleResult = (
   role: GovernedSubtaskRole,
@@ -479,14 +515,14 @@ const parseGovernedRoleResult = (
   }
   let decoded: unknown;
   try {
-    decoded = JSON.parse(text) as unknown;
+    decoded = parseUniqueJson(text);
   } catch {
     throw invalid("The governed role result is invalid.");
   }
   if (!isRecord(decoded)) {
     throw invalid("The governed role result is invalid.");
   }
-  const resultKeys = ["schemaVersion", "outcome", "summary", "findings"];
+  const resultKeys = ["schemaVersion", "outcome", "summary", "findings", "promotionCandidate"];
   if (
     !hasExactKeys(decoded, resultKeys) ||
     decoded.schemaVersion !== 1 ||
@@ -547,14 +583,19 @@ const parseGovernedRoleResult = (
   const blockingCount = findings.filter(({ blocking }) => blocking).length;
   if (
     (decoded.outcome === "BLOCKING_FAIL" &&
-      (blockingCount !== 1 || findings.length !== 1)) ||
-    ((decoded.outcome === "PASS" || decoded.outcome === "READY") &&
-      findings.length !== 0) ||
+      blockingCount < 1) ||
+    (decoded.outcome === "PASS" && blockingCount !== 0) ||
     ((role === "EXECUTE" || role === "REPAIR") && findings.length !== 0)
   ) {
     throw invalid("The governed role result is invalid.");
   }
+  const promotionCandidate = decoded.promotionCandidate === null
+    ? null : parseBoundedText(decoded.promotionCandidate, 1_000);
+  if (decoded.promotionCandidate !== null && promotionCandidate === null) {
+    throw invalid("The governed promotion candidate is invalid.");
+  }
   return Object.freeze({
+    promotionCandidate,
     outcome: decoded.outcome as GovernedRoleResult["outcome"],
     summary,
     findings: Object.freeze(findings),
@@ -606,6 +647,8 @@ const parseDispatchRow = (row: DispatchRow): GovernedDispatchReceipt => {
     (value) => value === row.status,
   );
   if (
+    row.receipt_id !== stableId("gdr", row.operation_id) ||
+    row.operation_id !== stableId("gdo", row.subtask_id, row.workflow_sequence) ||
     !/^gdr_[0-9a-f]{48}$/u.test(row.receipt_id) ||
     !/^gdo_[0-9a-f]{48}$/u.test(row.operation_id) ||
     !subtaskId.success ||
@@ -667,6 +710,7 @@ const parseRoleAuthorizationRow = (
     "FOCUSED_RE_QA",
   ].find((value) => value === row.context_profile);
   if (
+    row.authorization_id !== stableId("gra", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence, row.repair_cycles_used, row.role) ||
     !/^gra_[0-9a-f]{48}$/u.test(row.authorization_id) ||
     !/^gdr_[0-9a-f]{48}$/u.test(row.dispatch_receipt_id) ||
     !subtaskId.success ||
@@ -710,6 +754,7 @@ const parseRoleResultRow = (row: RoleResultRow): GovernedRoleResult => {
   const runId = ExecutionRunIdSchema.safeParse(row.execution_run_id);
   const role = GOVERNED_SUBTASK_ROLES.find((value) => value === row.role);
   if (
+    row.result_id !== stableId("grr", row.authorization_id) ||
     !/^grr_[0-9a-f]{48}$/u.test(row.result_id) ||
     !/^gra_[0-9a-f]{48}$/u.test(row.authorization_id) ||
     !runId.success ||
@@ -832,6 +877,9 @@ export class GovernedExecutionStore {
     budgets: readonly AggregateSubtaskUsageBudget[];
     dispatchReceipts: readonly GovernedDispatchReceipt[];
   }> {
+    return this.#storage.runInTransaction(() => {
+    this.#validateBigTaskAuthority(bigTaskId);
+    this.#completeBigTaskInTransaction(bigTaskId, true);
     const bigTask = this.#storage.getBigTaskById(bigTaskId);
     if (bigTask === null) {
       throw new TaskStorageError("PARENT_NOT_FOUND", "The Big Task does not exist.");
@@ -872,6 +920,7 @@ export class GovernedExecutionStore {
       ),
       dispatchReceipts: Object.freeze(receipts),
     });
+    });
   }
 
   authorizeManualStart(subtaskId: SubtaskId): GovernedManualStartAuthority {
@@ -888,7 +937,7 @@ export class GovernedExecutionStore {
         return this.#manualStartFromRow(existing, view, false);
       }
       if (
-        view.currentStage !== "EXECUTE" ||
+        (view.currentStage !== "EXECUTE" && view.currentStage !== "MATERIALIZE") ||
         view.boardStatus !== "TODO" ||
         view.unresolvedHumanRequired !== null
       ) {
@@ -905,7 +954,7 @@ export class GovernedExecutionStore {
         view.planRevision,
         view.candidateBinding,
         view.subtaskId,
-        view.transitionCount + 1,
+        view.transitionCount + (view.currentStage === "MATERIALIZE" ? 2 : 1),
       );
       const authorizedAt = this.#timestampAtOrAfter(view.initializedAt);
       access.sqlite
@@ -922,7 +971,7 @@ export class GovernedExecutionStore {
           view.planRevision,
           view.candidateBinding,
           view.subtaskId,
-          view.transitionCount + 1,
+          view.transitionCount + (view.currentStage === "MATERIALIZE" ? 2 : 1),
           authorizedAt,
         );
       const row = access.sqlite
@@ -975,8 +1024,8 @@ export class GovernedExecutionStore {
         .prepare(
           `INSERT INTO governed_budget_extensions (
              authority_id, project_id, big_task_id, plan_revision,
-             candidate_binding, subtask_id, granted_tokens, authorized_at
-           ) VALUES (?, ?, ?, ?, ?, ?, 40000, ?)`,
+             candidate_binding, subtask_id, granted_tokens, authorized_at, usage_at_grant
+           ) VALUES (?, ?, ?, ?, ?, ?, 40000, ?, ?)`,
         )
         .run(
           authorityId,
@@ -986,6 +1035,7 @@ export class GovernedExecutionStore {
           view.candidateBinding,
           view.subtaskId,
           authorizedAt,
+          budget.totalTokens,
         );
       const row = access.sqlite
         .prepare("SELECT * FROM governed_budget_extensions WHERE authority_id = ?")
@@ -1001,6 +1051,7 @@ export class GovernedExecutionStore {
   }
 
   prepareNextRole(bigTaskId: BigTaskId): GovernedPreparationResult {
+    this.#validateBigTaskAuthority(bigTaskId);
     let materialization = this.#storage.getCanonicalTaskMaterialization(bigTaskId);
     if (materialization === null) {
       const planning = this.#storage.getDurablePlanningSnapshot(bigTaskId);
@@ -1227,6 +1278,26 @@ export class GovernedExecutionStore {
     });
   }
 
+  claimRoleProviderExecution(authorizationId: string): GovernedRoleExecutionInput {
+    return this.#storage.runInTransaction(() => {
+      const input = this.resolveRoleExecutionInput(authorizationId);
+      const targets = input.authorization.role === "REPAIR" || input.authorization.role === "FOCUSED_RE_QA"
+        ? this.#requiredBlockingFindings(input.authorization.subtaskId).map(f => f.finding_id) : [];
+      const sqlite = this.#access().sqlite;
+      if (sqlite.prepare("SELECT 1 FROM governed_provider_claims WHERE authorization_id = ?").get(authorizationId)) {
+        throw conflict("The provider start is already claimed; ambiguous starts cannot retry.");
+      }
+      sqlite.prepare(`INSERT INTO governed_provider_claims
+        (authorization_id, execution_run_id, candidate_sha, input_hash, input_bytes, target_finding_ids, claimed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(authorizationId, input.attempt.executionRunId,
+          input.authorization.candidateSha,
+          createHash("sha256").update(input.preflight.text, "utf8").digest("hex"),
+          input.preflight.utf8Bytes, JSON.stringify(targets),
+          this.#timestampAtOrAfter(input.authorization.authorizedAt));
+      return input;
+    });
+  }
+
   revalidateRoleCandidate(
     authorizationId: string,
   ): ResolvedActiveOwnedWorktree {
@@ -1254,7 +1325,7 @@ export class GovernedExecutionStore {
     if (
       worktree.ownership.id !== authorization.worktreeOwnershipId ||
       !candidateIsClean(worktree.ownership.worktreePath) ||
-      (!authorization.writeEnabled &&
+      ((run.status === "CREATED" || !authorization.writeEnabled) &&
         worktree.currentHeadSha !== authorization.candidateSha)
     ) {
       throw conflict("The governed candidate worktree authority drifted.");
@@ -1274,6 +1345,7 @@ export class GovernedExecutionStore {
       );
     }
     this.#assertRoleAuthorizationCurrent(authorization);
+    this.#requireProviderClaim(authorization);
     const link = this.#requiredRoleLink(authorization.authorizationId);
     this.#storage.bindChatThreadProviderReference({
       chatThreadId: ChatThreadIdSchema.parse(link.chat_thread_id),
@@ -1294,6 +1366,7 @@ export class GovernedExecutionStore {
       );
     }
     this.#assertRoleAuthorizationCurrent(authorization);
+    this.#requireProviderClaim(authorization);
     const link = this.#requiredRoleLink(authorization.authorizationId);
     this.#storage.startExecutionRun({
       executionRunId: ExecutionRunIdSchema.parse(link.execution_run_id),
@@ -1329,25 +1402,7 @@ export class GovernedExecutionStore {
     }
     const parsed = parseGovernedRoleResult(authorization.role, responseText);
     return this.#storage.runInTransaction(() => {
-      const focusedFailureTarget =
-        authorization.role === "FOCUSED_RE_QA" &&
-        parsed.outcome === "BLOCKING_FAIL"
-          ? this.#requiredBlockingFinding(authorization.subtaskId)
-          : null;
-      if (focusedFailureTarget !== null) {
-        const [reported] = parsed.findings;
-        if (
-          reported === undefined ||
-          reported.findingId !== focusedFailureTarget.provider_finding_key ||
-          reported.violatedInvariant !== focusedFailureTarget.violated_invariant ||
-          reported.affectedContract !== focusedFailureTarget.affected_contract ||
-          reported.reproduction !== focusedFailureTarget.reproduction
-        ) {
-          throw conflict("Focused Re-QA must report the exact bounded finding.");
-        }
-      }
-      const findingsToPersist =
-        focusedFailureTarget === null ? parsed.findings : Object.freeze([]);
+      const findingsToPersist = parsed.findings;
       const existing = this.#getRoleResult(authorization.authorizationId);
       if (existing !== null) {
         const findings = this.#recordRoleFindingRows(existing.resultId);
@@ -1379,6 +1434,14 @@ export class GovernedExecutionStore {
       const run = this.#storage.getExecutionRunById(runId);
       if (run?.status !== "RUNNING") {
         throw conflict("Only the exact running governed role may report a result.");
+      }
+      this.#requireProviderClaim(authorization);
+      const usage = NormalizedUsageSchema.safeParse(normalizedUsage);
+      if (!usage.success || usage.data.totalTokens === undefined || providerModel === undefined ||
+          run.providerRun === undefined || run.providerRun === null ||
+          run.providerModel?.providerModelId !== providerModel.providerModelId ||
+          providerModel.providerId !== "codex-app-server") {
+        throw conflict("Exact provider provenance and normalized usage are required.");
       }
       const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(
         authorization.subtaskId,
@@ -1433,6 +1496,17 @@ export class GovernedExecutionStore {
             occurredAt,
           );
       });
+      access.sqlite.prepare(`INSERT INTO governed_result_provenance
+        (result_id, authorization_id, provider_thread_id, provider_run_id, provider_model_id,
+         normalized_usage, structured_result, candidate_sha, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(resultId, authorization.authorizationId,
+          run.providerRun.providerThreadId, run.providerRun.providerRunId, providerModel.providerModelId,
+          JSON.stringify(usage.data), JSON.stringify({schemaVersion: 1, ...parsed}), worktree.currentHeadSha, occurredAt);
+      if (parsed.promotionCandidate !== null) {
+        access.sqlite.prepare(`INSERT INTO governed_promotion_candidates
+          (result_id, summary, disposition) VALUES (?, ?, 'PENDING_HUMAN_REVIEW')`)
+          .run(resultId, parsed.promotionCandidate);
+      }
       this.#storage.finalizePrimaryExecutionAttempt({
         executionRunId: runId,
         status: "SUCCEEDED",
@@ -1516,6 +1590,9 @@ export class GovernedExecutionStore {
   #prepareView(viewInput: DurableWorkflowControlView): GovernedPreparationResult {
     let view = viewInput;
     if (view.currentStage === "MATERIALIZE") {
+      if (this.#storage.getSubtaskById(view.subtaskId)?.startPolicy === "MANUAL" && this.#getManualStart(view.subtaskId) === null) {
+        throw new GovernedPreparationBlock(freeze({kind:"HUMAN_REQUIRED",reason:"MANUAL_START_REQUIRED",subtaskId:view.subtaskId}));
+      }
       const worktree = this.#ensureOwnedWorktree(view.subtaskId);
       const derived = this.#deriveDispatchGates(view, worktree);
       if (!derived.budget.allowed) {
@@ -1625,6 +1702,11 @@ export class GovernedExecutionStore {
         );
         if (thread === null) {
           throw malformed();
+        }
+        if (run.status === "CREATED" && this.#access().sqlite.prepare(
+          "SELECT 1 FROM governed_provider_claims WHERE authorization_id = ?",
+        ).get(currentAuthorization.authorizationId)) {
+          throw new GovernedPreparationBlock(freeze({ kind: "BLOCKED", reason: "PROVIDER_ROLE_FAILED", subtaskId: view.subtaskId }));
         }
         if (run.status === "CREATED" && thread.providerThread === null) {
           return freeze({
@@ -1819,6 +1901,9 @@ export class GovernedExecutionStore {
           reservedAt,
           reservedAt,
         );
+      access.sqlite.prepare(`INSERT INTO governed_dispatch_gate_snapshots
+        (receipt_id, gate_references, candidate_sha, recorded_at) VALUES (?, ?, ?, ?)`)
+        .run(receiptId, JSON.stringify([...refreshed.references].sort()), refreshedWorktree.currentHeadSha, reservedAt);
       const receipt = this.#getDispatchReceiptForSubtask(current.subtaskId);
       if (receipt === null || receipt.receiptId !== receiptId) {
         throw new TaskStorageError(
@@ -1889,8 +1974,15 @@ export class GovernedExecutionStore {
       ) {
         throw conflict("The exact candidate worktree is unavailable or dirty.");
       }
+      if (role !== "EXECUTE") {
+        const previous = this.#getRoleAuthorizationForSequence(current.subtaskId, sequence - 1);
+        const previousResult = previous === null ? null : this.#getRoleResult(previous.authorizationId);
+        if (previousResult === null || previousResult.candidateSha !== worktree.currentHeadSha) {
+          throw conflict("The candidate changed since the prior governed role result.");
+        }
+      }
       if (role === "REPAIR" || role === "FOCUSED_RE_QA") {
-        this.#requiredBlockingFinding(current.subtaskId);
+        this.#requiredBlockingFindings(current.subtaskId);
       }
       const authorizationId = stableId(
         "gra",
@@ -1987,6 +2079,11 @@ export class GovernedExecutionStore {
         currentStage: view.currentStage,
       });
     }
+    const candidate = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
+    if (candidate.ownership.id !== authorization.worktreeOwnershipId || candidate.currentHeadSha !== result.candidateSha ||
+        !candidateIsClean(candidate.ownership.worktreePath)) {
+      throw conflict("The result candidate changed before reconciliation.");
+    }
     if (result.outcome === "BLOCKED" || result.outcome === "BLOCKING_FAIL" &&
       result.role !== "FRESH_QA" && result.role !== "FOCUSED_RE_QA") {
       return freeze({
@@ -2016,7 +2113,7 @@ export class GovernedExecutionStore {
         checkpointId,
       );
       if (checkpoint === null) {
-        this.#storage.completeSubtaskImplementation({
+        withGovernedCheckpointWriter(this.#storage, () => this.#storage.completeSubtaskImplementation({
           subtaskId: authorization.subtaskId,
           checkpoint: {
             id: checkpointId,
@@ -2028,7 +2125,7 @@ export class GovernedExecutionStore {
             summary: result.summary,
             occurredAt: result.occurredAt,
           },
-        });
+        }));
       } else if (
         checkpoint.subtaskId !== authorization.subtaskId ||
         checkpoint.repositoryCommitSha !== result.candidateSha ||
@@ -2253,6 +2350,11 @@ export class GovernedExecutionStore {
     ) {
       throw malformed();
     }
+    const hasPromotionCandidate = access.sqlite.prepare(`SELECT 1 FROM governed_promotion_candidates pc
+      JOIN governed_role_results rr ON rr.result_id = pc.result_id
+      JOIN governed_role_authorizations a ON a.authorization_id = rr.authorization_id
+      WHERE a.subtask_id = ? LIMIT 1`).get(view.subtaskId) !== undefined;
+    const promotionDecision = hasPromotionCandidate ? "CANDIDATE_RECORDED" : "NO_PROMOTION_CANDIDATE";
     const dispositionId = stableId("gpc", result.resultId);
     const existingDisposition = access.sqlite
       .prepare(
@@ -2272,13 +2374,13 @@ export class GovernedExecutionStore {
         .prepare(
           `INSERT INTO governed_promoted_context_dispositions (
            disposition_id, subtask_id, role_result_id, decision, created_at
-         ) VALUES (?, ?, ?, 'NO_PROMOTION_CANDIDATE', ?)`,
+         ) VALUES (?, ?, ?, ?, ?)`,
         )
-        .run(dispositionId, view.subtaskId, result.resultId, result.occurredAt);
+        .run(dispositionId, view.subtaskId, result.resultId, promotionDecision, result.occurredAt);
     } else if (
       existingDisposition.subtask_id !== view.subtaskId ||
       existingDisposition.role_result_id !== result.resultId ||
-      existingDisposition.decision !== "NO_PROMOTION_CANDIDATE" ||
+      existingDisposition.decision !== promotionDecision ||
       existingDisposition.created_at !== result.occurredAt
     ) {
       throw malformed();
@@ -2357,6 +2459,10 @@ export class GovernedExecutionStore {
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(authorityId, ...values.slice(0, 8), sourceType, ...values.slice(8), recordedAt);
+    if (mapping.producer === "OPERATIONAL_GATE" || mapping.producer === "HUMAN_AUTHORITY") {
+      access.sqlite.prepare("INSERT INTO governed_gate_sources (authority_id, source_type, source_reference, payload) VALUES (?, ?, ?, ?)")
+        .run(authorityId, sourceType, sourceReference, JSON.stringify(values));
+    }
     access.sqlite
       .prepare(
         `INSERT INTO durable_workflow_evidence (
@@ -2532,7 +2638,9 @@ export class GovernedExecutionStore {
         `budget:${view.subtaskId}:${budget.totalTokens ?? "unknown"}:${budget.effectiveLimitTokens}:${extension?.authorityId ?? "none"}`,
         `concurrency:${view.projectId}:${activeCoding.count}:${activeWrite.count}`,
         `worktree:${worktree.ownership.id}:${worktree.currentHeadSha}`,
-        `human-policy:${view.subtaskId}:routine-not-required`,
+        this.#storage.getSubtaskById(view.subtaskId)?.startPolicy === "MANUAL"
+          ? `human-policy:${view.subtaskId}:manual:${this.#getManualStart(view.subtaskId)?.authorityId ?? "missing"}`
+          : `human-policy:${view.subtaskId}:routine-not-required`,
       ]),
     });
   }
@@ -2543,12 +2651,13 @@ export class GovernedExecutionStore {
   ): AggregateSubtaskUsageBudget {
     const rows = this.#access().sqlite
       .prepare(
-        `SELECT er.status, er.started_at, er.usage_present, er.total_tokens
+        `SELECT er.id, er.status, er.started_at, er.usage_present, er.total_tokens
            FROM execution_runs er
            JOIN chat_threads ct ON ct.id = er.chat_thread_id
           WHERE ct.subtask_id = ?`,
       )
       .all(subtaskId) as unknown as readonly {
+        readonly id: string;
         readonly status: string;
         readonly started_at: string | null;
         readonly usage_present: number;
@@ -2556,6 +2665,7 @@ export class GovernedExecutionStore {
       }[];
     let total = 0;
     for (const row of rows) {
+      this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(row.id));
       if (
         (row.status === "RUNNING" || row.started_at !== null) &&
         (row.usage_present !== 1 ||
@@ -2620,40 +2730,37 @@ export class GovernedExecutionStore {
         absoluteCapBytes: 64_000;
         contextProfile: GovernedRoleContextProfile;
       }> {
-    const baseProfile =
-      authorization.contextProfile === "STANDARD_SUBTASK_EXECUTION"
-        ? "STANDARD_SUBTASK_EXECUTION"
-        : "FRESH_INDEPENDENT_QA";
-    const base = new ExecutionInputPreflight(
-      this.#storage,
-    ).prepareExecutionInputForSubtask(authorization.subtaskId, baseProfile);
-    const boundedFinding =
-      authorization.role === "REPAIR" || authorization.role === "FOCUSED_RE_QA"
-        ? this.#requiredBlockingFinding(authorization.subtaskId)
-        : null;
-    const payload = base.allowed
-      ? JSON.stringify({
-          schemaVersion: 1,
-          authorizationId: authorization.authorizationId,
-          role: authorization.role,
-          contextProfile: authorization.contextProfile,
-          writeEnabled: authorization.writeEnabled,
-          instruction: roleInstruction(authorization.role),
-          resultContract: roleResultContract(authorization.role),
-          ...(boundedFinding === null
-            ? {}
-            : {
-                boundedFinding: {
-                  findingId: boundedFinding.finding_id,
-                  violatedInvariant: boundedFinding.violated_invariant,
-                  affectedContract: boundedFinding.affected_contract,
-                  reproduction: boundedFinding.reproduction,
-                  repairedSha: authorization.candidateSha,
-                },
-              }),
-          canonicalContext: base.text,
-        })
-      : null;
+    const boundedFindings = authorization.role === "REPAIR" || authorization.role === "FOCUSED_RE_QA"
+      ? this.#requiredBlockingFindings(authorization.subtaskId) : [];
+    const targets = boundedFindings.map(finding => ({
+      findingId: finding.finding_id,
+      providerFindingKey: finding.provider_finding_key,
+      sourceResultId: finding.result_id,
+      violatedInvariant: finding.violated_invariant,
+      affectedContract: finding.affected_contract,
+      reproduction: finding.reproduction,
+      repairedSha: authorization.candidateSha,
+    }));
+    const base = authorization.role === "FOCUSED_RE_QA"
+      ? compileGovernedFocusedContext(this.#storage, authorization.subtaskId, targets)
+      : new ExecutionInputPreflight(this.#storage).prepareExecutionInputForSubtask(
+          authorization.subtaskId,
+          authorization.role === "FRESH_QA" || authorization.role === "REPAIR"
+            ? "FRESH_INDEPENDENT_QA" : "STANDARD_SUBTASK_EXECUTION",
+        );
+    const payload = base.allowed ? JSON.stringify({
+      schemaVersion: 1,
+      authorizationId: authorization.authorizationId,
+      role: authorization.role,
+      contextProfile: authorization.contextProfile,
+      candidateSha: authorization.candidateSha,
+      worktreeOwnershipId: authorization.worktreeOwnershipId,
+      writeEnabled: authorization.writeEnabled,
+      instruction: roleInstruction(authorization.role),
+      resultContract: roleResultContract(authorization.role),
+      ...(targets.length === 0 ? {} : { boundedFindings: targets }),
+      canonicalContext: base.text,
+    }) : null;
     const text = payload === null ? null : ROLE_INPUT_MARKER + payload;
     const utf8Bytes =
       text === null ? base.utf8Bytes : Buffer.byteLength(text, "utf8");
@@ -2713,57 +2820,37 @@ export class GovernedExecutionStore {
       .all(resultId) as unknown as readonly FindingRow[];
   }
 
-  #requiredBlockingFinding(subtaskId: SubtaskId): FindingRow {
-    const rows = this.#access().sqlite
-      .prepare(
-        `SELECT f.*
-           FROM governed_findings f
-           JOIN governed_role_results rr ON rr.result_id = f.result_id
-           LEFT JOIN governed_finding_resolutions r ON r.finding_id = f.finding_id
-          WHERE f.subtask_id = ? AND f.blocking = 1 AND r.finding_id IS NULL
-            AND rr.role = 'FRESH_QA'
-          ORDER BY f.created_at, f.finding_id`,
-      )
-      .all(subtaskId) as unknown as readonly FindingRow[];
-    if (rows.length !== 1) {
+  #requiredBlockingFindings(subtaskId: SubtaskId): readonly FindingRow[] {
+    const rows = this.#access().sqlite.prepare(`SELECT f.* FROM governed_findings f
+      JOIN governed_role_results rr ON rr.result_id = f.result_id
+      JOIN governed_role_authorizations a ON a.authorization_id = rr.authorization_id
+      WHERE f.subtask_id = ? AND f.blocking = 1 AND rr.role = 'FRESH_QA'
+      AND rr.outcome = 'BLOCKING_FAIL' AND a.subtask_id = f.subtask_id
+      ORDER BY f.ordinal`).all(subtaskId) as unknown as readonly FindingRow[];
+    if (rows.length < 1 || rows.length > 16 || new Set(rows.map(r => r.result_id)).size !== 1) {
       throw conflict("The bounded QA repair target is unavailable or ambiguous.");
     }
-    return rows[0]!;
+    return rows;
   }
 
-  #resolveBlockingFinding(
-    subtaskId: SubtaskId,
-    focusedResult: GovernedRoleResult,
-  ): void {
-    const finding = this.#requiredBlockingFinding(subtaskId);
+  #resolveBlockingFinding(subtaskId: SubtaskId, focusedResult: GovernedRoleResult): void {
+    const findings = this.#requiredBlockingFindings(subtaskId);
     const access = this.#access();
-    const existing = access.sqlite
-      .prepare(
-        "SELECT * FROM governed_finding_resolutions WHERE finding_id = ?",
-      )
-      .get(finding.finding_id) as
-      | {
-          readonly finding_id: string;
-          readonly role_result_id: string;
-          readonly resolved_at: string;
-        }
-      | undefined;
-    if (existing !== undefined) {
-      if (
-        existing.role_result_id !== focusedResult.resultId ||
-        existing.resolved_at !== focusedResult.occurredAt
-      ) {
-        throw malformed();
-      }
-      return;
+    const claim = access.sqlite.prepare("SELECT target_finding_ids FROM governed_provider_claims WHERE authorization_id = ?")
+      .get(focusedResult.authorizationId) as { target_finding_ids: string } | undefined;
+    if (claim?.target_finding_ids !== JSON.stringify(findings.map(f => f.finding_id))) {
+      throw malformed();
     }
-    access.sqlite
-      .prepare(
-        `INSERT INTO governed_finding_resolutions (
-           finding_id, role_result_id, resolved_at
-         ) VALUES (?, ?, ?)`,
-      )
-      .run(finding.finding_id, focusedResult.resultId, focusedResult.occurredAt);
+    for (const finding of findings) {
+      const existing = access.sqlite.prepare("SELECT * FROM governed_finding_resolutions WHERE finding_id = ?")
+        .get(finding.finding_id) as { role_result_id: string; resolved_at: string } | undefined;
+      if (existing !== undefined) {
+        if (existing.role_result_id !== focusedResult.resultId || existing.resolved_at !== focusedResult.occurredAt) throw malformed();
+      } else {
+        access.sqlite.prepare("INSERT INTO governed_finding_resolutions (finding_id, role_result_id, resolved_at) VALUES (?, ?, ?)")
+          .run(finding.finding_id, focusedResult.resultId, focusedResult.occurredAt);
+      }
+    }
   }
 
   #getRoleResult(authorizationId: string): GovernedRoleResult | null {
@@ -2778,10 +2865,6 @@ export class GovernedExecutionStore {
     const run = this.#storage.getExecutionRunById(result.executionRunId);
     const link = this.#getRoleLink(authorizationId);
     const findings = this.#recordRoleFindingRows(result.resultId);
-    const expectedFindingCount =
-      result.outcome === "BLOCKING_FAIL" && result.role !== "FOCUSED_RE_QA"
-        ? 1
-        : 0;
     if (
       authorization === null ||
       authorization.role !== result.role ||
@@ -2790,18 +2873,62 @@ export class GovernedExecutionStore {
       !isCanonicalTimestamp(result.occurredAt) ||
       new Date(result.occurredAt).getTime() <
         new Date(authorization.authorizedAt).getTime() ||
-      findings.length !== expectedFindingCount ||
+      findings.length > 16 ||
+      (result.outcome === "BLOCKING_FAIL" && !findings.some(f => f.blocking === 1)) ||
+      (result.outcome === "PASS" && findings.some(f => f.blocking === 1)) ||
+      ((result.role === "EXECUTE" || result.role === "REPAIR") && findings.length !== 0) ||
       findings.some(
         (finding, index) =>
           finding.result_id !== result.resultId ||
           finding.subtask_id !== authorization.subtaskId ||
           finding.ordinal !== index ||
-          finding.blocking !== 1,
+          (finding.blocking !== 0 && finding.blocking !== 1),
       )
     ) {
       throw malformed();
     }
+    this.#requireProviderClaim(authorization);
+    const provenance = this.#access().sqlite.prepare("SELECT * FROM governed_result_provenance WHERE result_id = ?")
+      .get(result.resultId) as { authorization_id: string; provider_thread_id: string; provider_run_id: string;
+        provider_model_id: string; normalized_usage: string; structured_result: string; candidate_sha: string; recorded_at: string } | undefined;
+    if (provenance === undefined || provenance.authorization_id !== authorization.authorizationId ||
+        provenance.provider_thread_id !== run.providerRun?.providerThreadId ||
+        provenance.provider_run_id !== run.providerRun?.providerRunId ||
+        provenance.provider_model_id !== run.providerModel?.providerModelId ||
+        provenance.candidate_sha !== result.candidateSha || provenance.recorded_at !== result.occurredAt) throw malformed();
+    let parsed: ParsedGovernedRoleResult;
+    try {
+      parsed = parseGovernedRoleResult(result.role, provenance.structured_result);
+      const usage = NormalizedUsageSchema.parse(JSON.parse(provenance.normalized_usage));
+      if (usage.totalTokens === undefined || JSON.stringify(usage) !== JSON.stringify(run.normalizedUsage)) throw malformed();
+    } catch { throw malformed(); }
+    if (parsed.outcome !== result.outcome || parsed.summary !== result.summary || parsed.findings.length !== findings.length ||
+        findings.some((finding, index) => {
+          const expected = parsed.findings[index]!;
+          return finding.finding_id !== stableId("gfd", result.resultId, index) ||
+            finding.provider_finding_key !== expected.findingId || finding.blocking !== (expected.blocking ? 1 : 0) ||
+            finding.violated_invariant !== expected.violatedInvariant || finding.affected_contract !== expected.affectedContract ||
+            finding.reproduction !== expected.reproduction || finding.created_at !== result.occurredAt;
+        })) throw malformed();
+    const promotion = this.#access().sqlite.prepare("SELECT * FROM governed_promotion_candidates WHERE result_id = ?")
+      .get(result.resultId) as { summary: string; disposition: string } | undefined;
+    if (parsed.promotionCandidate === null ? promotion !== undefined :
+        promotion?.summary !== parsed.promotionCandidate || promotion.disposition !== "PENDING_HUMAN_REVIEW") throw malformed();
     return result;
+  }
+
+  #requireProviderClaim(authorization: GovernedRoleAuthorization): void {
+    const claim = this.#access().sqlite.prepare("SELECT * FROM governed_provider_claims WHERE authorization_id = ?")
+      .get(authorization.authorizationId) as { execution_run_id: string; candidate_sha: string; input_hash: string;
+        input_bytes: number; target_finding_ids: string; claimed_at: string } | undefined;
+    const link = this.#requiredRoleLink(authorization.authorizationId);
+    const targets = authorization.role === "REPAIR" || authorization.role === "FOCUSED_RE_QA"
+      ? this.#requiredBlockingFindings(authorization.subtaskId).map(f => f.finding_id) : [];
+    if (claim === undefined || claim.execution_run_id !== link.execution_run_id ||
+        claim.candidate_sha !== authorization.candidateSha || !/^[a-f0-9]{64}$/u.test(claim.input_hash) ||
+        !Number.isSafeInteger(claim.input_bytes) || claim.input_bytes < 1 || claim.input_bytes > 64_000 ||
+        claim.target_finding_ids !== JSON.stringify(targets) || !isCanonicalTimestamp(claim.claimed_at) ||
+        claim.claimed_at < authorization.authorizedAt) throw malformed();
   }
 
   #getDispatchReceiptForSubtask(
@@ -2866,6 +2993,8 @@ export class GovernedExecutionStore {
     const threadId = ChatThreadIdSchema.safeParse(link.chat_thread_id);
     const runId = ExecutionRunIdSchema.safeParse(link.execution_run_id);
     if (
+      link.chat_thread_id !== stableId("thr", authorization.authorizationId) ||
+      link.execution_run_id !== stableId("run", authorization.authorizationId) ||
       link.authorization_id !== authorization.authorizationId ||
       !threadId.success ||
       threadId.data !== link.chat_thread_id ||
@@ -2917,6 +3046,17 @@ export class GovernedExecutionStore {
     receipt: GovernedDispatchReceipt,
     view: DurableWorkflowControlView,
   ): void {
+    const source = this.#access().sqlite.prepare("SELECT * FROM governed_dispatch_gate_snapshots WHERE receipt_id = ?")
+      .get(receipt.receiptId) as { gate_references: string; candidate_sha: string; recorded_at: string } | undefined;
+    if (source === undefined || source.gate_references !== JSON.stringify(receipt.gateEvidenceReferences) ||
+        source.recorded_at !== receipt.reservedAt || !isCommitSha(source.candidate_sha) ||
+        receipt.gateEvidenceReferences.length !== 7 ||
+        !receipt.gateEvidenceReferences.includes(`worktree:${receipt.worktreeOwnershipId}:${source.candidate_sha}`) ||
+        !receipt.gateEvidenceReferences.includes(`repository:${receipt.worktreeOwnershipId}:${source.candidate_sha}`) ||
+        !receipt.gateEvidenceReferences.includes(`dependency:${receipt.subtaskId}:${receipt.workflowSequence}`) ||
+        !receipt.gateEvidenceReferences.includes(receipt.manualStartAuthorityId === null
+          ? `human-policy:${receipt.subtaskId}:routine-not-required`
+          : `human-policy:${receipt.subtaskId}:manual:${receipt.manualStartAuthorityId}`)) throw malformed();
     const subtask = this.#storage.getSubtaskById(view.subtaskId);
     const executeEntrySequence =
       view.initialStage === "EXECUTE"
@@ -2958,13 +3098,14 @@ export class GovernedExecutionStore {
     requireCurrentSequence = true,
   ): GovernedManualStartAuthority {
     if (
+      row.authority_id !== stableId("gms", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence) ||
       !/^gms_[0-9a-f]{48}$/u.test(row.authority_id) ||
       row.project_id !== view.projectId ||
       row.big_task_id !== view.bigTaskId ||
       row.plan_revision !== view.planRevision ||
       row.candidate_binding !== view.candidateBinding ||
       row.subtask_id !== view.subtaskId ||
-      (requireCurrentSequence && row.workflow_sequence !== view.transitionCount + 1) ||
+      (requireCurrentSequence && row.workflow_sequence !== view.transitionCount + (view.currentStage === "MATERIALIZE" ? 2 : 1)) ||
       row.workflow_sequence < 1 ||
       !isCanonicalTimestamp(row.authorized_at)
     ) {
@@ -2987,6 +3128,7 @@ export class GovernedExecutionStore {
     view: DurableWorkflowControlView,
   ): GovernedBudgetExtensionAuthority {
     if (
+      row.authority_id !== stableId("gbe", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id) ||
       !/^gbe_[0-9a-f]{48}$/u.test(row.authority_id) ||
       row.project_id !== view.projectId ||
       row.big_task_id !== view.bigTaskId ||
@@ -2994,10 +3136,16 @@ export class GovernedExecutionStore {
       row.candidate_binding !== view.candidateBinding ||
       row.subtask_id !== view.subtaskId ||
       row.granted_tokens !== 40_000 ||
+      !Number.isSafeInteger(row.usage_at_grant) ||
+      row.usage_at_grant === null || row.usage_at_grant < 120_000 || row.usage_at_grant >= 160_000 ||
       !isCanonicalTimestamp(row.authorized_at)
     ) {
       throw malformed();
     }
+    const history = this.#access().sqlite.prepare(`SELECT coalesce(sum(er.total_tokens), 0) AS total
+      FROM execution_runs er JOIN chat_threads ct ON ct.id = er.chat_thread_id
+      WHERE ct.subtask_id = ? AND er.usage_present = 1 AND er.ended_at <= ?`).get(view.subtaskId, row.authorized_at) as {total:number};
+    if (history.total !== row.usage_at_grant) throw malformed();
     return freeze({
       authorityId: row.authority_id,
       projectId: row.project_id,
@@ -3076,8 +3224,13 @@ export class GovernedExecutionStore {
       .run(status, terminalAt, terminalAt, receiptId);
   }
 
-  #tryCompleteBigTask(
+  #tryCompleteBigTask(bigTaskId: BigTaskId): Extract<GovernedPreparationResult, { readonly kind: "BIG_TASK_COMPLETE" }> | null {
+    return this.#storage.runInTransaction(() => this.#completeBigTaskInTransaction(bigTaskId));
+  }
+
+  #completeBigTaskInTransaction(
     bigTaskId: BigTaskId,
+    readOnly = false,
   ): Extract<GovernedPreparationResult, { readonly kind: "BIG_TASK_COMPLETE" }> | null {
     const materialization = this.#storage.getCanonicalTaskMaterialization(bigTaskId);
     const bigTask = this.#storage.getBigTaskById(bigTaskId);
@@ -3086,34 +3239,25 @@ export class GovernedExecutionStore {
     }
     const existing = this.#access().sqlite
       .prepare(
-        "SELECT receipt_id, candidate_binding FROM governed_big_task_completion_receipts WHERE big_task_id = ?",
+        "SELECT * FROM governed_big_task_completion_receipts WHERE big_task_id = ?",
       )
       .get(bigTaskId) as
-      | { readonly receipt_id: string; readonly candidate_binding: string }
+      | { readonly receipt_id: string; readonly candidate_binding: string; readonly project_id: string; readonly plan_revision: number; readonly subtask_count: number; readonly completed_at: string }
       | undefined;
-    if (existing !== undefined) {
-      if (
-        bigTask.status !== "DONE" ||
-        existing.candidate_binding !== materialization.candidateBinding ||
-        !/^gbc_[0-9a-f]{48}$/u.test(existing.receipt_id)
-      ) {
-        throw malformed();
-      }
-      return freeze({
-        kind: "BIG_TASK_COMPLETE",
-        bigTaskId,
-        completionReceiptId: existing.receipt_id,
-      });
-    }
-    if (bigTask.status === "DONE") {
-      throw malformed();
-    }
     const views = materialization.subtasks.map(({ subtaskId }) =>
       this.#requiredWorkflowView(subtaskId),
     );
-    if (views.some(({ unresolvedHumanRequired }) => unresolvedHumanRequired !== null)) {
-      return null;
+    const allComplete = views.every(view => view.currentStage === "COMPLETE" && view.boardStatus === "DONE" &&
+      view.unresolvedHumanRequired === null && this.#getDispatchReceiptForSubtask(view.subtaskId)?.status === "COMPLETED");
+    if (existing !== undefined) {
+      if (!allComplete || bigTask.status !== "DONE" || existing.candidate_binding !== materialization.candidateBinding ||
+          existing.project_id !== materialization.projectId || existing.plan_revision !== materialization.planRevision ||
+          existing.subtask_count !== materialization.subtaskCount || !isCanonicalTimestamp(existing.completed_at) ||
+          existing.receipt_id !== stableId("gbc", materialization.projectId, bigTaskId, materialization.planRevision, materialization.candidateBinding)) throw malformed();
+      return freeze({kind: "BIG_TASK_COMPLETE", bigTaskId, completionReceiptId: existing.receipt_id});
     }
+    if (bigTask.status === "DONE") throw malformed();
+    if (readOnly || !allComplete) return null;
     const decision = evaluateBigTaskCompletion(
       {
         kind: "MATERIALIZED_GRAPH",
@@ -3144,7 +3288,7 @@ export class GovernedExecutionStore {
     if (decision.kind !== "BIG_TASK_COMPLETION_ELIGIBLE") {
       return null;
     }
-    return this.#storage.runInTransaction(() => {
+    {
       const access = this.#access();
       const receiptId = stableId(
         "gbc",
@@ -3186,7 +3330,31 @@ export class GovernedExecutionStore {
         bigTaskId,
         completionReceiptId: receiptId,
       });
-    });
+    }
+  }
+
+  #validateBigTaskAuthority(bigTaskId: BigTaskId): void {
+    const sqlite = this.#access().sqlite;
+    const rows = sqlite.prepare("SELECT * FROM governed_role_authorizations WHERE big_task_id = ? ORDER BY subtask_id, workflow_sequence")
+      .all(bigTaskId) as unknown as readonly RoleAuthorizationRow[];
+    for (const row of rows) {
+      const authorization = parseRoleAuthorizationRow(row);
+      const view = this.#requiredWorkflowView(authorization.subtaskId);
+      const prior = view.transitions[authorization.workflowSequence - 2];
+      const expectedStage = authorization.workflowSequence === 1 ? view.initialStage : prior?.resultingStage;
+      const expectedRepair = authorization.workflowSequence === 1 ? 0 : prior?.resultingRepairCyclesUsed;
+      const receipt = this.#getDispatchReceiptForSubtask(authorization.subtaskId);
+      if (receipt === null || authorization.dispatchReceiptId !== receipt.receiptId ||
+          authorization.worktreeOwnershipId !== receipt.worktreeOwnershipId ||
+          authorization.projectId !== view.projectId || authorization.bigTaskId !== view.bigTaskId ||
+          authorization.candidateBinding !== view.candidateBinding || authorization.planRevision !== view.planRevision ||
+          authorization.role !== expectedStage || authorization.repairCyclesUsed !== expectedRepair ||
+          authorization.writeEnabled !== roleWrites(authorization.role, view.writeEnabled)) throw malformed();
+      this.#assertDispatchAuthority(receipt, view);
+      const link = this.#getRoleLink(authorization.authorizationId);
+      if (link !== null) this.#attemptFromLink(link, authorization);
+      this.#getRoleResult(authorization.authorizationId);
+    }
   }
 
   #requiredWorkflowView(subtaskId: SubtaskId): DurableWorkflowControlView {
@@ -3237,6 +3405,7 @@ export class GovernedExecutionStore {
         "The governed execution store is unavailable.",
       );
     }
+    assertGovernedSchemaIntegrity(access.sqlite);
     return access;
   }
 
@@ -3283,7 +3452,12 @@ class GovernedPreparationBlock extends Error {
   }
 }
 
-export const createGovernedExecutionStore = (
+export const createGovernedExecutionStoreForTesting = (
   storage: TaskStorage,
   worktrees?: WorktreeOwnershipManager,
-): GovernedExecutionStore => new GovernedExecutionStore(storage, worktrees);
+): GovernedExecutionStore => {
+  if (process.env.NODE_ENV !== "test") {
+    throw invalid("The test seam is unavailable.");
+  }
+  return new GovernedExecutionStore(storage, worktrees);
+};

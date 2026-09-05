@@ -1,3 +1,4 @@
+import { assertGovernedCheckpointWriter, assertGovernedDispatchSource, assertGovernedEvidenceSource, governedStableId } from "./governed-evidence-validation.js";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -3947,6 +3948,22 @@ export class TaskStorage {
             "The Subtask does not exist.",
           );
         }
+        if (this.#sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'governed_dispatch_receipts'").get() &&
+            this.#sqlite.prepare("SELECT 1 FROM governed_dispatch_receipts WHERE subtask_id = ?").get(subtaskId)) {
+          assertGovernedCheckpointWriter(this);
+          const proven = this.#sqlite.prepare(`SELECT r.*, a.subtask_id FROM governed_role_results r
+            JOIN governed_role_authorizations a ON a.authorization_id = r.authorization_id
+            JOIN governed_result_provenance p ON p.result_id = r.result_id
+            JOIN execution_runs er ON er.id = r.execution_run_id
+            WHERE r.result_id = ? AND a.subtask_id = ? AND r.role = 'EXECUTE'
+            AND r.outcome = 'READY' AND er.status = 'SUCCEEDED'`).get(checkpoint.sourceReference, subtaskId);
+          if (proven === undefined || checkpoint.id !== governedStableId("icp", proven.result_id) ||
+              checkpoint.repositoryCommitSha !== proven.candidate_sha || checkpoint.actorType !== "CODEX" ||
+              checkpoint.actorReference !== proven.authorization_id || checkpoint.summary !== proven.summary ||
+              checkpoint.occurredAt !== proven.occurred_at) {
+            throw new TaskStorageError("CONFLICT", "Governed implementation requires exact provider result authority.");
+          }
+        }
         const target = subtaskFromRow(targetRow);
         if (
           !isCanonicalUtcTimestamp(targetRow.createdAt) ||
@@ -5235,10 +5252,9 @@ export class TaskStorage {
     if (authorityRow === undefined) {
       throw malformedStoredData();
     }
-    return durableWorkflowEvidenceFromRow(
-      row,
-      durableWorkflowEvidenceAuthorityFromRow(authorityRow),
-    );
+    const evidence = durableWorkflowEvidenceFromRow(row, durableWorkflowEvidenceAuthorityFromRow(authorityRow));
+    assertGovernedEvidenceSource(this.#sqlite, evidence);
+    return evidence;
   }
 
   #resolveWorkflowTransitionEvidence(
@@ -5513,6 +5529,7 @@ export class TaskStorage {
     }
 
     const views = initialization.workflowInstances.map((instance) => {
+      assertGovernedDispatchSource(this.#sqlite, instance.subtaskId);
       const subtask = source.subtasks.find(
         ({ subtaskId }) => subtaskId === instance.subtaskId,
       )?.subtask;
@@ -5540,7 +5557,9 @@ export class TaskStorage {
           if (authority === undefined) {
             throw malformedStoredData();
           }
-          return durableWorkflowEvidenceFromRow(row, authority);
+          const evidence = durableWorkflowEvidenceFromRow(row, authority);
+          assertGovernedEvidenceSource(this.#sqlite, evidence);
+          return evidence;
         });
       if (
         authoritiesById.size !== instanceAuthorityRows.length ||
