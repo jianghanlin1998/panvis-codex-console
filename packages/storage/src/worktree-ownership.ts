@@ -933,91 +933,100 @@ const transitionOwnership = (
   to: WorktreeOwnershipStatus,
   configuredRoot: string,
   releaseHeadSha: RepositoryCommitSha | null = null,
-): WorktreeOwnership =>
-  withImmediateTransaction(access, () => {
-    const current = selectOwnershipById(access, id, configuredRoot);
-    if (current.status !== from) {
-      throw ownershipError(
-        "OWNERSHIP_CONFLICT",
-        "The durable worktree ownership state changed unexpectedly.",
-      );
-    }
-    const now = timestamp(access);
-    if (now < current.updatedAt) {
-      throw ownershipError(
-        "STORAGE_UNAVAILABLE",
-        "The worktree ownership clock regressed.",
-      );
-    }
+): WorktreeOwnership => withImmediateTransaction(access, () =>
+  transitionOwnershipInTransaction(access, id, from, to, configuredRoot, releaseHeadSha));
 
-    let result;
-    switch (`${from}->${to}`) {
-      case "PROVISIONING->ACTIVE":
-        requireCheckoutGenerationEvidence(access, id);
-        result = access.sqlite
-          .prepare(
-            "UPDATE worktree_ownerships SET status = 'ACTIVE', activated_at = ?, updated_at = ? WHERE id = ? AND status = 'PROVISIONING'",
-          )
-          .run(now, now, id);
-        break;
-      case "PROVISIONING->FAILED":
-        result = access.sqlite
-          .prepare(
-            "UPDATE worktree_ownerships SET status = 'FAILED', updated_at = ? WHERE id = ? AND status = 'PROVISIONING'",
-          )
-          .run(now, id);
-        break;
-      case "ACTIVE->RELEASING": {
-        if (releaseHeadSha === null) {
-          throw ownershipError(
-            "STORAGE_UNAVAILABLE",
-            "Release evidence is required before worktree removal.",
-          );
-        }
-        const activeExecution = access.sqlite
-          .prepare(
-            `SELECT er.id
-               FROM execution_runs er
-               JOIN chat_threads ct ON ct.id = er.chat_thread_id
-              WHERE ct.subtask_id = ?
-                AND er.status IN ('CREATED', 'RUNNING')
-              LIMIT 1`,
-          )
-          .get(current.subtaskId) as { readonly id: string } | undefined;
-        if (activeExecution !== undefined) {
-          throw ownershipError(
-            "ACTIVE_EXECUTION_EXISTS",
-            "The owned worktree has an active primary execution attempt.",
-          );
-        }
-        result = access.sqlite
-          .prepare(
-            "UPDATE worktree_ownerships SET status = 'RELEASING', release_head_sha = ?, release_started_at = ?, updated_at = ? WHERE id = ? AND status = 'ACTIVE'",
-          )
-          .run(releaseHeadSha, now, now, id);
-        break;
-      }
-      case "RELEASING->RELEASED":
-        result = access.sqlite
-          .prepare(
-            "UPDATE worktree_ownerships SET status = 'RELEASED', released_at = ?, updated_at = ? WHERE id = ? AND status = 'RELEASING' AND release_head_sha IS NOT NULL",
-          )
-          .run(now, now, id);
-        break;
-      default:
+const transitionOwnershipInTransaction = (
+  access: TaskStorageWorktreeAccess,
+  id: WorktreeOwnershipId,
+  from: WorktreeOwnershipStatus,
+  to: WorktreeOwnershipStatus,
+  configuredRoot: string,
+  releaseHeadSha: RepositoryCommitSha | null = null,
+): WorktreeOwnership => {
+  const current = selectOwnershipById(access, id, configuredRoot);
+  if (current.status !== from) {
+    throw ownershipError(
+      "OWNERSHIP_CONFLICT",
+      "The durable worktree ownership state changed unexpectedly.",
+    );
+  }
+  const now = timestamp(access);
+  if (now < current.updatedAt) {
+    throw ownershipError(
+      "STORAGE_UNAVAILABLE",
+      "The worktree ownership clock regressed.",
+    );
+  }
+
+  let result;
+  switch (`${from}->${to}`) {
+    case "PROVISIONING->ACTIVE":
+      requireCheckoutGenerationEvidence(access, id);
+      result = access.sqlite
+        .prepare(
+          "UPDATE worktree_ownerships SET status = 'ACTIVE', activated_at = ?, updated_at = ? WHERE id = ? AND status = 'PROVISIONING'",
+        )
+        .run(now, now, id);
+      break;
+    case "PROVISIONING->FAILED":
+      result = access.sqlite
+        .prepare(
+          "UPDATE worktree_ownerships SET status = 'FAILED', updated_at = ? WHERE id = ? AND status = 'PROVISIONING'",
+        )
+        .run(now, id);
+      break;
+    case "ACTIVE->RELEASING": {
+      if (releaseHeadSha === null) {
         throw ownershipError(
-          "OWNERSHIP_CONFLICT",
-          "The requested worktree ownership transition is forbidden.",
+          "STORAGE_UNAVAILABLE",
+          "Release evidence is required before worktree removal.",
         );
+      }
+      const activeExecution = access.sqlite
+        .prepare(
+          `SELECT er.id
+             FROM execution_runs er
+             JOIN chat_threads ct ON ct.id = er.chat_thread_id
+            WHERE ct.subtask_id = ?
+              AND er.status IN ('CREATED', 'RUNNING')
+            LIMIT 1`,
+        )
+        .get(current.subtaskId) as { readonly id: string } | undefined;
+      if (activeExecution !== undefined) {
+        throw ownershipError(
+          "ACTIVE_EXECUTION_EXISTS",
+          "The owned worktree has an active primary execution attempt.",
+        );
+      }
+      result = access.sqlite
+        .prepare(
+          "UPDATE worktree_ownerships SET status = 'RELEASING', release_head_sha = ?, release_started_at = ?, updated_at = ? WHERE id = ? AND status = 'ACTIVE'",
+        )
+        .run(releaseHeadSha, now, now, id);
+      break;
     }
-    if (result.changes !== 1) {
+    case "RELEASING->RELEASED":
+      result = access.sqlite
+        .prepare(
+          "UPDATE worktree_ownerships SET status = 'RELEASED', released_at = ?, updated_at = ? WHERE id = ? AND status = 'RELEASING' AND release_head_sha IS NOT NULL",
+        )
+        .run(now, now, id);
+      break;
+    default:
       throw ownershipError(
         "OWNERSHIP_CONFLICT",
-        "The durable worktree ownership state changed unexpectedly.",
+        "The requested worktree ownership transition is forbidden.",
       );
-    }
-    return selectOwnershipById(access, id, configuredRoot);
-  });
+  }
+  if (result.changes !== 1) {
+    throw ownershipError(
+      "OWNERSHIP_CONFLICT",
+      "The durable worktree ownership state changed unexpectedly.",
+    );
+  }
+  return selectOwnershipById(access, id, configuredRoot);
+};
 
 const selectCurrentOwnership = (
   access: TaskStorageWorktreeAccess,
@@ -1563,6 +1572,12 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
     }
     this.#storage = storage;
     this.#dependencies = dependencies;
+    releasedProofByManager.set(this, subtaskId => {
+      const current = selectCurrentOwnership(getStorageAccess(this.#storage), subtaskId, this.#dependencies.worktreeRoot);
+      if (current?.status !== "RELEASED") throw ownershipError("OWNERSHIP_CONFLICT", "Exact terminal release history is required.");
+      requireCheckoutGenerationEvidence(getStorageAccess(this.#storage), current.id);
+    });
+    completedReleaseByManager.set(this, (subtaskId, validate) => this.#releaseCompletedGovernedWorktree(subtaskId, validate));
   }
 
   provisionOwnedWorktreeForSubtask(input: SubtaskId): WorktreeOwnership {
@@ -1809,67 +1824,126 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       this.#dependencies.worktreeRoot,
       releaseEvidence.currentHeadSha,
     );
-    const source = resolveVerifiedRepository(hierarchy.project.repository.path);
+    return this.#finishRelease(hierarchy, releasing);
+  }
 
+  // Internal composition only: the validator is supplied by governed storage,
+  // never by the public worktree facade, HTTP input, or a caller boolean/SHA.
+  #releaseCompletedGovernedWorktree(input: SubtaskId, validate: () => CompletedCandidate): WorktreeOwnership {
+    const access = getStorageAccess(this.#storage);
+    const hierarchy = resolveCanonicalHierarchy(this.#storage, input);
+    const releasing = withImmediateTransaction(access, () => {
+      const proof = validate();
+      const current = selectCurrentOwnership(access, input, this.#dependencies.worktreeRoot);
+      this.#assertCompletedCandidate(current, hierarchy, proof);
+      if (current!.status === "RELEASED" || current!.status === "RELEASING") return current!;
+      if (current!.status !== "ACTIVE") throw ownershipError("OWNERSHIP_NOT_ACTIVE", "Completion cannot release this ownership state.");
+      const active = this.resolveActiveOwnedWorktreeForSubtask(input);
+      if (active.currentHeadSha !== proof.candidateSha || !worktreeIsClean(active.ownership.worktreePath)) {
+        throw ownershipError("OWNERSHIP_DRIFT", "The completed candidate changed before release.");
+      }
+      return transitionOwnershipInTransaction(access, current!.id, "ACTIVE", "RELEASING",
+        this.#dependencies.worktreeRoot, proof.candidateSha);
+    });
+    if (releasing.status === "RELEASED") return releasing;
+    return this.#finishRelease(hierarchy, releasing, validate);
+  }
+
+  #assertCompletedCandidate(current: WorktreeOwnership | null, hierarchy: CanonicalHierarchy, proof: CompletedCandidate): void {
+    if (current === null || current.id !== proof.ownershipId || current.subtaskId !== hierarchy.subtask.id ||
+        current.projectId !== hierarchy.project.id ||
+        ((current.status === "RELEASING" || current.status === "RELEASED") && current.releaseHeadSha !== proof.candidateSha)) {
+      throw ownershipError("OWNERSHIP_DRIFT", "The completed candidate does not match canonical release ownership.");
+    }
+    requireCheckoutGenerationEvidence(getStorageAccess(this.#storage), current.id);
+    const activeExecution = getStorageAccess(this.#storage).sqlite.prepare(`SELECT 1 FROM execution_runs er
+      JOIN chat_threads ct ON ct.id = er.chat_thread_id
+      WHERE ct.subtask_id = ? AND er.status IN ('CREATED', 'RUNNING') LIMIT 1`).get(hierarchy.subtask.id);
+    if (activeExecution !== undefined) throw ownershipError("ACTIVE_EXECUTION_EXISTS", "The candidate has an active execution.");
+  }
+
+  #finishRelease(hierarchy: CanonicalHierarchy, expected: WorktreeOwnership, validate?: () => CompletedCandidate): WorktreeOwnership {
+    const access = getStorageAccess(this.#storage);
+    // The release reservation is already durable. Hold one SQLite writer lock
+    // across physical removal and terminalization, shared with reconciliation and
+    // provisioning. A crash rolls back only this phase, retaining RELEASING.
     try {
-      this.#dependencies.failureHooks.beforeGitRemove?.();
-      const preRemovalHead = observeExactOwnedWorktree(
-        source,
-        verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot),
-        releasing,
-        false,
-        requireCheckoutGenerationEvidence(access, releasing.id),
-      );
-      if (
-        preRemovalHead !== releasing.releaseHeadSha ||
-        !worktreeIsClean(releasing.worktreePath)
-      ) {
-        throw ownershipError(
-          "OWNERSHIP_DRIFT",
-          "The owned worktree changed after release evidence was captured.",
+      return withImmediateTransaction(access, () => {
+        const releasing = selectCurrentOwnership(access, hierarchy.subtask.id, this.#dependencies.worktreeRoot);
+        if (validate !== undefined) this.#assertCompletedCandidate(releasing, hierarchy, validate());
+        if (releasing === null || releasing.id !== expected.id || releasing.releaseHeadSha !== expected.releaseHeadSha) {
+          throw ownershipError("OWNERSHIP_DRIFT", "Pending release identity changed.");
+        }
+        if (releasing.status === "RELEASED") return releasing; // concurrent completion, no resumed operation
+        if (releasing.status !== "RELEASING" || hierarchy.project.repository.kind !== "PATH") {
+          throw ownershipError("OWNERSHIP_CONFLICT", "Only an exact pending release can finish.");
+        }
+        const source = resolveVerifiedRepository(hierarchy.project.repository.path);
+        const pending = ownedPathState(source, releasing.worktreePath);
+        if (!pending.exists && pending.registeredCount === 0) {
+          return this.#reconcileWorktreeOwnershipInTransaction(hierarchy.subtask.id);
+        }
+        this.#dependencies.failureHooks.beforeGitRemove?.();
+        const preRemovalHead = observeExactOwnedWorktree(
+          source,
+          verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot),
+          releasing,
+          false,
+          requireCheckoutGenerationEvidence(access, releasing.id),
         );
-      }
-      const removeResult = runLocalGit(source.root, [
-        "worktree",
-        "remove",
-        releasing.worktreePath,
-      ]);
-      if (removeResult.status !== 0) {
-        throw ownershipError(
-          "GIT_OPERATION_FAILED",
-          "The owned worktree could not be removed safely.",
+        if (
+          preRemovalHead !== releasing.releaseHeadSha ||
+          !worktreeIsClean(releasing.worktreePath)
+        ) {
+          throw ownershipError(
+            "OWNERSHIP_DRIFT",
+            "The owned worktree changed after release evidence was captured.",
+          );
+        }
+        const removeResult = runLocalGit(source.root, [
+          "worktree",
+          "remove",
+          releasing.worktreePath,
+        ]);
+        if (removeResult.status !== 0) {
+          throw ownershipError(
+            "GIT_OPERATION_FAILED",
+            "The owned worktree could not be removed safely.",
+          );
+        }
+        this.#dependencies.failureHooks.afterGitRemove?.();
+        const state = ownedPathState(source, releasing.worktreePath);
+        if (state.exists || state.registeredCount !== 0) {
+          throw ownershipError(
+            "RECOVERY_REQUIRED",
+            "Worktree release requires bounded reconciliation.",
+          );
+        }
+        if (readLocalBranchHead(source, releasing.branchName) !== releasing.releaseHeadSha) {
+          throw ownershipError(
+            "OWNERSHIP_DRIFT",
+            "The retained owned-worktree branch changed during release.",
+          );
+        }
+        return transitionOwnershipInTransaction(
+          access,
+          releasing.id,
+          "RELEASING",
+          "RELEASED",
+          this.#dependencies.worktreeRoot,
         );
-      }
-      this.#dependencies.failureHooks.afterGitRemove?.();
-      const state = ownedPathState(source, releasing.worktreePath);
-      if (state.exists || state.registeredCount !== 0) {
-        throw ownershipError(
-          "RECOVERY_REQUIRED",
-          "Worktree release requires bounded reconciliation.",
-        );
-      }
-      if (readLocalBranchHead(source, releasing.branchName) !== releasing.releaseHeadSha) {
-        throw ownershipError(
-          "OWNERSHIP_DRIFT",
-          "The retained owned-worktree branch changed during release.",
-        );
-      }
-      return transitionOwnership(
-        access,
-        releasing.id,
-        "RELEASING",
-        "RELEASED",
-        this.#dependencies.worktreeRoot,
-      );
+      });
     } catch {
-      throw ownershipError(
-        "RECOVERY_REQUIRED",
-        "Worktree release requires bounded reconciliation.",
-      );
+      throw ownershipError("RECOVERY_REQUIRED", "Worktree release requires bounded reconciliation.");
     }
   }
 
   reconcileWorktreeOwnershipForSubtask(input: SubtaskId): WorktreeOwnership {
+    return withImmediateTransaction(getStorageAccess(this.#storage), () =>
+      this.#reconcileWorktreeOwnershipInTransaction(input));
+  }
+
+  #reconcileWorktreeOwnershipInTransaction(input: SubtaskId): WorktreeOwnership {
     const hierarchy = resolveCanonicalHierarchy(this.#storage, input);
     const access = getStorageAccess(this.#storage);
     const current = selectCurrentOwnership(
@@ -1905,7 +1979,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
 
     if (current.status === "PROVISIONING") {
       if (!state.exists && state.registeredCount === 0) {
-        return transitionOwnership(
+        return transitionOwnershipInTransaction(
           access,
           current.id,
           "PROVISIONING",
@@ -1929,7 +2003,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
             "The pending worktree does not match its durable reservation.",
           );
         }
-        return transitionOwnership(
+        return transitionOwnershipInTransaction(
           access,
           current.id,
           "PROVISIONING",
@@ -1951,7 +2025,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
             "The retained owned-worktree branch does not match release evidence.",
           );
         }
-        return transitionOwnership(
+        return transitionOwnershipInTransaction(
           access,
           current.id,
           "RELEASING",
@@ -2047,3 +2121,33 @@ export const createWorktreeOwnershipManagerForTesting = (
     idGenerator: dependencies.idGenerator,
     failureHooks: dependencies.failureHooks ?? {},
   });
+
+interface CompletedCandidate {
+  readonly ownershipId: WorktreeOwnershipId;
+  readonly candidateSha: RepositoryCommitSha;
+}
+
+const completedReleaseByManager = new WeakMap<WorktreeOwnershipManager,
+  (subtaskId: SubtaskId, validate: () => CompletedCandidate) => WorktreeOwnership>();
+
+/** Package-private governed composition; intentionally absent from the package root. */
+export const releaseCompletedGovernedWorktree = (
+  manager: WorktreeOwnershipManager,
+  subtaskId: SubtaskId,
+  validate: () => CompletedCandidate,
+): WorktreeOwnership => {
+  const release = completedReleaseByManager.get(manager);
+  if (release === undefined) {
+    throw ownershipError("STORAGE_UNAVAILABLE", "Governed release requires the owned lifecycle manager.");
+  }
+  return release(subtaskId, validate);
+};
+
+const releasedProofByManager = new WeakMap<WorktreeOwnershipManager, (subtaskId: SubtaskId) => void>();
+
+/** Package-private terminal generation validation; grants no execution authority. */
+export const validateReleasedGovernedWorktree = (manager: WorktreeOwnershipManager, subtaskId: SubtaskId): void => {
+  const validate = releasedProofByManager.get(manager);
+  if (validate === undefined) throw ownershipError("STORAGE_UNAVAILABLE", "Terminal release validation is unavailable.");
+  validate(subtaskId);
+};

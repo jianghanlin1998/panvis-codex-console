@@ -1,6 +1,6 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-09-05
+Last reconciled: 2026-09-06
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
@@ -362,17 +362,24 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - `CTC-ORCH-8D-HARD-001` through `CTC-ORCH-8D-HARD-011`: CLOSED; [bounded findings and verification evidence](docs/STEP_8D_HARDENING.md)
 - Step 8D hardening verification: 139 files / 4,287 tests PASS; 100 direct governed tests; 89 trigger/index loss checks; 160 mutation attempts; public:check, lint, typecheck, build and diff checks PASS
 - Step 8D Fresh Independent QA on `27568b16b14cd2a52ce6dd5e2024ab8189a02b83`: FAIL — historical no-write QA result
-- `CTC-ORCH-8D-FQA-001` through `CTC-ORCH-8D-FQA-007`: REPAIRED on `01d4501a03dba17d9880a18177dfaefe9784f99f` / awaiting Fresh Focused Re-QA; FQA-006 was non-blocking but included in the approved sweep
+- `CTC-ORCH-8D-FQA-001` through `CTC-ORCH-8D-FQA-006`: CLOSED after repair `01d4501a03dba17d9880a18177dfaefe9784f99f` and Fresh Focused Re-QA; FQA-006 was non-blocking but included in the approved sweep
 - Step 8D post-FQA repair: exact provider-input/turn provenance, typed gate occurrence ownership, final pre-turn freshness, current-candidate Big Task completion, exact semantic replay, and deterministic test-phase repairs; [Handoff and migration evidence](docs/STEP_8D_POST_FQA_REPAIR.md)
 - Step 8D repair verification: two consecutive canonical full runs PASS, each 139 files / 4,409 tests with normal four workers/default timeout; 183 governed storage tests, 32 mock adapter tests, 84 gate ownership/substitution cases, 190 immutable-row mutation attempts; public:check, lint, typecheck, build, and diff checks PASS
-- Step 8D: HARDENED / REPAIRED / NOT ACCEPTED; Fresh Focused Re-QA: PENDING
-- Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / blocked on Step 8D ACCEPTED
+- Step 8D Fresh Focused Re-QA: PASS WITH DOCUMENTED HANLIN WAIVER
+- Step 8D: ACCEPTED; accepted evidence target `a8b994ad1c8e2b9cfde7d755625cac93330b9af1`
+- `CTC-ORCH-8D-FQA-007` / `CTC-ORCH-8D-FRQA-001`: technically unresolved P2 test-reliability issue; DEFERRED / ACCEPTED_P2_LIMITATION by explicit Hanlin decision, not technically CLOSED. Waiver covers one observed 5,368 ms timeout against the existing 5,000 ms limit, with focused reliability evidence otherwise passing and no semantic invariant failure; it does not cover new/systemic timeouts or Step 8E integration failures.
+- Step 8E durable amendments: APPROVED by Hanlin on 2026-09-06; implemented internal normal turnover after authoritative completion, exact terminal RELEASED/releaseHeadSha completion provenance, and bounded exact RELEASING resume. HUMAN_REQUIRED candidates preserved; capacity 2 and autonomous write dispatch 1 unchanged.
+- `CTC-ORCH-8E-HARD-001` through `003`: CLOSED — turnover/completion, interrupted-release recovery, and same-action materialization/dispatch races repaired with exact provenance and atomic writer exclusion. [Integration evidence and Handoff](docs/STEP_8E_INTEGRATED_HARDENING.md).
+- Step 8E: HARDENED. Integrated verification: 10 files /43 tests PASS; governed storage 183/183 PASS; ownership base/hardening/generation 76/76 PASS. Public hygiene, lint, typecheck, build and diff checks PASS.
+- Final canonical verification: 149 files /4,452 tests, normal four workers; 4,451 PASS /1 FAIL. Sole failure: exact waived HIGH_RISK adapter timeout, 5,478 ms against 5,000 ms, without semantic failure or new/systemic timeout. Raw suite exit 1; authorized hardening gate satisfied with the existing ACCEPTED_P2_LIMITATION, not an all-green claim.
+- Overall Step 8: HARDENED / NOT ACCEPTED; final Fresh Independent no-write QA: PENDING / ELIGIBLE.
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
 - Real Step 8D provider/model turns: 0; real target orchestration: NONE
+- Real Step 8E provider/model turns: 0; real target orchestration: NONE; Step 9: NOT STARTED
 - Hanlin manual QA: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Focused Re-QA of the Step 8D FQA-001 through FQA-007 repair batch
+**Next safe task:** NEW CHAT Fresh Independent no-write Step 8E / overall Step 8 QA
 
 ## Not operational yet
 - browser Console UI

@@ -1,4 +1,6 @@
 import { createInterface } from "node:readline";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -6,8 +8,10 @@ const role = process.argv.find((value) => value.startsWith("--role="))?.slice(7)
 const malformed = process.argv.includes("--malformed");
 const scenario = process.argv.find(value => value.startsWith("--scenario="))?.slice(11);
 const writeEnabled = scenario !== "read-only" && (role === "EXECUTE" || role === "HARDEN" || role === "REPAIR");
-const threadId = `thread-governed-${role ?? "unknown"}`;
-const turnId = `turn-governed-${role ?? "unknown"}`;
+const occurrence = process.argv.find(value => value.startsWith("--occurrence="))?.slice(13);
+const identity = `${role ?? "unknown"}${occurrence === undefined ? "" : `-${occurrence}`}`;
+const threadId = `thread-governed-${identity}`;
+const turnId = `turn-governed-${identity}`;
 let initialized = false;
 let accountRead = false;
 let threadStarted = false;
@@ -166,8 +170,34 @@ lines.on("line", (line) => {
       method: "turn/started",
       params: { threadId, turn: { id: turnId, status: "inProgress" } },
     });
+    const pausePath = process.argv.find(value => value.startsWith("--pause-after-start="))?.slice(20);
+    if (pausePath !== undefined) {
+      for (let count = 0; count < 1000 && !existsSync(pausePath); count++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      if (!existsSync(pausePath)) process.exit(1);
+    }
     if (scenario === "timeout") return;
     if (scenario === "process-exit") { process.exit(1); }
+    if (process.argv.includes("--commit-candidate") && role !== "EXECUTE") {
+      const prior = role === "HARDEN" || role === "VERIFY" ? "EXECUTE" : role === "FOCUSED_RE_QA" ? "REPAIR" : "HARDEN";
+      if (readFileSync(`synthetic-${prior}.txt`, { encoding: "utf8" }) !== `${prior} deterministic candidate\n`) process.exit(1);
+    }
+    // Opt-in integration fixture: only the authorized write role changes its
+    // disposable candidate. Existing protocol scenarios remain unchanged.
+    if (process.argv.includes("--commit-candidate") && writeEnabled) {
+      const filename = `synthetic-${role}.txt`;
+      writeFileSync(filename, `${role} deterministic candidate\n`, { encoding: "utf8" });
+      const env = {
+        PATH: process.env.PATH,
+        GIT_AUTHOR_NAME: "Synthetic Orchestration",
+        GIT_AUTHOR_EMAIL: "synthetic@example.invalid",
+        GIT_COMMITTER_NAME: "Synthetic Orchestration",
+        GIT_COMMITTER_EMAIL: "synthetic@example.invalid",
+        GIT_AUTHOR_DATE: "2026-09-05T00:00:00Z",
+        GIT_COMMITTER_DATE: "2026-09-05T00:00:00Z",
+      };
+      execFileSync("git", ["add", "--", filename], { env, stdio: "pipe" });
+      execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "--message", `Synthetic ${role}`], { env, stdio: "pipe" });
+    }
     if (scenario === "approval-request") send({id: "approval", method: "item/commandExecution/requestApproval", params: {threadId, turnId}});
     if (scenario === "read-write-tool") send({method: "item/started", params: {threadId, turnId,
       item: {id: "write-tool", type: "fileChange", status: "inProgress", changes: [{path: "AGENTS.md", kind: {type: "update"}, diff: "+changed"}]}}});
@@ -177,7 +207,7 @@ lines.on("line", (line) => {
       schemaVersion: 1,
       promotionCandidate: null,
       outcome: role === "EXECUTE" || role === "REPAIR" ? "READY" : "PASS",
-      summary: `${role} completed.`,
+      summary: process.argv.includes("--canary") ? `${role} completed. ${role}_REASONING_CANARY` : `${role} completed.`,
       findings: [] as ReturnType<typeof finding>[],
     };
     if (scenario === "two-blockers" || scenario === "remaining-new") {
@@ -213,8 +243,8 @@ lines.on("line", (line) => {
         turnId,
         tokenUsage: {
           total: {
-            totalTokens: 18,
-            inputTokens: 12,
+            totalTokens: Number(process.argv.find(value => value.startsWith("--tokens="))?.slice(9) ?? 18),
+            inputTokens: Number(process.argv.find(value => value.startsWith("--tokens="))?.slice(9) ?? 18) - 6,
             cachedInputTokens: 2,
             cacheWriteInputTokens: 0,
             outputTokens: 6,

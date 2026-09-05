@@ -25,3 +25,21 @@ Step 8A operations validate exact immutable shapes, graph ownership, candidate a
 ## Deferred to Step 8B or later
 
 Step 8A does not persist orchestration state, execute Planner/Reviewer/Executor/Hardener/QA roles, expose Local Control routes, mutate durable task lifecycle or maturity, provision worktrees, or run real-target dogfood. Step 8B may bind this public pure API to durable/service layers without moving decision authority into those side-effecting layers. Real Big Task orchestration dogfood remains reserved for Roadmap Step 9.
+
+## Later Step 8E governed lifecycle composition
+
+The pure completion evaluator above is unchanged. Later Hanlin-approved Step 8E
+storage composition validates source-backed COMPLETE/DONE, legal maturity,
+terminal dispatch, resolved blocking findings, final Handoff and delivery
+context disposition before releasing a completed candidate. Applicable human
+requirements preserve the candidate. A bounded governed advance may invoke
+normal owned-worktree release or resume an exact interrupted RELEASING release;
+inspection performs neither operation.
+
+Final persisted Big Task completion accepts exact clean ACTIVE assessed HEAD or
+exact terminal RELEASED ownership/generation history with canonical
+`releaseHeadSha` equal to the final result and Handoff SHA. Pending, failed,
+ambiguous, stale, or contradictory ownership fails closed. RELEASED never grants
+execution authority. See [the later ownership amendment](GIT_WORKTREE_OWNERSHIP_V0.md)
+and [Step 8E evidence](STEP_8E_INTEGRATED_HARDENING.md). This does not rewrite the
+historical Step 8A acceptance record or relax coding/dispatch limits.

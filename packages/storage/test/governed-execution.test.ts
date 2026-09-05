@@ -1720,7 +1720,9 @@ describe("Step 8D final candidate completion matrix",()=>{
       if(mode==="reopen"){
         scenario.storage.close();reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});governed=governedFor({...scenario,storage:reopened});
       }
-      if(mode==="unchanged"||mode==="reopen"){
+      // Later Hanlin-approved Step 8E: exact terminal release is completion
+      // provenance. All drift/dirty/replacement cases still fail closed.
+      if(mode==="unchanged"||mode==="reopen"||mode==="released"){
         const result=governed.prepareNextRole(bigTaskId);expect(result.kind).toBe("BIG_TASK_COMPLETE");expect(governed.prepareNextRole(bigTaskId)).toEqual(result);
       }else expect(()=>governed.prepareNextRole(bigTaskId)).toThrow();
     }finally{reopened?.close();cleanupScenario(scenario);}

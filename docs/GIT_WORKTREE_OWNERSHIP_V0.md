@@ -57,6 +57,50 @@ Reconciliation is deliberately bounded because SQLite and Git cannot share one a
 
 When a post-reservation failure proves both the generated path and registration absent, the reservation becomes terminal `FAILED`, releases its slot, and reports a Git operation failure rather than claiming reconciliation is required. Any partial or ambiguous external evidence preserves `PROVISIONING` and reports recovery required.
 
+## Later Hanlin-approved Step 8E turnover and recovery amendment
+
+On 2026-09-06 Hanlin approved governed normal auto-release after authoritative
+Subtask completion. Eligibility is derived internally from exact canonical
+materialization/workflow, COMPLETE/DONE and required maturity, terminal dispatch,
+final assessment/Handoff, resolved blocking findings, delivery disposition,
+clean exact ACTIVE generation/assessed HEAD, and primary-execution exclusion.
+Applicable HUMAN_REQUIRED preserves the candidate and prevents auto-release.
+Only a bounded write-enabled governed advance/reconciliation operation may
+perform it; read-only inspection must not release work.
+
+Normal ACTIVE → RELEASING → RELEASED remains mandatory. Capacity is freed by
+actual RELEASED state, never by excluding completed ACTIVE records from the
+count. Exact terminal RELEASED ownership with canonical `releaseHeadSha` matching
+the final governed assessment and Handoff may serve as Big Task completion
+provenance. It grants no execution/write authority and must not be resurrected.
+Exact clean ACTIVE authority remains an alternative completion proof. Wrong
+generation, contradictory later ownership, RELEASING, FAILED, ambiguous,
+mismatched, or unverifiable history fails closed. Project capacity 2 and Step 8
+autonomous write dispatch 1 remain unchanged; no force, branch deletion, merge,
+rebase, push, or generic Git operation is authorized.
+
+Hanlin also approved deterministic completion of an exact pending normal release.
+After durable ACTIVE → RELEASING, an interrupted intact checkout may be removed
+only by internal governed composition after repeating all completion, human,
+execution, physical-generation, cleanliness, and assessed/release/Handoff SHA
+checks. Ordinary public reconciliation still cannot authorize that removal.
+ACTIVE starts normal release; PROVISIONING/FAILED cannot resume; RELEASED is an
+idempotent terminal observation, never a resumed removal or new authority.
+
+The release reservation commits before removal. A second SQLite writer
+transaction spans revalidation, normal non-force Git removal, absence and
+retained-branch verification, and RELEASED persistence. Ordinary reconciliation
+uses the same writer exclusion; provisioning cannot use the slot before actual
+terminalization. A crash after removal retains durable RELEASING and follows
+existing absence/unregistration reconciliation. No force removal, resurrection,
+branch rewrite, or candidate modification is introduced.
+
+These are later approved Step 8E semantics, not claims about the historical
+accepted SHA. Implementation and synthetic integration evidence are recorded in
+[the Step 8E Handoff](STEP_8E_INTEGRATED_HARDENING.md). Public manager methods and
+HTTP input shapes are unchanged; private composition is absent from the public
+manager prototype and package root.
+
 ## Git and security boundary
 
 Git is invoked only through fixed argument-vector operations with `shell: false`, bounded time/output, disabled prompting and paging, case-insensitive removal of inherited `GIT_*` variables, excluded system/global configuration, and neutralized hooks. Mutating commands are limited to new-branch worktree add and non-force worktree remove. V0 performs no fetch, pull, push, merge, rebase, reset, prune, branch deletion, arbitrary shell, or generic Git passthrough. Public failures do not include absolute paths, Git stderr, environment values, credentials, or command output.

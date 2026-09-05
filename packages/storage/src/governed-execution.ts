@@ -41,6 +41,8 @@ import { TaskStorage } from "./task-storage.js";
 import { getTaskStorageWorktreeAccess } from "./task-storage-internals.js";
 import {
   createWorktreeOwnershipManager,
+  releaseCompletedGovernedWorktree,
+  validateReleasedGovernedWorktree,
   type ResolvedActiveOwnedWorktree,
   type WorktreeOwnershipManager,
 } from "./worktree-ownership.js";
@@ -1075,11 +1077,6 @@ export class GovernedExecutionStore {
     }
 
     this.#reconcileDispatchStatuses(bigTaskId);
-    const completed = this.#tryCompleteBigTask(bigTaskId);
-    if (completed !== null) {
-      return completed;
-    }
-
     const views = materialization.subtasks.map(({ subtaskId }) =>
       this.#requiredWorkflowView(subtaskId),
     );
@@ -1094,6 +1091,17 @@ export class GovernedExecutionStore {
         subtaskId: human.subtaskId,
       });
     }
+
+    // Bounded lifecycle work belongs to write-enabled advance, before capacity
+    // evaluation. Inspection never invokes this path. Revalidate under the same
+    // writer lock used by ownership removal; initial views confer no authority.
+    for (const view of views) {
+      if (view.currentStage !== "COMPLETE") continue;
+      releaseCompletedGovernedWorktree(this.#worktrees, view.subtaskId, () =>
+        this.#completedCandidateProof(view.bigTaskId, view.subtaskId));
+    }
+    const completed = this.#tryCompleteBigTask(bigTaskId);
+    if (completed !== null) return completed;
 
     let inProgress: Extract<
       GovernedPreparationResult,
@@ -1609,13 +1617,17 @@ export class GovernedExecutionStore {
       if (this.#storage.getSubtaskById(view.subtaskId)?.startPolicy === "MANUAL" && this.#getManualStart(view.subtaskId) === null) {
         throw new GovernedPreparationBlock(freeze({kind:"HUMAN_REQUIRED",reason:"MANUAL_START_REQUIRED",subtaskId:view.subtaskId}));
       }
-      const worktree = this.#ensureOwnedWorktree(view.subtaskId);
-      const derived = this.#deriveDispatchGates(view, worktree);
-      if (!derived.budget.allowed) {
-        throw this.#budgetBlock(view.subtaskId, derived.budget);
-      }
-      const evidence = this.#storage.runInTransaction(() => {
+      this.#ensureOwnedWorktree(view.subtaskId);
+      view = this.#storage.runInTransaction(() => {
         const current = this.#requiredWorkflowView(view.subtaskId);
+        // A competing bounded advance may already have committed exactly this
+        // materialization step. Reuse that durable transition, never recommit its
+        // gates or treat an arbitrary later workflow state as the same request.
+        if (current.currentStage === "EXECUTE" && current.transitionCount === view.transitionCount + 1 &&
+            current.candidateBinding === view.candidateBinding && current.planRevision === view.planRevision &&
+            current.transitions.at(-1)?.operationId === stableId("wop", view.subtaskId, view.transitionCount + 1, "EXECUTE")) {
+          return current;
+        }
         if (
           current.currentStage !== "MATERIALIZE" ||
           current.transitionCount !== view.transitionCount
@@ -1629,24 +1641,24 @@ export class GovernedExecutionStore {
         if (!refreshed.budget.allowed) {
           throw this.#budgetBlock(current.subtaskId, refreshed.budget);
         }
-        return this.#recordDispatchGateEvidence(current, refreshed);
+        const evidence = this.#recordDispatchGateEvidence(current, refreshed);
+        const transition = this.#storage.advanceDurableWorkflow({
+          operationId: stableId("wop", view.subtaskId, view.transitionCount + 1, "EXECUTE"),
+          projectId: view.projectId as never,
+          bigTaskId: view.bigTaskId as never,
+          candidateBinding: view.candidateBinding,
+          subtaskId: view.subtaskId,
+          requestedNextStage: "EXECUTE",
+          evidenceReferences: evidence.map(({ evidenceId }) => ({
+            sourceType: "WORKFLOW_EVIDENCE" as const,
+            sourceReference: evidenceId,
+          })),
+        });
+        if (transition.kind !== "TRANSITION_RECORDED") {
+          throw conflict("The durable workflow did not enter execution.");
+        }
+        return transition.view;
       });
-      const transition = this.#storage.advanceDurableWorkflow({
-        operationId: stableId("wop", view.subtaskId, view.transitionCount + 1, "EXECUTE"),
-        projectId: view.projectId as never,
-        bigTaskId: view.bigTaskId as never,
-        candidateBinding: view.candidateBinding,
-        subtaskId: view.subtaskId,
-        requestedNextStage: "EXECUTE",
-        evidenceReferences: evidence.map(({ evidenceId }) => ({
-          sourceType: "WORKFLOW_EVIDENCE" as const,
-          sourceReference: evidenceId,
-        })),
-      });
-      if (transition.kind !== "TRANSITION_RECORDED") {
-        throw conflict("The durable workflow did not enter execution.");
-      }
-      view = transition.view;
     }
     if (view.currentStage === "COMPLETE") {
       throw new GovernedPreparationBlock(
@@ -1681,12 +1693,15 @@ export class GovernedExecutionStore {
         }
       }
       const worktree = this.#ensureOwnedWorktree(view.subtaskId);
-      const gates = this.#deriveDispatchGates(view, worktree);
-      budget = gates.budget;
-      if (!budget.allowed) {
-        throw this.#budgetBlock(view.subtaskId, budget);
-      }
-      receipt = this.#reserveDispatch(view, worktree, gates);
+      receipt = this.#storage.runInTransaction(() => {
+        const existing = this.#getDispatchReceiptForSubtask(view.subtaskId);
+        if (existing !== null) return existing;
+        const current = this.#requiredWorkflowView(view.subtaskId);
+        const gates = this.#deriveDispatchGates(current, worktree);
+        budget = gates.budget;
+        if (!budget.allowed) throw this.#budgetBlock(current.subtaskId, budget);
+        return this.#reserveDispatchInTransaction(current, worktree, gates);
+      });
       view = this.#requiredWorkflowView(view.subtaskId);
     }
     if (receipt.status === "COMPLETED" || receipt.status === "HUMAN_REQUIRED") {
@@ -1806,7 +1821,7 @@ export class GovernedExecutionStore {
     return this.#prepareView(view);
   }
 
-  #reserveDispatch(
+  #reserveDispatchInTransaction(
     view: DurableWorkflowControlView,
     worktree: ResolvedActiveOwnedWorktree,
     gates: Readonly<{
@@ -1815,129 +1830,128 @@ export class GovernedExecutionStore {
       observations: readonly GateObservation[];
     }>,
   ): GovernedDispatchReceipt {
-    return this.#storage.runInTransaction(() => {
-      const current = this.#requiredWorkflowView(view.subtaskId);
-      const existing = this.#getDispatchReceiptForSubtask(current.subtaskId);
-      if (existing !== null) {
-        return existing;
-      }
-      if (
-        current.currentStage !== "EXECUTE" ||
-        current.boardStatus !== "TODO" ||
-        current.transitionCount !== view.transitionCount ||
-        current.unresolvedHumanRequired !== null
-      ) {
-        throw conflict("The governed dispatch reservation is stale.");
-      }
-      const refreshedWorktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(
-        current.subtaskId,
-      );
-      if (refreshedWorktree.ownership.id !== worktree.ownership.id) {
-        throw conflict("The governed worktree authority changed.");
-      }
-      const refreshed = this.#deriveDispatchGates(current, refreshedWorktree);
-      if (
-        refreshed.references.length !== gates.references.length ||
-        refreshed.references.some(
-          (reference, index) => reference !== gates.references[index],
-        )
-      ) {
-        throw conflict("The governed dispatch gates changed before reservation.");
-      }
-      if (!refreshed.budget.allowed) {
-        throw this.#budgetBlock(current.subtaskId, refreshed.budget);
-      }
-      const subtask = this.#storage.getSubtaskById(current.subtaskId);
-      if (subtask === null) {
-        throw malformed();
-      }
-      const manual =
-        subtask.startPolicy === "MANUAL" ? this.#getManualStart(current.subtaskId) : null;
-      if (subtask.startPolicy === "MANUAL" && manual === null) {
-        throw conflict("Manual governed start authority is required.");
-      }
-      const transition = validateSubtaskTransition("TODO", "IN_PROGRESS", {
-        dependenciesReady: true,
-        repositoryPreflightPassed: true,
-        contextPreflightPassed: true,
-        concurrencyAvailable: true,
-      });
-      if (!transition.allowed) {
-        throw conflict("The governed Subtask start transition is not allowed.");
-      }
-      const access = this.#access();
-      const activeWrite = access.sqlite
-        .prepare(
-          `SELECT receipt_id
-             FROM governed_dispatch_receipts
-            WHERE project_id = ? AND write_enabled = 1
-              AND status IN ('RESERVED', 'ACTIVE')
-            LIMIT 1`,
-        )
-        .get(current.projectId) as { readonly receipt_id: string } | undefined;
-      if (current.writeEnabled && activeWrite !== undefined) {
-        throw new GovernedPreparationBlock(
-          freeze({
-            kind: "BLOCKED",
-            reason: "CONCURRENCY_BLOCKED",
-            subtaskId: current.subtaskId,
-          }),
-        );
-      }
-      const sequence = current.transitionCount + 1;
-      const operationId = stableId("gdo", current.subtaskId, sequence);
-      const receiptId = stableId("gdr", operationId);
-      const reservedAt = this.#timestampAtOrAfter(
-        current.transitions.at(-1)?.occurredAt ?? current.initializedAt,
-      );
-      access.sqlite
-        .prepare(
-          `INSERT INTO governed_dispatch_receipts (
-             receipt_id, operation_id, project_id, big_task_id, plan_revision,
-             candidate_binding, subtask_id, workflow_sequence, profile,
-             write_enabled, start_policy, manual_start_authority_id,
-             worktree_ownership_id, gate_evidence_references, status,
-             reserved_at, updated_at, terminal_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?, NULL)`,
-        )
-        .run(
-          receiptId,
-          operationId,
-          current.projectId,
-          current.bigTaskId,
-          current.planRevision,
-          current.candidateBinding,
-          current.subtaskId,
-          sequence,
-          current.profile,
-          current.writeEnabled ? 1 : 0,
-          subtask.startPolicy,
-          manual?.authorityId ?? null,
-          refreshedWorktree.ownership.id,
-          JSON.stringify([...refreshed.references].sort()),
-          reservedAt,
-          reservedAt,
-        );
-      recordGateObservations(access.sqlite, refreshed.observations);
-      access.sqlite.prepare(`INSERT INTO governed_dispatch_gate_snapshots
-        (receipt_id, gate_references, candidate_sha, recorded_at) VALUES (?, ?, ?, ?)`)
-        .run(receiptId, JSON.stringify([...refreshed.references].sort()), refreshedWorktree.currentHeadSha, reservedAt);
-      const receipt = this.#getDispatchReceiptForSubtask(current.subtaskId);
-      if (receipt === null || receipt.receiptId !== receiptId) {
-        throw new TaskStorageError(
-          "STORAGE_OPERATION_FAILED",
-          "The governed dispatch receipt was not persisted.",
-        );
-      }
-      const started = this.#storage.getSubtaskById(current.subtaskId);
-      if (started?.status !== "IN_PROGRESS") {
-        throw new TaskStorageError(
-          "STORAGE_OPERATION_FAILED",
-          "The governed dispatch did not own the Subtask start transition.",
-        );
-      }
-      return receipt;
+    if (!this.#access().sqlite.isTransaction) throw conflict("Dispatch reservation requires writer exclusion.");
+    const current = this.#requiredWorkflowView(view.subtaskId);
+    const existing = this.#getDispatchReceiptForSubtask(current.subtaskId);
+    if (existing !== null) {
+      return existing;
+    }
+    if (
+      current.currentStage !== "EXECUTE" ||
+      current.boardStatus !== "TODO" ||
+      current.transitionCount !== view.transitionCount ||
+      current.unresolvedHumanRequired !== null
+    ) {
+      throw conflict("The governed dispatch reservation is stale.");
+    }
+    const refreshedWorktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(
+      current.subtaskId,
+    );
+    if (refreshedWorktree.ownership.id !== worktree.ownership.id) {
+      throw conflict("The governed worktree authority changed.");
+    }
+    const refreshed = this.#deriveDispatchGates(current, refreshedWorktree);
+    if (
+      refreshed.references.length !== gates.references.length ||
+      refreshed.references.some(
+        (reference, index) => reference !== gates.references[index],
+      )
+    ) {
+      throw conflict("The governed dispatch gates changed before reservation.");
+    }
+    if (!refreshed.budget.allowed) {
+      throw this.#budgetBlock(current.subtaskId, refreshed.budget);
+    }
+    const subtask = this.#storage.getSubtaskById(current.subtaskId);
+    if (subtask === null) {
+      throw malformed();
+    }
+    const manual =
+      subtask.startPolicy === "MANUAL" ? this.#getManualStart(current.subtaskId) : null;
+    if (subtask.startPolicy === "MANUAL" && manual === null) {
+      throw conflict("Manual governed start authority is required.");
+    }
+    const transition = validateSubtaskTransition("TODO", "IN_PROGRESS", {
+      dependenciesReady: true,
+      repositoryPreflightPassed: true,
+      contextPreflightPassed: true,
+      concurrencyAvailable: true,
     });
+    if (!transition.allowed) {
+      throw conflict("The governed Subtask start transition is not allowed.");
+    }
+    const access = this.#access();
+    const activeWrite = access.sqlite
+      .prepare(
+        `SELECT receipt_id
+           FROM governed_dispatch_receipts
+          WHERE project_id = ? AND write_enabled = 1
+            AND status IN ('RESERVED', 'ACTIVE')
+          LIMIT 1`,
+      )
+      .get(current.projectId) as { readonly receipt_id: string } | undefined;
+    if (current.writeEnabled && activeWrite !== undefined) {
+      throw new GovernedPreparationBlock(
+        freeze({
+          kind: "BLOCKED",
+          reason: "CONCURRENCY_BLOCKED",
+          subtaskId: current.subtaskId,
+        }),
+      );
+    }
+    const sequence = current.transitionCount + 1;
+    const operationId = stableId("gdo", current.subtaskId, sequence);
+    const receiptId = stableId("gdr", operationId);
+    const reservedAt = this.#timestampAtOrAfter(
+      current.transitions.at(-1)?.occurredAt ?? current.initializedAt,
+    );
+    access.sqlite
+      .prepare(
+        `INSERT INTO governed_dispatch_receipts (
+           receipt_id, operation_id, project_id, big_task_id, plan_revision,
+           candidate_binding, subtask_id, workflow_sequence, profile,
+           write_enabled, start_policy, manual_start_authority_id,
+           worktree_ownership_id, gate_evidence_references, status,
+           reserved_at, updated_at, terminal_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?, NULL)`,
+      )
+      .run(
+        receiptId,
+        operationId,
+        current.projectId,
+        current.bigTaskId,
+        current.planRevision,
+        current.candidateBinding,
+        current.subtaskId,
+        sequence,
+        current.profile,
+        current.writeEnabled ? 1 : 0,
+        subtask.startPolicy,
+        manual?.authorityId ?? null,
+        refreshedWorktree.ownership.id,
+        JSON.stringify([...refreshed.references].sort()),
+        reservedAt,
+        reservedAt,
+      );
+    recordGateObservations(access.sqlite, refreshed.observations);
+    access.sqlite.prepare(`INSERT INTO governed_dispatch_gate_snapshots
+      (receipt_id, gate_references, candidate_sha, recorded_at) VALUES (?, ?, ?, ?)`)
+      .run(receiptId, JSON.stringify([...refreshed.references].sort()), refreshedWorktree.currentHeadSha, reservedAt);
+    const receipt = this.#getDispatchReceiptForSubtask(current.subtaskId);
+    if (receipt === null || receipt.receiptId !== receiptId) {
+      throw new TaskStorageError(
+        "STORAGE_OPERATION_FAILED",
+        "The governed dispatch receipt was not persisted.",
+      );
+    }
+    const started = this.#storage.getSubtaskById(current.subtaskId);
+    if (started?.status !== "IN_PROGRESS") {
+      throw new TaskStorageError(
+        "STORAGE_OPERATION_FAILED",
+        "The governed dispatch did not own the Subtask start transition.",
+      );
+    }
+    return receipt;
   }
 
   #authorizeCurrentRole(
@@ -3238,6 +3252,37 @@ export class GovernedExecutionStore {
       .run(status, terminalAt, terminalAt, receiptId);
   }
 
+  #completedCandidateProof(bigTaskId: BigTaskId, subtaskId: SubtaskId) {
+    this.#validateBigTaskAuthority(bigTaskId);
+    const materialization = this.#storage.getCanonicalTaskMaterialization(bigTaskId);
+    if (materialization === null || !materialization.subtasks.some(item => item.subtaskId === subtaskId)) throw malformed();
+    const views = materialization.subtasks.map(item => this.#requiredWorkflowView(item.subtaskId));
+    const view = views.find(item => item.subtaskId === subtaskId)!;
+    if (views.some(item => item.unresolvedHumanRequired !== null) || view.currentStage !== "COMPLETE" ||
+        view.boardStatus !== "DONE" || view.deliveryMaturity === "NOT_STARTED" ||
+        view.candidateBinding !== materialization.candidateBinding || view.planRevision !== materialization.planRevision ||
+        this.#getDispatchReceiptForSubtask(subtaskId)?.status !== "COMPLETED") {
+      throw conflict("The candidate lacks authoritative governed completion.");
+    }
+    // Reading the workflow verifies required maturity, delivery evidence,
+    // Handoff/disposition and resolved findings against their original sources.
+    const finals = this.#access().sqlite.prepare(`SELECT a.authorization_id, h.candidate_sha AS handoff_sha
+      FROM governed_handoffs h JOIN governed_role_results r ON r.result_id = h.role_result_id
+      JOIN governed_role_authorizations a ON a.authorization_id = r.authorization_id WHERE h.subtask_id = ?`).all(subtaskId);
+    if (finals.length !== 1) throw malformed();
+    const final = finals[0]!;
+    const assessed = this.#getRoleResult(String(final.authorization_id));
+    const authorization = this.getRoleAuthorization(String(final.authorization_id));
+    if (assessed === null || authorization === null || authorization.subtaskId !== subtaskId ||
+        authorization.bigTaskId !== bigTaskId || authorization.projectId !== materialization.projectId ||
+        authorization.candidateBinding !== materialization.candidateBinding || assessed.outcome !== "PASS" ||
+        final.handoff_sha !== assessed.candidateSha) throw malformed();
+    const history = this.#worktrees.listWorktreeOwnershipHistoryForSubtask(subtaskId);
+    if (history.at(-1)?.id !== authorization.worktreeOwnershipId ||
+        history.some(item => item.id !== authorization.worktreeOwnershipId && item.status !== "FAILED")) throw malformed();
+    return { ownershipId: authorization.worktreeOwnershipId, candidateSha: assessed.candidateSha };
+  }
+
   #tryCompleteBigTask(bigTaskId: BigTaskId): Extract<GovernedPreparationResult, { readonly kind: "BIG_TASK_COMPLETE" }> | null {
     return this.#storage.runInTransaction(() => this.#completeBigTaskInTransaction(bigTaskId));
   }
@@ -3265,17 +3310,21 @@ export class GovernedExecutionStore {
       view.unresolvedHumanRequired === null && this.#getDispatchReceiptForSubtask(view.subtaskId)?.status === "COMPLETED");
     if (allComplete) {
       for (const view of views) {
-        const final = this.#access().sqlite.prepare(`SELECT a.authorization_id, h.candidate_sha AS handoff_sha
-          FROM governed_handoffs h JOIN governed_role_results r ON r.result_id = h.role_result_id
-          JOIN governed_role_authorizations a ON a.authorization_id = r.authorization_id WHERE h.subtask_id = ?`).get(view.subtaskId);
-        if (final === undefined) throw malformed();
-        const assessed = this.#getRoleResult(String(final.authorization_id));
-        const authorization = this.getRoleAuthorization(String(final.authorization_id));
-        const candidate = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(view.subtaskId);
-        if (assessed === null || authorization === null || final.handoff_sha !== assessed.candidateSha ||
-            candidate.ownership.id !== authorization.worktreeOwnershipId || candidate.currentHeadSha !== assessed.candidateSha ||
-            !candidateIsClean(candidate.ownership.worktreePath)) {
-          throw conflict("The completed candidate no longer matches its final governed assessment.");
+        const proof = this.#completedCandidateProof(bigTaskId, view.subtaskId);
+        const history = this.#worktrees.listWorktreeOwnershipHistoryForSubtask(view.subtaskId);
+        const candidate = history.at(-1);
+        if (candidate === undefined || candidate.id !== proof.ownershipId ||
+            history.some(item => item.id !== candidate.id && item.status !== "FAILED")) throw malformed();
+        if (candidate.status === "ACTIVE") {
+          const active = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(view.subtaskId);
+          if (active.ownership.id !== proof.ownershipId || active.currentHeadSha !== proof.candidateSha ||
+              !candidateIsClean(active.ownership.worktreePath)) {
+            throw conflict("The completed candidate no longer matches its final governed assessment.");
+          }
+        } else if (candidate.status !== "RELEASED" || candidate.releaseHeadSha !== proof.candidateSha) {
+          throw conflict("The completed candidate lacks exact terminal release provenance.");
+        } else {
+          validateReleasedGovernedWorktree(this.#worktrees, view.subtaskId);
         }
       }
     }
@@ -3467,7 +3516,8 @@ export class GovernedExecutionStore {
   }
 }
 
-class GovernedPreparationBlock extends Error {
+// Preserve typed gate outcomes through rollback in storage writer transactions.
+class GovernedPreparationBlock extends TaskStorageError {
   readonly result: Extract<
     GovernedPreparationResult,
     { readonly kind: "BLOCKED" | "HUMAN_REQUIRED" }
@@ -3479,7 +3529,7 @@ class GovernedPreparationBlock extends Error {
       { readonly kind: "BLOCKED" | "HUMAN_REQUIRED" }
     >,
   ) {
-    super(result.reason);
+    super("CONFLICT", result.reason);
     this.name = "GovernedPreparationBlock";
     this.result = result;
   }
