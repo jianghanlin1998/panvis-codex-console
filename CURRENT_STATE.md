@@ -361,14 +361,18 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8D hardening code evidence SHA: `58f0dace445b5e70c0a73cc74dd405a046747771`; tree `000c724fb04017c430650657fad1cf3cef4e257a`
 - `CTC-ORCH-8D-HARD-001` through `CTC-ORCH-8D-HARD-011`: CLOSED; [bounded findings and verification evidence](docs/STEP_8D_HARDENING.md)
 - Step 8D hardening verification: 139 files / 4,287 tests PASS; 100 direct governed tests; 89 trigger/index loss checks; 160 mutation attempts; public:check, lint, typecheck, build and diff checks PASS
-- Step 8D Fresh Independent QA: PENDING / ELIGIBLE; Step 8D ACCEPTED: NO
+- Step 8D Fresh Independent QA on `27568b16b14cd2a52ce6dd5e2024ab8189a02b83`: FAIL — historical no-write QA result
+- `CTC-ORCH-8D-FQA-001` through `CTC-ORCH-8D-FQA-007`: REPAIRED on `01d4501a03dba17d9880a18177dfaefe9784f99f` / awaiting Fresh Focused Re-QA; FQA-006 was non-blocking but included in the approved sweep
+- Step 8D post-FQA repair: exact provider-input/turn provenance, typed gate occurrence ownership, final pre-turn freshness, current-candidate Big Task completion, exact semantic replay, and deterministic test-phase repairs; [Handoff and migration evidence](docs/STEP_8D_POST_FQA_REPAIR.md)
+- Step 8D repair verification: two consecutive canonical full runs PASS, each 139 files / 4,409 tests with normal four workers/default timeout; 183 governed storage tests, 32 mock adapter tests, 84 gate ownership/substitution cases, 190 immutable-row mutation attempts; public:check, lint, typecheck, build, and diff checks PASS
+- Step 8D: HARDENED / REPAIRED / NOT ACCEPTED; Fresh Focused Re-QA: PENDING
 - Step 8E Integrated Synthetic Orchestration Acceptance: NOT STARTED / blocked on Step 8D ACCEPTED
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
 - Real Step 8D provider/model turns: 0; real target orchestration: NONE
 - Hanlin manual QA: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Independent no-write Step 8D QA
+**Next safe task:** NEW CHAT Fresh Focused Re-QA of the Step 8D FQA-001 through FQA-007 repair batch
 
 ## Not operational yet
 - browser Console UI
