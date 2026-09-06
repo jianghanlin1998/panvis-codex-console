@@ -663,13 +663,14 @@ const readLocalTrackingRef = (
 
 const readRepositoryState = (
   repository: VerifiedRepositoryRoot,
+  requireClean = false,
 ): RepositoryStateObservation => {
   const result = runLocalGit(repository, [
     "status",
     "--porcelain=v2",
     "--branch",
     "--untracked-files=all",
-    "--ignore-submodules=all",
+    requireClean ? "--ignore-submodules=none" : "--ignore-submodules=all",
     "-z",
   ]);
   if (result.status !== 0) {
@@ -787,9 +788,10 @@ const trackingObservationsEqual = (
 const readRepositoryObservationOnce = (
   repository: VerifiedRepositoryRoot,
   defaultBranch: string,
+  requireClean = false,
 ): RepositoryObservation =>
   Object.freeze({
-    state: readRepositoryState(repository),
+    state: readRepositoryState(repository, requireClean),
     tracking: readLocalTrackingRef(repository, defaultBranch),
     canonicalRuleContent: readStableCanonicalRuleContent(repository),
   });
@@ -797,9 +799,10 @@ const readRepositoryObservationOnce = (
 const readStableRepositoryObservation = (
   repository: VerifiedRepositoryRoot,
   defaultBranch: string,
+  requireClean = false,
 ): RepositoryObservation => {
-  const first = readRepositoryObservationOnce(repository, defaultBranch);
-  const second = readRepositoryObservationOnce(repository, defaultBranch);
+  const first = readRepositoryObservationOnce(repository, defaultBranch, requireClean);
+  const second = readRepositoryObservationOnce(repository, defaultBranch, requireClean);
   if (
     !repositoryStatesEqual(first.state, second.state) ||
     !trackingObservationsEqual(first.tracking, second.tracking)
@@ -932,10 +935,10 @@ export class TrustedRepositorySourceReader {
     if (project === null) {
       throw sourceError("TASK_HIERARCHY_UNAVAILABLE", "The canonical task hierarchy is unavailable.");
     }
-    return this.#readProject(project);
+    return this.#readProject(project, true);
   }
 
-  #readProject(project: Project): TrustedRepositorySourceSnapshot {
+  #readProject(project: Project, requireClean = false): TrustedRepositorySourceSnapshot {
     if (project.repository.kind !== "PATH") {
       throw sourceError(
         "UNSUPPORTED_REPOSITORY_REFERENCE",
@@ -948,7 +951,11 @@ export class TrustedRepositorySourceReader {
     const observation = readStableRepositoryObservation(
       repositoryRoot,
       project.defaultBranch,
+      requireClean,
     );
+    // Dirty counts cannot bind dirty contents. Big Task planning freezes a clean
+    // commit/rules snapshot; the earlier Subtask evidence reader is unchanged.
+    if (requireClean && !observation.state.clean) throw probeFailed();
     const snapshot: TrustedRepositorySourceSnapshot = {
       projectId: project.id,
       repository: {

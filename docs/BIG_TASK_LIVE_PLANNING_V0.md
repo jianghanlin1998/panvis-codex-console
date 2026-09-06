@@ -52,11 +52,22 @@ and SQLite serializes provider claims across storage connections.
   the existing trusted repository reader. Intake freezes this evidence. A later
   change to the goal, Project, local repository state or canonical rules stops
   the attempt instead of silently widening its approved context.
+  Planning requires a clean Git worktree, including staged, tracked, untracked
+  and submodule changes. Dirty intake fails atomically before any provider call;
+  later dirty state stops as `CONTEXT_CHANGED`. This deliberately rejects dirty
+  baselines rather than treating equal change counts as equal file contents.
+  Ignored files are not planning source context. The earlier Subtask reader's
+  evidence contract remains unchanged.
 - Planner context contains approved intent and the current proposal plus exact
   revision requirements, when applicable. Fresh review contains the intent and
   current proposal/contracts; previous Planner transcripts, previous run records
   and private reasoning are not injected. The proposal binding and revision must
   match the stored review authority exactly.
+  The provider sees and echoes the 64-character lowercase SHA-256 digest of the
+  existing canonical candidate binding. The coordinator verifies that digest
+  against the current captured proposal, then submits the original full binding
+  to durable review. The durable binding format and matching are unchanged;
+  large valid graphs do not have to echo the full binding in the 16 KiB output.
 - Each role starts a fresh ephemeral read-only Codex App Server session using
   the existing owned, pinned runtime and ChatGPT authentication. API-key fallback,
   network-enabled sandboxing, writes, plugins and native delegation are unavailable;
@@ -105,6 +116,36 @@ product/authority decisions. Source collection, target-rule changes and actual
 target writes are not activated here.
 
 ## Verification and activation
+
+### Initial independent acceptance and repair round 1
+
+Initial independent acceptance of `a7efbfa1d27c59d91369d1a444f5bf7ccdbf2504`
+failed with two reproduced blockers: `CTC-STEP9B-FQA-001` (the general 1,000-character
+text cap rejected exact Reviewer bindings for supported graphs) and
+`CTC-STEP9B-FQA-002` (same-count dirty-content changes escaped snapshot comparison).
+Hanlin authorized at most two repair/re-QA rounds and a three-hour session limit.
+
+Round 1 replaces only the provider binding representation with the verified
+compact digest and requires clean planning repository snapshots. Deterministic
+regressions cover 24 tasks with zero and 64 dependencies, including an old full
+binding response larger than 16 KiB; exact wrong-digest rejection; atomic dirty
+intake rejection for staged/tracked/untracked changes; and submodule drift.
+Independent re-QA of the repaired candidate is pending.
+
+Round 1 verification: six new regression cases and the affected planning/source
+tests pass. Canonical `pnpm test` passes 155 files /4,597 tests with the normal
+four workers (361.30 s, no skips or waiver). Public hygiene, lint, typecheck,
+build, executable local-control E2E and diff checks pass. The full verification
+uses the localhost listener permission established by the initial QA denial;
+no provider calls, target writes, dependency refresh or timeout changes occur.
+
+Initial QA public hygiene, lint, typecheck, build and diff checks passed. Its
+four-worker full suite reported 4,382 passed /209 failed (356.02 s), all due to
+localhost listener denial and its consequences. It was not rerun on the already
+known-failing candidate; executable E2E was not reached. These observations are
+not a full-suite pass and are not counted as a product repair round.
+
+### Original implementation verification
 
 - New planning/storage/adapter/local-control coverage: 27 deterministic tests PASS.
 - Final `pnpm test`: 155 files /4,591 tests PASS; normal four workers, 473.27 s,

@@ -1,4 +1,5 @@
-import { writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -22,13 +23,54 @@ const run = (f: Fixture, output: unknown, tokens: number | null = 100) => {
 };
 const review = (f: Fixture, outcome = "APPROVE") => {
   const bundle = f.storage.getDurablePlanningReviewBundle(f.intake.bigTask.id)!;
-  return { outcome, candidateBinding: bundle.candidateBinding, planRevision: bundle.reviewState.candidate.revision,
+  return { outcome, candidateBinding: createHash("sha256").update(bundle.candidateBinding, "utf8").digest("hex"), planRevision: bundle.reviewState.candidate.revision,
     revisionRequirements: outcome === "REJECT" ? ["Add deterministic source failure tests."] : [],
     questions: outcome === "ESCALATE" ? ["Should the board support accounts?"] : [],
   };
 };
 
 describe("Big Task live planning ownership", () => {
+  it("accepts a clean gitlink baseline but stops when its worktree contents change", () => {
+    const f = makePlanningFixture();
+    try {
+      const nested = join(f.repository, "nested");
+      mkdirSync(nested);
+      f.git(["-C", nested, "init", "-b", "main"]);
+      writeFileSync(join(nested, "source.txt"), "baseline", "utf8");
+      f.git(["-C", nested, "add", "source.txt"]);
+      f.git(["-C", nested, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Nested baseline"]);
+      f.git(["add", "nested"]);
+      f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Gitlink baseline"]);
+      expect(f.planning.accept(f.intake).phase).toBe("READY");
+      writeFileSync(join(nested, "source.txt"), "changed!", "utf8");
+      expect(f.planning.claim(f.intake.bigTask.id)).toMatchObject({ status: "HUMAN_REQUIRED", stopReason: "CONTEXT_CHANGED", providerThread: null });
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
+    } finally { f.close(); }
+  });
+
+  it.each(["untracked", "tracked", "staged"])("rejects an unverifiable %s dirty intake atomically, including equal-count content changes", (kind) => {
+    const f = makePlanningFixture();
+    try {
+      const file = join(f.repository, "existing.txt");
+      writeFileSync(file, "baseline", "utf8");
+      if (kind !== "untracked") {
+        f.git(["add", "existing.txt"]);
+        f.git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Tracked baseline"]);
+      }
+      for (const content of ["approved content", "changed content!"]) {
+        writeFileSync(file, content, "utf8");
+        if (kind === "staged") f.git(["add", "existing.txt"]);
+        expect(() => f.planning.accept(f.intake)).toThrow();
+        expect(f.storage.getBigTaskById(f.intake.bigTask.id)).toBeNull();
+        const sql = new DatabaseSync(f.databasePath);
+        try {
+          expect(sql.prepare("SELECT count(*) AS count FROM live_planning_intakes").get()!.count).toBe(0);
+          expect(sql.prepare("SELECT count(*) AS count FROM live_planning_runs").get()!.count).toBe(0);
+        } finally { sql.close(); }
+      }
+    } finally { f.close(); }
+  });
+
   it("protects intake, exact compiled input and completed evidence from SQL mutation", () => {
     const f = makePlanningFixture();
     try {
@@ -49,7 +91,7 @@ describe("Big Task live planning ownership", () => {
   it("rolls back a whole intake when its approved repository cannot be verified", () => {
     const f = makePlanningFixture();
     try {
-      // A dirty file is observed honestly, while an unsafe canonical rule source must fail intake.
+      // Missing repository authority must roll back the enclosing intake.
       f.git(["update-ref", "-d", "HEAD"]);
       expect(() => f.planning.accept(f.intake)).toThrow();
       expect(f.storage.getBigTaskById(f.intake.bigTask.id)).toBeNull();
@@ -178,7 +220,7 @@ describe("Big Task live planning ownership", () => {
       f.planning.accept(f.intake);
       run(f, f.proposal);
       const before = f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id);
-      expect(run(f, { ...review(f), candidateBinding: "wrong" }).stopReason).toBe("INVALID_OUTPUT");
+      expect(run(f, { ...review(f), candidateBinding: "f".repeat(64) }).stopReason).toBe("INVALID_OUTPUT");
       expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toEqual(before);
     } finally { f.close(); }
   });

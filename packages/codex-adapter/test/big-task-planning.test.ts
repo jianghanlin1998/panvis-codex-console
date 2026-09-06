@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
@@ -7,6 +8,42 @@ import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js
 import { planningProviderFixture } from "./planning-provider-fixture.js";
 
 describe("real Big Task planning adapter with deterministic JSONL peer", () => {
+  it.each([0, 64])("reviews the full 24-task limit with %i dependencies using a bounded exact digest", async (dependencyCount) => {
+    const f = makePlanningFixture();
+    try {
+      const tasks = Array.from({ length: 24 }, (_, index) => ({
+        key: `t${index}`, title: "x", goal: "x", scopeIn: ["x"], scopeOut: [],
+        acceptanceCriteria: ["x"], untouchedAreas: [], promptSeed: "x", profile: "LOW", writeEnabled: false,
+      }));
+      const dependencies = tasks.flatMap((downstream, index) => tasks.slice(0, index).map((upstream) => ({
+        upstreamKey: upstream.key, downstreamKey: downstream.key, requiredGate: "ACCEPTED",
+        reason: "r".repeat(90),
+      }))).slice(0, dependencyCount);
+      const proposal = { outcome: "PROPOSE", questions: [], tasks, dependencies };
+      expect(Buffer.byteLength(JSON.stringify(proposal), "utf8")).toBeLessThanOrEqual(16_384);
+      f.planning.accept(f.intake);
+      const provider = planningProviderFixture((packet) => packet.role === "PLANNER" ? proposal : {
+        outcome: "APPROVE", planRevision: packet.proposal!.candidate.revision,
+        candidateBinding: packet.proposal!.candidateBinding, revisionRequirements: [], questions: [],
+      });
+      expect((await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies)).nextRole).toBe("REVIEWER");
+      const bundle = f.storage.getDurablePlanningReviewBundle(f.intake.bigTask.id)!;
+      expect(bundle.candidateBinding.length).toBeGreaterThan(1_000);
+      if (dependencyCount === 64) {
+        expect(Buffer.byteLength(JSON.stringify({ candidateBinding: bundle.candidateBinding }), "utf8")).toBeGreaterThan(16_384);
+      }
+      expect((await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies)).phase).toBe("APPROVED");
+      expect(provider.packets[1]!.proposal!.candidateBinding).toBe(createHash("sha256").update(bundle.candidateBinding, "utf8").digest("hex"));
+      expect(provider.packets[1]!.proposal!.candidateBinding).toHaveLength(64);
+      expect(provider.launches).toHaveLength(2);
+      f.reopen();
+      const approved = f.storage.getDurablePlanningReviewBundle(f.intake.bigTask.id)!;
+      expect(approved.candidateBinding).toBe(bundle.candidateBinding);
+      expect(approved.reviewState.phase).toBe("APPROVED");
+      expect(f.storage.listSubtasksByBigTask(f.intake.bigTask.id)).toEqual([]);
+    } finally { f.close(); }
+  });
+
   it("creates the candidate from provider output, invokes a fresh review and retains separate usage", async () => {
     const f = makePlanningFixture();
     try {

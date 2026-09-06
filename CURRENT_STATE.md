@@ -5,7 +5,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 
 ## Repository
 - Repo: `jianghanlin1998/panvis-codex-console`
-- Branch: `main`
+- Branch: `codex/step9b-live-planning` (repair candidate; not integrated into main)
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 - Public-repository hygiene guard: enabled
 - Development verification: offline fail-closed preflight; explicit stable pnpm settings; full suite bounded to four workers
@@ -388,6 +388,8 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Hanlin confirmed on 2026-09-07: the first end-to-end AI Update Board task must automatically obtain real AI updates, not only display fixture data. Existing target source is a bootstrap main plus retained Step 7 UI/demo candidate; preserve and reconcile both. The real-data implementation/source selection remains part of the upcoming approved task envelope.
 - Step 9B Big Task intake and live planning: IMPLEMENTED, independent acceptance pending. Hanlin approved this slice on 2026-09-07. Three operator commands persist approved intent, inspect progress, and run fresh Planner/Reviewer calls into existing durable planning authority. At most two automatic revisions/six attempts; separate planning usage ledger, bounded context/output, explicit product/budget/failure/interruption stops. [Contract and activation boundary](docs/BIG_TASK_LIVE_PLANNING_V0.md).
 - Step 9B candidate verification: 27 new deterministic planning/storage/adapter/local-control tests PASS. Final canonical suite: 155 files /4,591 tests PASS, four workers, 473.27 s, no skipped cases or waiver. Public hygiene, lint, typecheck, build, executable daemon/operator E2E and diff checks PASS. Historical migration generation/table expectations and one exact predecessor fixture were updated after the first full run exposed them; the final full run passed. Branch `codex/step9b-live-planning`; independent acceptance pending. No real provider turn, production daemon activation, operational graph materialization or AI Update Board write was performed.
+- Step 9B initial independent QA on `a7efbfa1d27c59d91369d1a444f5bf7ccdbf2504`: FAIL, with reproduced `CTC-STEP9B-FQA-001` (supported large-plan Reviewer binding rejected) and `CTC-STEP9B-FQA-002` (same-count dirty content drift missed). Hanlin authorized up to two repair/re-QA rounds, followed by the real AI Update Board pilot if accepted, with a three-hour session limit. Round 1 uses a verified compact provider binding and rejects dirty planning baselines; independent re-QA pending. Existing durable binding, Subtask reader, workflow and authority contracts are unchanged.
+- Step 9B repair round 1 verification: six new regression cases PASS; full suite 155 files /4,597 tests PASS, four workers, 361.30 s, no skips or waiver. Public hygiene, lint, typecheck, build, executable local-control E2E and diff checks PASS. Localhost permission resolves the known sandbox listener denial; no provider turn, target write, dependency refresh or timeout change. Two original QA findings are repaired pending fresh re-QA.
 - Step 9 live dogfood: NOT STARTED. Bounded automatic Subtask execution, candidate integration, target reconciliation and real-data Board writes remain later approved slices.
 - Step 9A real provider/model turns: 0; real dogfood/AI Update Board writes: 0; no deployment or runtime activation. Hanlin manual QA: NOT REQUIRED for 9A; REQUIRED for later live workflow/product acceptance.
 

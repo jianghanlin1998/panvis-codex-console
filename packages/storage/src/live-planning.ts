@@ -131,7 +131,7 @@ export class LivePlanningStore {
         repository: source.repository,
         proposal: bundle === null ? null : {
           candidate: bundle.reviewState.candidate,
-          candidateBinding: bundle.candidateBinding,
+          candidateBinding: digest(bundle.candidateBinding),
           taskContracts: bundle.taskContracts,
         },
         ...(role === "PLANNER" && bundle?.reviewState.phase === "AWAITING_REVISION"
@@ -175,7 +175,7 @@ export class LivePlanningStore {
       let questions: string[] = [];
       const before = this.inspect(input);
       const bundle = this.#storage.getDurablePlanningReviewBundle(input);
-      const currentProposal = bundle === null ? null : { candidate: bundle.reviewState.candidate, candidateBinding: bundle.candidateBinding, taskContracts: bundle.taskContracts };
+      const currentProposal = bundle === null ? null : { candidate: bundle.reviewState.candidate, candidateBinding: digest(bundle.candidateBinding), taskContracts: bundle.taskContracts };
       const captured = JSON.parse(run.inputText) as { proposal?: unknown };
       if (!this.#contextMatches(input, this.#intake(input)) || canonical(currentProposal) !== canonical(captured.proposal)) stopReason = "CONTEXT_CHANGED";
       else if (before.totalTokens >= before.tokenLimit) stopReason = "BUDGET_BLOCKED";
@@ -226,7 +226,8 @@ export class LivePlanningStore {
             }
           } else {
             const review = PlannerReviewResponseSchema.parse(value);
-            const common = { outcome: review.outcome, planRevision: review.planRevision, candidateBinding: review.candidateBinding };
+            if (bundle === null || review.candidateBinding !== digest(bundle.candidateBinding)) fail("INVALID_INPUT");
+            const common = { outcome: review.outcome, planRevision: review.planRevision, candidateBinding: bundle.candidateBinding };
             this.#storage.recordDurableReviewerDecision(input, review.outcome === "REJECT"
               ? { ...common, outcome: "REJECT", revisionRequirements: review.revisionRequirements }
               : { ...common, outcome: review.outcome });

@@ -58,7 +58,8 @@ export type PlannerResponse = z.infer<typeof PlannerResponseSchema>;
 /** A Reviewer cannot return or replace tasks, contracts or dependencies. */
 export const PlannerReviewResponseSchema = z.object({
   outcome: z.enum(["APPROVE", "REJECT", "ESCALATE"]),
-  candidateBinding: text,
+  // The provider echoes a compact digest; storage resolves it to the exact durable binding.
+  candidateBinding: z.string().regex(/^[0-9a-f]{64}$/),
   planRevision: z.number().int().min(1).max(3),
   revisionRequirements: texts,
   questions: texts,
