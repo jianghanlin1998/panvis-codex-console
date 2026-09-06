@@ -1782,7 +1782,14 @@ it("upgrades predecessor-format claims without inventing input or gate provenanc
     db.exec("DROP TABLE governed_provider_turn_starts");
     db.exec("DROP TABLE governed_provider_input_observations");
     db.exec("DROP TABLE governed_gate_observations");
-    db.exec("DELETE FROM __drizzle_migrations WHERE id=(SELECT max(id) FROM __drizzle_migrations)");
+    // Step 9B is also newer than the exact pre-provenance schema reconstructed here.
+    // Its empty additive tables and ledger suffix must be removed together.
+    for (const table of ["live_planning_runs", "live_planning_intakes"]) {
+      expect(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+      db.exec(`DROP TABLE ${table}`);
+    }
+    db.exec("DELETE FROM __drizzle_migrations WHERE id >= 20");
+    expect(db.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({ count: 19 });
     db.close();
     for(let i=0;i<2;i++){
       reopened=openTaskDatabase({databasePath:scenario.databasePath,clock:scenario.now});

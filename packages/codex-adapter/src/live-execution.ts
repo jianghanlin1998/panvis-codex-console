@@ -17,6 +17,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:p
 import { TextDecoder } from "node:util";
 
 import type {
+  BigTaskId,
   ChatThreadId,
   ExecutionRunId,
   NormalizedUsage,
@@ -28,10 +29,14 @@ import type {
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
 import {
+  PLANNER_OUTPUT_SCHEMA,
+  PLANNER_REVIEW_OUTPUT_SCHEMA,
   ChatThreadIdSchema,
   ExecutionRunIdSchema,
 } from "@codex-task-console/domain";
 import {
+  LivePlanningStore,
+  type LivePlanningStatus,
   createWorktreeOwnershipManager,
   ExecutionInputPreflight,
   type GovernedExecutionStore,
@@ -553,6 +558,7 @@ class TurnEventTracker {
     private readonly diagnostics: MutableDiagnostics,
     private readonly maxAgentResponseBytes: number,
     private readonly eventPolicy: TurnEventPolicy = { kind: "READ_ONLY" },
+    private readonly onUsage?: (usage: NormalizedUsage) => void,
   ) {}
 
   fail(error: LiveExecutionError): void {
@@ -746,6 +752,7 @@ class TurnEventTracker {
         this.normalizedUsage = mapCodexTokenUsage(
           parseTokenUsageBreakdown(requireRecord(tokenUsage.total)),
         );
+        this.onUsage?.(this.normalizedUsage);
         this.#refreshIdleDeadline();
         return true;
       }
@@ -2271,9 +2278,10 @@ export function buildLiveCodexChildEnvironmentForTest(
 
 async function executeSingleSubtaskLiveCodexWithDependencies(
   storage: TaskStorage,
-  subtaskId: SubtaskId,
+  subtaskId: SubtaskId | null,
   profile: OperationalJitContextProfile,
   dependencies: LiveExecutionDependencies,
+  planning?: { readonly text: string; readonly outputSchema: JsonValue; readonly tokenLimit: number; readonly observe: (evidence: ReturnType<typeof emptyEvidence>) => void },
 ): Promise<LiveCodexExecutionResult> {
   const diagnostics = emptyDiagnostics();
   const evidence = emptyEvidence();
@@ -2285,28 +2293,32 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   let turnStartSent = false;
 
   try {
-    if (
-      !(storage instanceof TaskStorage) ||
-      typeof subtaskId !== "string" ||
-      (profile !== "STANDARD_SUBTASK_EXECUTION" &&
-        profile !== "FRESH_INDEPENDENT_QA")
-    ) {
-      throw new LiveExecutionError("INVALID_INPUT");
-    }
+    if (planning === undefined) {
+      if (
+        !(storage instanceof TaskStorage) ||
+        typeof subtaskId !== "string" ||
+        (profile !== "STANDARD_SUBTASK_EXECUTION" &&
+          profile !== "FRESH_INDEPENDENT_QA")
+      ) {
+        throw new LiveExecutionError("INVALID_INPUT");
+      }
 
-    try {
-      preflight = new ExecutionInputPreflight(
-        storage,
-      ).prepareExecutionInputForSubtask(subtaskId, profile);
-    } catch {
-      throw new LiveExecutionError("PREFLIGHT_FAILED");
-    }
-    evidence.preflight = {
-      profile: preflight.profile,
-      status: preflight.status,
-      utf8Bytes: preflight.utf8Bytes,
-    };
-    if (!preflight.allowed) {
+      try {
+        preflight = new ExecutionInputPreflight(
+          storage,
+        ).prepareExecutionInputForSubtask(subtaskId, profile);
+      } catch {
+        throw new LiveExecutionError("PREFLIGHT_FAILED");
+      }
+      evidence.preflight = {
+        profile: preflight.profile,
+        status: preflight.status,
+        utf8Bytes: preflight.utf8Bytes,
+      };
+      if (!preflight.allowed) {
+        throw new LiveExecutionError("PREFLIGHT_BLOCKED");
+      }
+    } else if (Buffer.byteLength(planning.text, "utf8") > 64_000) {
       throw new LiveExecutionError("PREFLIGHT_BLOCKED");
     }
 
@@ -2329,6 +2341,14 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     const eventTracker = new TurnEventTracker(
       diagnostics,
       dependencies.limits.maxAgentResponseBytes,
+      { kind: "READ_ONLY" },
+      planning === undefined ? undefined : (usage) => {
+        evidence.normalizedUsage = usage;
+        planning.observe(evidence);
+        if (usage.totalTokens !== undefined && usage.totalTokens >= planning.tokenLimit) {
+          throw new LiveExecutionError("TURN_INTERRUPTED");
+        }
+      },
     );
     events = eventTracker;
 
@@ -2336,7 +2356,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     try {
       child = dependencies.spawnAppServer(
         runtime.canonicalExecutablePath,
-        ["app-server", "--listen", "stdio://"],
+        planning === undefined ? ["app-server", "--listen", "stdio://"] : ownedWriteAppServerArguments(),
         {
           cwd: executionWorkspace,
           env: buildLiveCodexChildEnvironment(
@@ -2413,6 +2433,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     const thread = parseThreadStartResult(threadResult, executionWorkspace);
     evidence.providerThread = mapCodexThreadReference(thread.threadId);
     evidence.model = mapCodexModelReference(thread.model);
+    planning?.observe(evidence);
     evidence.threadPolicy = {
       approvalPolicy: "never",
       cwd: "DISPOSABLE_OS_TEMP",
@@ -2430,7 +2451,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         input: [
           {
             type: "text",
-            text: preflight.text,
+            text: planning?.text ?? (preflight?.allowed ? preflight.text : ""),
             text_elements: [],
           },
         ],
@@ -2438,6 +2459,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandboxPolicy: { type: "readOnly", networkAccess: false },
+        ...(planning === undefined ? {} : { outputSchema: planning.outputSchema }),
       },
       dependencies.limits.requestTimeoutMs,
       {
@@ -2456,6 +2478,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     }
     evidence.providerRun = mapCodexTurnReference(thread.threadId, turnId);
+    planning?.observe(evidence);
 
     const terminal = await eventTracker.waitForTerminal(
       dependencies.limits.turnIdleTimeoutMs,
@@ -2565,6 +2588,45 @@ function productionDependencies(): LiveExecutionDependencies {
     removeWorkspace,
     limits: DEFAULT_LIMITS,
   };
+}
+
+/** One fresh, tool-free Planner or Reviewer turn. No execution/materialization authority. */
+export async function executeBigTaskPlanningCodex(storage: TaskStorage, bigTaskId: BigTaskId): Promise<LivePlanningStatus> {
+  return executeBigTaskPlanningWithDependencies(storage, bigTaskId, productionDependencies());
+}
+
+export async function executeBigTaskPlanningCodexForTest(
+  storage: TaskStorage, bigTaskId: BigTaskId, dependencies: LiveExecutionDependencies,
+): Promise<LivePlanningStatus> {
+  if (process.env.NODE_ENV !== "test") throw new Error("INVALID_INPUT");
+  return executeBigTaskPlanningWithDependencies(storage, bigTaskId, dependencies);
+}
+
+async function executeBigTaskPlanningWithDependencies(
+  storage: TaskStorage, bigTaskId: BigTaskId, dependencies: LiveExecutionDependencies,
+): Promise<LivePlanningStatus> {
+  const planning = new LivePlanningStore(storage);
+  const before = planning.inspect(bigTaskId);
+  const run = planning.claim(bigTaskId);
+  if (run.status !== "RUNNING") return planning.inspect(bigTaskId);
+  try {
+    const result = await executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", dependencies, {
+      text: run.inputText,
+      outputSchema: (run.role === "PLANNER" ? PLANNER_OUTPUT_SCHEMA : PLANNER_REVIEW_OUTPUT_SCHEMA) as JsonValue,
+      tokenLimit: before.tokenLimit - before.totalTokens,
+      observe: (evidence) => planning.observe(bigTaskId, run.sequence, {
+        providerThread: evidence.providerThread, providerRun: evidence.providerRun,
+        model: evidence.model, normalizedUsage: evidence.normalizedUsage,
+      }),
+    });
+    planning.observe(bigTaskId, run.sequence, {
+      providerThread: result.providerThread, providerRun: result.providerRun,
+      model: result.model, normalizedUsage: result.normalizedUsage,
+    });
+    return planning.finish(bigTaskId, run.sequence, result.success, result.agentResponseText);
+  } catch {
+    return planning.finish(bigTaskId, run.sequence, false, null);
+  }
 }
 
 function productionOwnedWorktreeDependencies(): OwnedWorktreeExecutionDependencies {

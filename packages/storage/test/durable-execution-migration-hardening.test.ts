@@ -165,6 +165,8 @@ describe("Durable Execution V0 migration hardening", () => {
           "governed_role_authorizations",
           "governed_role_execution_links",
           "governed_role_results",
+          "live_planning_intakes",
+          "live_planning_runs",
           "orchestration_materializations",
           "orchestration_plan_candidates",
           "orchestration_planning_tracks",
@@ -181,7 +183,7 @@ describe("Durable Execution V0 migration hardening", () => {
         ]);
         expect(
           sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 20 });
+        ).toEqual({ count: 21 });
         const indexes = sqlite
           .prepare(
             "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name IN ('chat_threads', 'execution_runs') ORDER BY name",
@@ -347,7 +349,7 @@ describe("Durable Execution V0 migration hardening", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 20 });
+      ).toEqual({ count: 21 });
       sqlite.close();
     });
   });
@@ -500,7 +502,7 @@ describe("Durable Execution V0 migration hardening", () => {
       ).toEqual({ count: 1 });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 20 });
+      ).toEqual({ count: 21 });
       sqlite.close();
     });
   });

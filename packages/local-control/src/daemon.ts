@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 
 import {
   openTaskDatabase,
+  LivePlanningStore,
 } from "@codex-task-console/storage";
 import type { TaskStorage } from "@codex-task-console/storage";
 
@@ -239,6 +240,7 @@ const startWithDependencies = async (
       throw new LocalDaemonError("DATABASE_UNAVAILABLE");
     }
     verifyCanonicalDatabaseAuthority(dependencies.paths, databaseAuthority);
+    new LivePlanningStore(storage).recoverInterrupted();
     http = createLocalControlHttpServer(
       dependencies.createService(storage),
       dependencies.sessionToken,

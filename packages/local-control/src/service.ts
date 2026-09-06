@@ -1,5 +1,6 @@
 import {
   executeGovernedRoleCodex,
+  executeBigTaskPlanningCodex,
   executeSingleSubtaskOwnedWorktreeCodex,
 } from "@codex-task-console/codex-adapter";
 import type {
@@ -15,6 +16,7 @@ import type {
 } from "@codex-task-console/domain";
 import {
   TaskStorageError,
+  LivePlanningStore,
   WorktreeOwnershipError,
   createGovernedExecutionStore,
   createWorktreeOwnershipManager,
@@ -23,6 +25,7 @@ import type {
   GovernedExecutionStore,
   TaskStorage,
   WorktreeOwnershipManager,
+  LivePlanningStatus,
 } from "@codex-task-console/storage";
 
 const MAX_RECENT_THREADS = 8;
@@ -120,6 +123,9 @@ export interface ExecutionOperationResult {
 }
 
 export interface LocalControlService {
+  acceptPlanningIntake?(input: unknown): Promise<LivePlanningStatus>;
+  inspectPlanning?(bigTaskId: BigTaskId): Promise<LivePlanningStatus>;
+  runPlanning?(bigTaskId: BigTaskId): Promise<LivePlanningStatus>;
   inspectSubtask(subtaskId: SubtaskId): Promise<SubtaskInspection>;
   provisionOwnedWorktree(subtaskId: SubtaskId): Promise<WorktreeOperationResult>;
   runOwnedWorktreeExecution(subtaskId: SubtaskId): Promise<ExecutionOperationResult>;
@@ -223,6 +229,7 @@ const summarizeExecution = (
   });
 
 class ProductionLocalControlService implements LocalControlService {
+  readonly #planningActive = new Set<BigTaskId>();
   readonly #storage: TaskStorage;
   readonly #worktrees: WorktreeOwnershipManager;
   readonly #governed: GovernedExecutionStore;
@@ -246,12 +253,38 @@ class ProductionLocalControlService implements LocalControlService {
       governed: GovernedExecutionStore,
       authorizationId: string,
     ) => Promise<GovernedRoleCodexExecutionResult>,
+    private readonly executePlanning: (storage: TaskStorage, bigTaskId: BigTaskId) => Promise<LivePlanningStatus> = executeBigTaskPlanningCodex,
   ) {
     this.#storage = storage;
     this.#worktrees = worktrees;
     this.#execute = execute;
     this.#governed = createGovernedExecutionStore(storage);
     this.#executeGoverned = executeGoverned;
+  }
+
+  async acceptPlanningIntake(input: unknown): Promise<LivePlanningStatus> {
+    try { return new LivePlanningStore(this.#storage).accept(input); }
+    catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async inspectPlanning(bigTaskId: BigTaskId): Promise<LivePlanningStatus> {
+    try { return new LivePlanningStore(this.#storage).inspect(bigTaskId); }
+    catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async runPlanning(bigTaskId: BigTaskId): Promise<LivePlanningStatus> {
+    if (this.#planningActive.has(bigTaskId)) throw new LocalControlServiceError("OPERATION_CONFLICT", 409);
+    this.#planningActive.add(bigTaskId);
+    try {
+      const planning = new LivePlanningStore(this.#storage);
+      let state = planning.inspect(bigTaskId);
+      // Initial proposal/review plus at most two revisions and fresh reviews.
+      for (let count = 0; count < 6 && state.phase === "READY"; count += 1) {
+        state = await this.executePlanning(this.#storage, bigTaskId);
+      }
+      return state;
+    } catch (error) { throw sanitizeStorageError(error); }
+    finally { this.#planningActive.delete(bigTaskId); }
   }
 
   async inspectSubtask(subtaskId: SubtaskId): Promise<SubtaskInspection> {
@@ -445,10 +478,12 @@ export const createLocalControlServiceForTesting = (
     governed: GovernedExecutionStore,
     authorizationId: string,
   ) => Promise<GovernedRoleCodexExecutionResult> = executeGovernedRoleCodex,
+  executePlanning: (storage: TaskStorage, bigTaskId: BigTaskId) => Promise<LivePlanningStatus> = executeBigTaskPlanningCodex,
 ): LocalControlService =>
   new ProductionLocalControlService(
     storage,
     worktrees,
     execute,
     executeGoverned,
+    executePlanning,
   );

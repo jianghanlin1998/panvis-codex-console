@@ -106,6 +106,19 @@ export const subtasksTable = sqliteTable(
   ],
 );
 
+/** Big Task planning has its own owner; no synthetic Subtask or execution run. */
+export const livePlanningIntakesTable = sqliteTable("live_planning_intakes", {
+  bigTaskId: text("big_task_id").primaryKey().references(() => bigTasksTable.id, { onDelete: "restrict" }),
+  payload: text("payload").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const livePlanningRunsTable = sqliteTable("live_planning_runs", {
+  bigTaskId: text("big_task_id").notNull().references(() => livePlanningIntakesTable.bigTaskId, { onDelete: "restrict" }),
+  sequence: integer("sequence").notNull(),
+  payload: text("payload").notNull(),
+}, (table) => [primaryKey({ columns: [table.bigTaskId, table.sequence] })]);
+
 export const orchestrationPlanningTracksTable = sqliteTable(
   "orchestration_planning_tracks",
   {

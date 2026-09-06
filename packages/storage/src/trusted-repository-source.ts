@@ -14,6 +14,8 @@ import { join } from "node:path";
 import { TextDecoder } from "node:util";
 
 import type {
+  BigTaskId,
+  Project,
   ProjectId,
   RepositoryReference,
   SubtaskId,
@@ -921,7 +923,19 @@ export class TrustedRepositorySourceReader {
       );
     }
 
-    const { project } = storageSnapshot;
+    return this.#readProject(storageSnapshot.project);
+  }
+
+  readTrustedRepositorySourceSnapshotForBigTask(input: BigTaskId): TrustedRepositorySourceSnapshot {
+    const bigTask = this.#storage.getBigTaskById(input);
+    const project = bigTask === null ? null : this.#storage.getProjectById(bigTask.projectId);
+    if (project === null) {
+      throw sourceError("TASK_HIERARCHY_UNAVAILABLE", "The canonical task hierarchy is unavailable.");
+    }
+    return this.#readProject(project);
+  }
+
+  #readProject(project: Project): TrustedRepositorySourceSnapshot {
     if (project.repository.kind !== "PATH") {
       throw sourceError(
         "UNSUPPORTED_REPOSITORY_REFERENCE",

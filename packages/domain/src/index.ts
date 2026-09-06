@@ -1,3 +1,4 @@
+export { hasUnambiguousJsonStructure } from "./json-boundary.js";
 export {
   AuditEventIdSchema,
   BigTaskIdSchema,
@@ -339,3 +340,17 @@ export type {
   ExecutionRunStatus,
   TerminalExecutionRunStatus,
 } from "./durable-execution.js";
+export {
+  BigTaskPlanningIntakeSchema,
+  PlannerResponseSchema,
+  PlannerReviewResponseSchema,
+  PLANNER_OUTPUT_SCHEMA,
+  PLANNER_REVIEW_OUTPUT_SCHEMA,
+  PlanningRunRecordSchema,
+} from "./big-task-planning.js";
+export type {
+  BigTaskPlanningIntake,
+  PlannerResponse,
+  PlannerReviewResponse,
+  PlanningRunRecord,
+} from "./big-task-planning.js";

@@ -1,3 +1,5 @@
+import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
+import { hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
 import { request } from "node:http";
 import type { ClientRequest } from "node:http";
@@ -7,6 +9,8 @@ import {
   OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
 } from "@codex-task-console/codex-adapter";
 import {
+  BigTaskPlanningIntakeSchema,
+  PlanningRunRecordSchema,
   BigTaskIdSchema,
   ChatThreadIdSchema,
   ChatThreadStatusSchema,
@@ -26,7 +30,7 @@ import {
   SubtaskStatusSchema,
   WorktreeOwnershipIdSchema,
 } from "@codex-task-console/domain";
-import type { BigTaskId, SubtaskId } from "@codex-task-console/domain";
+import type { BigTaskId, SubtaskId, BigTaskPlanningIntake } from "@codex-task-console/domain";
 import { GOVERNED_SUBTASK_ROLES } from "@codex-task-console/storage";
 import type {
   AggregateSubtaskUsageBudget,
@@ -56,6 +60,7 @@ import type {
 const DEFAULT_OPERATOR_TIMEOUT_MILLISECONDS = 5 * 60_000;
 
 export type OperatorCommandName =
+  | "planning-intake" | "planning-status" | "planning-run"
   | "ping"
   | "status"
   | "provision"
@@ -67,9 +72,11 @@ export type OperatorCommandName =
   | "governed-budget-extension";
 
 export type OperatorCommand =
+  | { readonly name: "planning-intake"; readonly intake: BigTaskPlanningIntake }
+  | { readonly name: "planning-status" | "planning-run"; readonly bigTaskId: BigTaskId }
   | { readonly name: "ping" }
   | {
-      readonly name: Exclude<OperatorCommandName, "ping" | "governed-status" | "governed-advance">;
+      readonly name: Exclude<OperatorCommandName, "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
       readonly subtaskId: SubtaskId;
     }
   | {
@@ -104,6 +111,55 @@ export class LocalOperatorError extends Error {
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const readPlanningIntake = (path: string): BigTaskPlanningIntake => {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > 16_384) throw new Error();
+    const bytes = readFileSync(fd);
+    if (bytes.byteLength > 16_384 || !isUtf8(bytes)) throw new Error();
+    const text = bytes.toString("utf8");
+    if (!hasUnambiguousJsonStructure(text)) throw new Error();
+    return BigTaskPlanningIntakeSchema.parse(JSON.parse(text));
+  } catch { throw new LocalOperatorError("INVALID_COMMAND"); }
+  finally { if (fd !== undefined) closeSync(fd); }
+};
+
+const isPlanningStatus = (value: Readonly<Record<string, unknown>>, id: BigTaskId): boolean => {
+  if (!hasExactKeys(value, ["bigTaskId", "phase", "nextRole", "stopReason", "questions", "totalTokens", "usageComplete", "tokenLimit", "warning", "automaticRevisionsUsed", "reviewPhase", "runs"])
+    || value.bigTaskId !== id || !["READY", "RUNNING", "APPROVED", "HUMAN_REQUIRED"].includes(value.phase as string)
+    || !Array.isArray(value.runs) || value.runs.length > 6
+    || !Array.isArray(value.questions) || value.questions.length > 24
+    || value.questions.some((question: unknown) => typeof question !== "string" || question.length > 1_000)
+    || !Number.isSafeInteger(value.totalTokens) || Number(value.totalTokens) < 0
+    || !Number.isSafeInteger(value.tokenLimit) || Number(value.tokenLimit) < 1 || Number(value.tokenLimit) > 120_000
+    || ![0, 1, 2].includes(value.automaticRevisionsUsed as number)
+    || ![null, "AWAITING_REVIEW", "AWAITING_REVISION", "APPROVED", "HUMAN_REQUIRED"].includes(value.reviewPhase as string | null)
+    || typeof value.usageComplete !== "boolean" || typeof value.warning !== "boolean") return false;
+  let total = 0;
+  let complete = true;
+  for (const [index, run] of value.runs.entries()) {
+    if (!isRecord(run) || "inputText" in run) return false;
+    const parsed = PlanningRunRecordSchema.safeParse({ ...run, inputText: "summary" });
+    if (!parsed.success || parsed.data.sequence !== index + 1
+      || parsed.data.role !== (index % 2 === 0 ? "PLANNER" : "REVIEWER")
+      || (index < value.runs.length - 1 && parsed.data.status !== "COMPLETED")) return false;
+    total += parsed.data.normalizedUsage?.totalTokens ?? 0;
+    complete &&= parsed.data.normalizedUsage?.totalTokens !== undefined;
+  }
+  const last = value.runs.at(-1) as Record<string, unknown> | undefined;
+  return total === value.totalTokens && complete === value.usageComplete
+    && value.warning === (total >= Math.min(80_000, Number(value.tokenLimit)))
+    && (value.phase === "READY" ? ["PLANNER", "REVIEWER"].includes(value.nextRole as string) : value.nextRole === null)
+    && (value.phase === "RUNNING") === (last?.status === "RUNNING")
+    && (value.phase === "HUMAN_REQUIRED" ? ["PRODUCT_QUESTION", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"].includes(value.stopReason as string) : value.stopReason === null)
+    && (value.phase !== "APPROVED" || (value.reviewPhase === "APPROVED" && last?.role === "REVIEWER" && last.status === "COMPLETED" && complete && total < Number(value.tokenLimit)))
+    && (value.phase !== "READY" || (complete && total < Number(value.tokenLimit) && value.runs.length < 6
+      && value.nextRole === (value.reviewPhase === "AWAITING_REVIEW" ? "REVIEWER" : "PLANNER")
+      && [null, "AWAITING_REVIEW", "AWAITING_REVISION"].includes(value.reviewPhase as string | null)));
+};
+
 const hasExactKeys = (
   value: Readonly<Record<string, unknown>>,
   keys: readonly string[],
@@ -111,122 +167,6 @@ const hasExactKeys = (
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-};
-
-const JSON_MAX_NESTING_DEPTH = 64;
-
-const hasUnambiguousJsonStructure = (text: string): boolean => {
-  const numberPattern = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
-  const skipWhitespace = (start: number): number => {
-    let cursor = start;
-    while (
-      text[cursor] === " " ||
-      text[cursor] === "\t" ||
-      text[cursor] === "\n" ||
-      text[cursor] === "\r"
-    ) {
-      cursor += 1;
-    }
-    return cursor;
-  };
-  const scanString = (
-    start: number,
-  ): { readonly end: number; readonly value: string } | null => {
-    if (text[start] !== '"') {
-      return null;
-    }
-    let cursor = start + 1;
-    while (cursor < text.length) {
-      if (text[cursor] === "\\") {
-        cursor += 2;
-        continue;
-      }
-      if (text[cursor] === '"') {
-        const end = cursor + 1;
-        try {
-          const value: unknown = JSON.parse(text.slice(start, end));
-          return typeof value === "string" ? { end, value } : null;
-        } catch {
-          return null;
-        }
-      }
-      cursor += 1;
-    }
-    return null;
-  };
-  const scanValue = (start: number, depth: number): number => {
-    if (depth > JSON_MAX_NESTING_DEPTH) {
-      return -1;
-    }
-    let cursor = skipWhitespace(start);
-    if (text[cursor] === '"') {
-      return scanString(cursor)?.end ?? -1;
-    }
-    if (text[cursor] === "{") {
-      cursor = skipWhitespace(cursor + 1);
-      const keys = new Set<string>();
-      if (text[cursor] === "}") {
-        return cursor + 1;
-      }
-      while (cursor < text.length) {
-        const key = scanString(cursor);
-        if (key === null || keys.has(key.value)) {
-          return -1;
-        }
-        keys.add(key.value);
-        cursor = skipWhitespace(key.end);
-        if (text[cursor] !== ":") {
-          return -1;
-        }
-        cursor = scanValue(cursor + 1, depth + 1);
-        if (cursor < 0) {
-          return -1;
-        }
-        cursor = skipWhitespace(cursor);
-        if (text[cursor] === "}") {
-          return cursor + 1;
-        }
-        if (text[cursor] !== ",") {
-          return -1;
-        }
-        cursor = skipWhitespace(cursor + 1);
-      }
-      return -1;
-    }
-    if (text[cursor] === "[") {
-      cursor = skipWhitespace(cursor + 1);
-      if (text[cursor] === "]") {
-        return cursor + 1;
-      }
-      while (cursor < text.length) {
-        cursor = scanValue(cursor, depth + 1);
-        if (cursor < 0) {
-          return -1;
-        }
-        cursor = skipWhitespace(cursor);
-        if (text[cursor] === "]") {
-          return cursor + 1;
-        }
-        if (text[cursor] !== ",") {
-          return -1;
-        }
-        cursor = skipWhitespace(cursor + 1);
-      }
-      return -1;
-    }
-    for (const literal of ["true", "false", "null"] as const) {
-      if (text.startsWith(literal, cursor)) {
-        return cursor + literal.length;
-      }
-    }
-    numberPattern.lastIndex = cursor;
-    const number = numberPattern.exec(text);
-    return number?.index === cursor ? numberPattern.lastIndex : -1;
-  };
-
-  const start = skipWhitespace(0);
-  const end = scanValue(start, 0);
-  return end >= 0 && skipWhitespace(end) === text.length;
 };
 
 const schemaMatchesExactly = (
@@ -695,6 +635,11 @@ const validateResponseShape = (
     return false;
   }
   switch (command.name) {
+    case "planning-intake":
+      return isPlanningStatus(value, command.intake.bigTask.id);
+    case "planning-status":
+    case "planning-run":
+      return isPlanningStatus(value, command.bigTaskId);
     case "ping":
       return (
         hasExactKeys(value, ["ok", "schemaVersion"]) &&
@@ -735,10 +680,13 @@ export const parseOperatorCommand = (
   if (extra.length !== 0) {
     throw new LocalOperatorError("INVALID_COMMAND");
   }
+  if (command === "planning-intake" && subtaskId !== undefined) {
+    return { name: "planning-intake", intake: readPlanningIntake(subtaskId) };
+  }
   if (command === "ping" && subtaskId === undefined) {
     return Object.freeze({ name: "ping" });
   }
-  if ((command === "governed-status" || command === "governed-advance") && subtaskId !== undefined) {
+  if ((command === "planning-status" || command === "planning-run" || command === "governed-status" || command === "governed-advance") && subtaskId !== undefined) {
     if (!schemaMatchesExactly(BigTaskIdSchema, subtaskId)) {
       throw new LocalOperatorError("INVALID_COMMAND");
     }
@@ -766,6 +714,11 @@ const commandRequest = (
   readonly body: Buffer | undefined;
 } => {
   switch (command.name) {
+    case "planning-intake":
+      return { method: "POST", path: "/v0/planning/intake", body: Buffer.from(JSON.stringify(command.intake), "utf8") };
+    case "planning-status":
+    case "planning-run":
+      return { method: "POST", path: command.name === "planning-status" ? "/v0/planning/status" : "/v0/planning/run", body: Buffer.from(JSON.stringify({ bigTaskId: command.bigTaskId }), "utf8") };
     case "governed-status":
       return {
         method: "GET",

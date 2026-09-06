@@ -1,3 +1,4 @@
+import { hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
@@ -390,6 +391,19 @@ const routeRequest = async (
 ): Promise<object> => {
   const method = request.method ?? "";
   const url = request.url ?? "";
+  if (["/v0/planning/intake", "/v0/planning/status", "/v0/planning/run"].includes(url)) {
+    if (method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
+    requireMutationHeaders(request);
+    const body = await readBoundedBody(request);
+    if (url === "/v0/planning/intake") {
+      if (!hasUnambiguousJsonStructure(body)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
+      let value: unknown;
+      try { value = JSON.parse(body); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
+      return requireGovernedMethod(service.acceptPlanningIntake).call(service, value);
+    }
+    const id = parseBigTaskBody(body);
+    return requireGovernedMethod(url === "/v0/planning/status" ? service.inspectPlanning : service.runPlanning).call(service, id);
+  }
   if (method === "GET" && url === "/v0/ping") {
     return Object.freeze({ ok: true, schemaVersion: 1 });
   }

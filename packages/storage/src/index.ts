@@ -155,3 +155,5 @@ export type {
   ExecutionInputPreflightErrorCode,
   ExecutionInputPreflightResult,
 } from "./execution-input-preflight.js";
+export { LivePlanningStore } from "./live-planning.js";
+export type { LivePlanningStatus, PlanningProviderEvidence } from "./live-planning.js";
