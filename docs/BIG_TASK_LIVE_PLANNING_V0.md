@@ -1,6 +1,8 @@
 # Step 9B — Big Task intake and live planning
 
-Status: implementation candidate; independent acceptance is pending. Based on the
+Status: ACCEPTED after fresh independent re-QA round 1 on
+`046e9af12115fd6acf64c5fcb971b3b0f690c468`, tree
+`7d86bc3d9485d0f51aae28f48f21e6e76efcfe62`. Based on the
 accepted Step 9A main at `d4fae592b3b4213d99506489c7d5e08ca267762b`.
 Hanlin approved this bounded slice on 2026-09-07.
 
@@ -130,7 +132,7 @@ compact digest and requires clean planning repository snapshots. Deterministic
 regressions cover 24 tasks with zero and 64 dependencies, including an old full
 binding response larger than 16 KiB; exact wrong-digest rejection; atomic dirty
 intake rejection for staged/tracked/untracked changes; and submodule drift.
-Independent re-QA of the repaired candidate is pending.
+Fresh independent re-QA subsequently passed on the exact repaired candidate above.
 
 Round 1 verification: six new regression cases and the affected planning/source
 tests pass. Canonical `pnpm test` passes 155 files /4,597 tests with the normal
@@ -144,6 +146,43 @@ four-worker full suite reported 4,382 passed /209 failed (356.02 s), all due to
 localhost listener denial and its consequences. It was not rerun on the already
 known-failing candidate; executable E2E was not reached. These observations are
 not a full-suite pass and are not counted as a product repair round.
+
+### Fresh independent re-QA and pilot preparation
+
+Fresh re-QA round 1: PASS; both original findings are closed. Independent private
+probes pass 23/23, including a 16,316-byte proposal with 24 tasks /64 dependencies,
+exact wrong/stale digest and revision rejection, dirty intake and later drift,
+original Subtask reader parity, immutable/reopened authority, revision ceilings,
+independent context and budget/product/interruption stops. Canonical full suite:
+155 files /4,597 tests PASS, four workers, 360.34 s. Public hygiene, lint,
+typecheck, build, executable local-control E2E and diff checks PASS. Re-QA made
+no candidate changes and no real provider calls or target writes. A second
+repair round was not needed. The accepted repair is pushed to the existing
+feature branch; main remains unchanged.
+
+After acceptance, Hanlin's real AI Update Board goal was stored through the
+production planning-intake interface as
+`bt_ai_update_board_step9_real_news_20260907`, under the existing Board Project.
+The approved intent includes real public AI news and preservation of the retained
+Step 7 UI; it contains no hand-seeded Subtasks. The ordinary planning cap is
+120,000 tokens. A private SQLite backup preceded the additive migration.
+
+The outer automatic approval review rejected the planning-run tool action before
+execution, requiring specific consent to send the task, project metadata,
+repository rules and Git/runtime context to the default OpenAI service. Read-only
+checks verified the actual payload categories and absence of provider/base-URL
+overrides; one reconsideration of the identical action was also rejected. No
+workaround was attempted. The intake remains READY with zero planning attempts,
+zero generated Subtasks and zero provider usage. The daemon was stopped cleanly;
+its lock/session files are absent. The target repository and retained UI branch
+are unchanged. This approval blocker is outside the accepted feature's QA and
+does not consume the second product repair round.
+
+Resume only after that explicit consent: restart the accepted daemon, inspect
+the existing intake, and invoke planning-run for its existing Big Task ID; do not
+create a duplicate intake. Full automatic Subtask progression and cross-worktree
+integration remain unimplemented later slices, so planning approval alone is
+not an end-to-end Board delivery claim.
 
 ### Original implementation verification
 

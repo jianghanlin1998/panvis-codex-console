@@ -3,8 +3,9 @@
 Status: ACCEPTED. Roadmap Step 6 is complete, Roadmap Step 7 backend dogfood completed successfully, and Fresh Independent QA passed on `20932e5438c14d6d0a82c00967de0fee00b8378e`.
 
 Later extension: [Step 9B Big Task intake and live planning](BIG_TASK_LIVE_PLANNING_V0.md)
-adds three planning commands and additive planning storage; its independent acceptance
-is pending. The original Step 6 surface described below remains unchanged.
+adds three planning commands and additive planning storage; fresh independent
+re-QA passed on `046e9af12115fd6acf64c5fcb971b3b0f690c468`. The original Step 6
+surface described below remains unchanged.
 
 ## Purpose and composition
 
