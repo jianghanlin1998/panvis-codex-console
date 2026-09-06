@@ -18,7 +18,7 @@ import {
   SubtaskStatusSchema,
 } from "@codex-task-console/domain";
 import type { SubtaskId } from "@codex-task-console/domain";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LOCAL_CONTROL_HOST } from "../src/http-server.js";
 import {
@@ -646,5 +646,66 @@ describe("operator transport bounds and session evidence", () => {
         1_000,
       ),
     ).rejects.toMatchObject({ code: "SESSION_UNAVAILABLE" });
+  });
+});
+
+
+describe("governed operator response boundaries", () => {
+  const manual = () => ({ authorityId: "gma_operator", projectId: "prj_operator", bigTaskId: "bt_operator",
+    subtaskId: SUBTASK_ID, planRevision: 1, candidateBinding: "bound-candidate", workflowSequence: 0,
+    authorizedAt: "2026-09-06T00:00:00.000Z" });
+
+  it("rejects token reflection, duplicate keys, invalid UTF-8 and oversized governed responses", async () => {
+    const clean = JSON.stringify(manual());
+    const escapedToken = Array.from(TOKEN, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+    for (const body of [
+      JSON.stringify({ ...manual(), authorityId: TOKEN }),
+      clean.replace("gma_operator", escapedToken),
+      clean.replace('"workflowSequence":0', '"workflowSequence":0,"workflowSequence":1'),
+      replaceUtf8Segment(clean, "gma_operator", Buffer.from([0xff])),
+      JSON.stringify({ ...manual(), rawTranscript: "unexpected" }),
+    ]) {
+      await expect(runResponse(["governed-manual-start", SUBTASK_ID], body)).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    }
+    await expect(runResponse(["governed-manual-start", SUBTASK_ID], JSON.stringify({
+      ...manual(), authorityId: "x".repeat(65_536),
+    }))).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
+  });
+
+  it("rejects substituted manual/budget grants and never treats arbitrary grants as canonical", async () => {
+    const base: Record<string, unknown> = { ...manual() };
+    delete base.workflowSequence;
+    const grant = { ...base, grantedTokens: 40_000 };
+    expect((await runResponse(["governed-budget-extension", SUBTASK_ID], JSON.stringify(grant))).succeeded).toBe(true);
+    for (const body of [
+      { ...grant, subtaskId: "st_other" }, { ...grant, grantedTokens: 80_000 },
+      { ...grant, grantedTokens: "40000" }, { ...grant, authorizedAt: "tomorrow" },
+      { ...grant, planRevision: 0 }, { ...grant, extensionApplied: true },
+    ]) await expect(runResponse(["governed-budget-extension", SUBTASK_ID], JSON.stringify(body))).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    await expect(runResponse(["governed-manual-start", SUBTASK_ID], JSON.stringify({ ...manual(), subtaskId: "st_other" }))).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+  });
+
+  it("uses the existing absolute deadline and never repeats an indeterminate advance", async () => {
+    let requests = 0;
+    let observed!: () => void;
+    const received = new Promise<void>(resolve => { observed = resolve; });
+    const port = await startHttpServer(request => {
+      requests++;
+      expect(request.url).toBe("/v0/governed/advance");
+      request.resume();
+      observed();
+    });
+    const paths = createPaths();
+    installSession(paths, port);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const attempt = runOperatorCommandForTesting(parseOperatorCommand(["governed-advance", "bt_operator"]), paths, 1_000);
+      const assertion = expect(attempt).rejects.toMatchObject({ code: "OPERATOR_TIMEOUT" });
+      await received;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await assertion;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(requests).toBe(1);
+    } finally { vi.useRealTimers(); }
   });
 });

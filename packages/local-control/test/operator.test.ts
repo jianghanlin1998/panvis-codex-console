@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import type { SubtaskId } from "@codex-task-console/domain";
 import { afterEach, describe, expect, it } from "vitest";
+import { BIG_TASK_ID, IntegratedOrchestrationFixture, SUBTASK_IDS } from "./integrated-orchestration-fixture.js";
 
 import { LOCAL_CONTROL_HOST } from "../src/http-server.js";
 import {
@@ -282,5 +283,163 @@ describe("thin operator command boundary", () => {
         25,
       ),
     ).rejects.toMatchObject({ code: "OPERATOR_TIMEOUT" });
+  });
+});
+
+
+const governedWire = (role = "EXECUTE") => {
+  const owner = { projectId: "prj_operator", bigTaskId: "bt_operator", subtaskId: SUBTASK_ID,
+    planRevision: 1, candidateBinding: "exact-candidate" };
+  const stamp = "2026-09-06T00:00:00.000Z";
+  const receipt = { ...owner, receiptId: "gdr_operator", operationId: "op_operator", workflowSequence: 2,
+    profile: "HIGH_RISK_FOUNDATION", writeEnabled: true, startPolicy: "WHEN_READY", manualStartAuthorityId: null,
+    worktreeOwnershipId: "wt_" + "a".repeat(32), gateEvidenceReferences: ["gate_operator"], status: "ACTIVE",
+    reservedAt: stamp, updatedAt: stamp, terminalAt: null };
+  const authorization = { ...owner, authorizationId: "gra_operator", dispatchReceiptId: receipt.receiptId,
+    workflowSequence: role === "EXECUTE" ? 2 : 3, workflowStage: role, repairCyclesUsed: 0, role,
+    contextProfile: role === "FRESH_QA" ? "FRESH_INDEPENDENT_QA" : role === "FOCUSED_RE_QA" ? "FOCUSED_RE_QA" : "STANDARD_SUBTASK_EXECUTION",
+    writeEnabled: ["EXECUTE", "HARDEN", "REPAIR"].includes(role), worktreeOwnershipId: receipt.worktreeOwnershipId,
+    candidateSha: "a".repeat(40), authorizedAt: stamp };
+  const budget = { status: "AVAILABLE", allowed: true, totalTokens: 0, warning: false,
+    extensionApplied: false, effectiveLimitTokens: 120_000 };
+  return { owner, stamp, receipt, authorization, budget,
+    response: { prepared: { kind: "ROLE_AUTHORIZED", authorization, receipt, budget },
+      execution: { success: true, failureCode: null, authorizationId: authorization.authorizationId, role,
+        executionRunId: "run_operator", outcome: role === "EXECUTE" || role === "REPAIR" ? "READY" : "PASS",
+        reconciliationKind: "TRANSITION_RECORDED" } } };
+};
+
+const governedExchange = async (args: readonly string[], body: Readonly<Record<string, unknown>>, status = 200) => {
+  const observed: { method: string | undefined; path: string | undefined; body: string }[] = [];
+  const responder = await startResponder((request, response) => {
+    const chunks: Buffer[] = [];
+    expect(request.headers.authorization).toBe(`Bearer ${TOKEN}`);
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      if (request.method === "POST") expect(request.headers["x-ctc-request"]).toBe("1");
+      observed.push({ method: request.method, path: request.url, body: Buffer.concat(chunks).toString("utf-8") });
+      respondJson(response, status, body);
+    });
+  });
+  const paths = createPaths();
+  installSession(paths, responder.port);
+  const result = await runOperatorCommandForTesting(parseOperatorCommand(args), paths, 1_000);
+  expect(observed).toHaveLength(1);
+  return { result, request: observed[0] };
+};
+
+describe("governed operator commands", () => {
+  it("maps only canonical fixed commands to the existing four routes", async () => {
+    const { owner, stamp } = governedWire();
+    const manual = { ...owner, authorityId: "manual_operator", workflowSequence: 0, authorizedAt: stamp };
+    const extension = { ...owner, authorityId: "extension_operator", grantedTokens: 40_000, authorizedAt: stamp };
+    const cases = [
+      { args: ["governed-status", owner.bigTaskId], path: `/v0/governed/big-tasks/${owner.bigTaskId}`, method: "GET", body: "",
+        response: { bigTaskId: owner.bigTaskId, status: "IN_PROGRESS", candidateBinding: null, workflows: [], budgets: [], dispatchReceipts: [] } },
+      { args: ["governed-advance", owner.bigTaskId], path: "/v0/governed/advance", method: "POST", body: JSON.stringify({ bigTaskId: owner.bigTaskId }),
+        response: { prepared: { kind: "BIG_TASK_COMPLETE", bigTaskId: owner.bigTaskId, completionReceiptId: "complete_operator" }, execution: null } },
+      { args: ["governed-manual-start", SUBTASK_ID], path: "/v0/governed/manual-start", method: "POST", body: JSON.stringify({ subtaskId: SUBTASK_ID }), response: manual },
+      { args: ["governed-budget-extension", SUBTASK_ID], path: "/v0/governed/budget-extension", method: "POST", body: JSON.stringify({ subtaskId: SUBTASK_ID }), response: extension },
+    ];
+    for (const item of cases) {
+      const result = await governedExchange(item.args, item.response);
+      expect(result.request).toEqual({ method: item.method, path: item.path, body: item.body });
+      expect(result.result).toEqual({ httpStatus: 200, body: item.response, succeeded: true });
+      for (const args of [[item.args[0]!], [...item.args, "extra"], [item.args[0]!, ` ${item.args[1]}`],
+        [item.args[0]!, ""], [item.args[0]!, "\ud800"], [item.args[0]!, item.args[1]!, "--token=synthetic"], ["--", ...item.args]]) {
+        expect(() => parseOperatorCommand(args)).toThrowError(LocalOperatorError);
+      }
+    }
+  });
+
+  it.each(["EXECUTE", "VERIFY", "HARDEN", "FRESH_QA", "REPAIR", "FOCUSED_RE_QA"])(
+    "accepts the %s result without equating dispatch and role write authority or sequence", async role => {
+      const { response, owner } = governedWire(role);
+      const { result } = await governedExchange(["governed-advance", owner.bigTaskId], response);
+      expect(result.succeeded).toBe(true);
+      expect(result.body).toEqual(response);
+    });
+
+  it.each([
+    ["BLOCKED", "PLANNING_AUTHORITY_NOT_READY"], ["BLOCKED", "DEPENDENCY_BLOCKED"],
+    ["BLOCKED", "REPOSITORY_PREFLIGHT_BLOCKED"], ["BLOCKED", "CONTEXT_PREFLIGHT_BLOCKED"],
+    ["BLOCKED", "BUDGET_BLOCKED"], ["BLOCKED", "CONCURRENCY_BLOCKED"], ["BLOCKED", "WORKTREE_BLOCKED"],
+    ["BLOCKED", "PROVIDER_ROLE_FAILED"], ["BLOCKED", "ROLE_RESULT_BLOCKED"], ["BLOCKED", "NO_ELIGIBLE_ACTION"],
+    ["HUMAN_REQUIRED", "MANUAL_START_REQUIRED"], ["HUMAN_REQUIRED", "BUDGET_EXTENSION_REQUIRED"],
+    ["HUMAN_REQUIRED", "REPAIR_REQA_EXHAUSTED"], ["HUMAN_REQUIRED", "AUTHORITY_BLOCKED"], ["HUMAN_REQUIRED", "REPLAN_REQUIRED"],
+  ])("preserves %s / %s without retrying or granting authority", async (kind, reason) => {
+    const body = { prepared: { kind, reason, subtaskId: null }, execution: null };
+    const { result } = await governedExchange(["governed-advance", "bt_operator"], body);
+    expect(result).toEqual({ httpStatus: 200, body, succeeded: false });
+  });
+
+  it("distinguishes an active role and unsuccessful reconciliation from successful progression", async () => {
+    const { response, authorization, receipt } = governedWire();
+    for (const body of [
+      { prepared: { kind: "ROLE_IN_PROGRESS", authorization, receipt, executionRunId: "run_operator", runStatus: "RUNNING" }, execution: null },
+      { ...response, execution: { ...response.execution, success: false, failureCode: "APP_SERVER_TIMEOUT", outcome: null, reconciliationKind: null } },
+      { ...response, execution: { ...response.execution, success: true, outcome: "BLOCKING_FAIL", reconciliationKind: "HUMAN_REQUIRED" } },
+      { ...response, execution: { ...response.execution, success: true, outcome: "BLOCKED", reconciliationKind: "ROLE_RESULT_BLOCKED" } },
+      { ...response, execution: { success: false, failureCode: "GOVERNED_AUTHORITY_REQUIRED", authorizationId: null, role: null, executionRunId: null, outcome: null, reconciliationKind: null } },
+    ]) {
+      const { result } = await governedExchange(["governed-advance", "bt_operator"], body);
+      expect(result.succeeded).toBe(false);
+      expect(result.body).toEqual(body);
+    }
+    const { result } = await governedExchange(["governed-advance", "bt_operator"], { error: { code: "OPERATION_CONFLICT" } }, 409);
+    expect(result.succeeded).toBe(false);
+  });
+
+  it("rejects malformed nested results and wrong task/role/source bindings", async () => {
+    const { response } = governedWire();
+    const { prepared, execution } = response;
+    const bad = [
+      { ...response, extra: true }, { ...response, execution: null },
+      { ...response, prepared: { ...prepared, kind: "AUTO_RETRY" } },
+      { ...response, prepared: { ...prepared, budget: { ...prepared.budget, totalTokens: -1 } } },
+      { ...response, prepared: { ...prepared, budget: { ...prepared.budget, effectiveLimitTokens: 200_000 } } },
+      { ...response, prepared: { ...prepared, authorization: { ...prepared.authorization, bigTaskId: "bt_other" } } },
+      { ...response, prepared: { ...prepared, receipt: { ...prepared.receipt, subtaskId: "st_other" } } },
+      { ...response, prepared: { ...prepared, receipt: { ...prepared.receipt, rawPrompt: "unexpected" } } },
+      { ...response, prepared: { ...prepared, authorization: { ...prepared.authorization, candidateSha: "invalid" } } },
+      { ...response, execution: { ...execution, role: "VERIFY" } },
+      { ...response, execution: { ...execution, authorizationId: "gra_other" } },
+      { ...response, execution: { ...execution, executionRunId: null } },
+      { ...response, execution: { ...execution, success: false, failureCode: "UNTRUSTED_ERROR" } },
+      { prepared: { kind: "BIG_TASK_COMPLETE", bigTaskId: "bt_other", completionReceiptId: "completion" }, execution: null },
+      { prepared: { kind: "BLOCKED", reason: "MANUAL_START_REQUIRED", subtaskId: null }, execution: null },
+    ];
+    for (const body of bad) {
+      await expect(governedExchange(["governed-advance", "bt_operator"], body)).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    }
+  });
+
+  it("validates actual durable workflow, manual authority and dispatch shapes without a provider turn", async () => {
+    const fixture = new IntegratedOrchestrationFixture({ profiles: ["STANDARD"], manual: true });
+    try {
+      const snapshot = fixture.governed.inspectBigTask(BIG_TASK_ID);
+      expect((await governedExchange(["governed-status", BIG_TASK_ID], snapshot)).result.succeeded).toBe(true);
+      const blocked = { prepared: fixture.governed.prepareNextRole(BIG_TASK_ID), execution: null };
+      expect(blocked.prepared.kind).toBe("HUMAN_REQUIRED");
+      expect((await governedExchange(["governed-advance", BIG_TASK_ID], blocked)).result.succeeded).toBe(false);
+      const manual = fixture.governed.authorizeManualStart(SUBTASK_IDS[0]!);
+      expect((await governedExchange(["governed-manual-start", SUBTASK_IDS[0]!], { ...manual })).result.succeeded).toBe(true);
+      const prepared = fixture.governed.prepareNextRole(BIG_TASK_ID);
+      expect(prepared.kind).toBe("ROLE_AUTHORIZED");
+      const current = fixture.governed.inspectBigTask(BIG_TASK_ID);
+      expect(current.workflows[0]!.transitions.length).toBeGreaterThan(0);
+      expect((await governedExchange(["governed-status", BIG_TASK_ID], current)).result.succeeded).toBe(true);
+      const failure = { prepared, execution: { success: false, failureCode: "GOVERNED_AUTHORITY_REQUIRED",
+        authorizationId: null, role: null, executionRunId: null, outcome: null, reconciliationKind: null } };
+      expect((await governedExchange(["governed-advance", BIG_TASK_ID], failure)).result.succeeded).toBe(false);
+      expect(fixture.counts().execution_runs).toBe(0);
+      for (const body of [
+        { ...current, workflows: [...current.workflows, current.workflows[0]] },
+        { ...current, budgets: [] },
+        { ...current, candidateBinding: "other" },
+        { ...current, dispatchReceipts: current.dispatchReceipts.map(receipt => ({ ...receipt, subtaskId: "st_other" })) },
+        { ...current, workflows: current.workflows.map(workflow => ({ ...workflow, transitions: workflow.transitions.map(transition => ({ ...transition, bigTaskId: "bt_other" })) })) },
+      ]) await expect(governedExchange(["governed-status", BIG_TASK_ID], body)).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    } finally { fixture.close(); }
   });
 });

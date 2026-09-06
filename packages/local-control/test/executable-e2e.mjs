@@ -217,6 +217,32 @@ try {
     recommendedReasoningLevel: "LOW",
     promptSeed: "private synthetic prompt",
   });
+  // A separate owned planning graph exercises the real governed HTTP routes
+  // without ever making a role eligible for a provider attempt.
+  const governedBigTaskId = "bt_executable_governed";
+  const governedSubtaskId = "st_executable_governed";
+  storage.createBigTask({
+    recordType: "BIG_TASK", id: governedBigTaskId, projectId: "prj_executable_e2e",
+    title: "Governed executable E2E", goal: "Inspect explicit manual authority",
+    rationale: "Verify operator transport", scopeIn: ["synthetic operator routes"],
+    scopeOut: ["provider turns"], acceptanceCriteria: ["manual authority is explicit"], status: "IN_PROGRESS",
+  });
+  storage.beginDurablePlanningBundle({
+    kind: "PLAN_CANDIDATE", projectId: "prj_executable_e2e", bigTaskId: governedBigTaskId, revision: 1,
+    subtasks: [{ id: governedSubtaskId, bigTaskId: governedBigTaskId, profile: "STANDARD",
+      taskContractRef: "contract/executable-governed/v1", writeEnabled: true }], dependencies: [],
+  }, [{
+    taskContractRef: "contract/executable-governed/v1", projectId: "prj_executable_e2e",
+    bigTaskId: governedBigTaskId, subtaskId: governedSubtaskId, title: "Synthetic governed task",
+    goal: "Verify operator transport", scopeIn: ["synthetic operator routes"], scopeOut: ["provider turns"],
+    acceptanceCriteria: ["manual authority is explicit"], untouchedAreas: ["real targets"],
+    promptSeed: "Synthetic fixture only", startPolicy: "MANUAL", delegationPolicy: "NONE", recommendedReasoningLevel: "LOW",
+  }]);
+  const bundle = storage.getDurablePlanningReviewBundle(governedBigTaskId);
+  storage.recordDurableReviewerDecision(governedBigTaskId, { outcome: "APPROVE", planRevision: 1, candidateBinding: bundle.candidateBinding });
+  storage.materializeDurablePlan(governedBigTaskId);
+  storage.materializeApprovedCanonicalTasks(governedBigTaskId);
+  storage.initializeDurableSubtaskWorkflows(governedBigTaskId);
   storage.close();
 
   const first = spawnDaemon();
@@ -237,6 +263,23 @@ try {
   assert.equal(lstatSync(databasePath).mode & 0o777, 0o600);
 
   assert.deepEqual(runOperator(["ping"], 0), { ok: true, schemaVersion: 1 });
+  const governedBefore = runOperator(["governed-status", governedBigTaskId], 0);
+  assert.equal(governedBefore.status, "IN_PROGRESS");
+  assert.equal(governedBefore.dispatchReceipts.length, 0);
+  const human = runOperator(["governed-advance", governedBigTaskId], 1);
+  assert.equal(human.prepared.kind, "HUMAN_REQUIRED");
+  assert.equal(human.prepared.reason, "MANUAL_START_REQUIRED");
+  assert.equal(human.execution, null);
+  const manual = runOperator(["governed-manual-start", governedSubtaskId], 0);
+  assert.equal(manual.subtaskId, governedSubtaskId);
+  const refusedExtension = runOperator(["governed-budget-extension", governedSubtaskId], 1);
+  assert.equal(refusedExtension.error.code, "OPERATION_CONFLICT");
+  const governedAfter = runOperator(["governed-status", governedBigTaskId], 0);
+  assert.equal(governedAfter.dispatchReceipts.length, 0, "manual start must not dispatch");
+  assert.equal(governedAfter.budgets[0].extensionApplied, false, "early extension must not grant budget");
+  const untouched = runOperator(["status", governedSubtaskId], 0);
+  assert.equal(untouched.durableExecution.chatThreadCount, 0, "no implicit provider execution");
+  assert.equal(untouched.worktree, null, "no implicit provisioning");
   const initial = runOperator(["status", "st_executable_e2e"], 0);
   assert.equal(initial.worktree, null);
   const provisioned = runOperator(["provision", "st_executable_e2e"], 0);
@@ -273,6 +316,7 @@ try {
     `${JSON.stringify({
       executableE2E: "PASS",
       daemonRace: "PASS",
+      governedCommands: "PASS",
       signals: ["SIGTERM", "SIGINT"],
       providerModelTurns: 0,
       realTargetWrites: 0,

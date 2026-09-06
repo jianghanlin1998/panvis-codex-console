@@ -3,9 +3,11 @@ import { request } from "node:http";
 import type { ClientRequest } from "node:http";
 
 import {
+  GOVERNED_ROLE_CODEX_EXECUTION_FAILURE_CODES,
   OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
 } from "@codex-task-console/codex-adapter";
 import {
+  BigTaskIdSchema,
   ChatThreadIdSchema,
   ChatThreadStatusSchema,
   DependencyValidationErrorCodeSchema,
@@ -16,12 +18,25 @@ import {
   ProviderModelIdSchema,
   ProviderRunIdSchema,
   ProviderThreadIdSchema,
+  ProjectIdSchema,
+  RepositoryCommitShaSchema,
   SubtaskIdSchema,
   SubtaskMaturitySchema,
   SubtaskStatusSchema,
   WorktreeOwnershipIdSchema,
 } from "@codex-task-console/domain";
-import type { SubtaskId } from "@codex-task-console/domain";
+import type { BigTaskId, SubtaskId } from "@codex-task-console/domain";
+import { GOVERNED_SUBTASK_ROLES } from "@codex-task-console/storage";
+import type {
+  AggregateSubtaskUsageBudget,
+  DurableWorkflowControlView,
+  DurableWorkflowHumanRequirement,
+  DurableWorkflowTransition,
+  GovernedBudgetExtensionAuthority,
+  GovernedDispatchReceipt,
+  GovernedManualStartAuthority,
+  GovernedRoleAuthorization,
+} from "@codex-task-console/storage";
 
 import {
   LOCAL_CONTROL_HOST,
@@ -44,13 +59,21 @@ export type OperatorCommandName =
   | "status"
   | "provision"
   | "run"
-  | "release";
+  | "release"
+  | "governed-status"
+  | "governed-advance"
+  | "governed-manual-start"
+  | "governed-budget-extension";
 
 export type OperatorCommand =
   | { readonly name: "ping" }
   | {
-      readonly name: Exclude<OperatorCommandName, "ping">;
+      readonly name: Exclude<OperatorCommandName, "ping" | "governed-status" | "governed-advance">;
       readonly subtaskId: SubtaskId;
+    }
+  | {
+      readonly name: "governed-status" | "governed-advance";
+      readonly bigTaskId: BigTaskId;
     };
 
 export interface OperatorResult {
@@ -462,6 +485,164 @@ const isErrorResponse = (value: Readonly<Record<string, unknown>>): boolean =>
   value.error.code.length <= 128 &&
   /^[A-Z][A-Z0-9_]*$/u.test(value.error.code);
 
+// These are client wire-shape checks, not workflow eligibility decisions.
+// Typed field maps keep every field of the existing storage contracts explicit.
+type WireCheck = (value: unknown) => boolean;
+type WireFields<T> = { readonly [K in keyof T]-?: WireCheck };
+const matchesFields = (
+  value: unknown, fields: Readonly<Record<string, WireCheck>>,
+): value is Readonly<Record<string, unknown>> =>
+  isRecord(value) && hasExactKeys(value, Object.keys(fields)) &&
+  Object.entries(fields).every(([key, check]) => check(value[key]));
+const wireText: WireCheck = value => typeof value === "string" && value.length > 0;
+const wireBoolean: WireCheck = value => typeof value === "boolean";
+const wireCount: WireCheck = value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const wirePositive: WireCheck = value => wireCount(value) && value !== 0;
+const oneOf = (...values: readonly unknown[]): WireCheck => value => values.includes(value);
+const nullable = (check: WireCheck): WireCheck => value => value === null || check(value);
+const arrayOf = (check: WireCheck): WireCheck => value => Array.isArray(value) && value.every(check);
+const canonical = (schema: Parameters<typeof schemaMatchesExactly>[0]): WireCheck =>
+  value => schemaMatchesExactly(schema, value);
+const wireRole = oneOf(...GOVERNED_SUBTASK_ROLES);
+const wireStage = oneOf("PLAN", "REVIEW", "MATERIALIZE", ...GOVERNED_SUBTASK_ROLES, "COMPLETE");
+const wireProfile = oneOf("LOW", "STANDARD", "HIGH_RISK_FOUNDATION");
+const ownerFields = {
+  projectId: canonical(ProjectIdSchema), bigTaskId: canonical(BigTaskIdSchema),
+  planRevision: wirePositive, candidateBinding: wireText, subtaskId: canonical(SubtaskIdSchema),
+};
+const manualAuthorityFields = {
+  ...ownerFields, authorityId: wireText, workflowSequence: wireCount, authorizedAt: isCanonicalTimestamp,
+} satisfies WireFields<GovernedManualStartAuthority>;
+const extensionAuthorityFields = {
+  ...ownerFields, authorityId: wireText, grantedTokens: oneOf(40_000), authorizedAt: isCanonicalTimestamp,
+} satisfies WireFields<GovernedBudgetExtensionAuthority>;
+const budgetFields = {
+  status: oneOf("AVAILABLE", "AVAILABLE_WARNING", "HARD_PAUSE", "ABSOLUTE_CEILING", "UNKNOWN_USAGE"),
+  allowed: wireBoolean, totalTokens: nullable(wireCount), warning: wireBoolean,
+  extensionApplied: wireBoolean, effectiveLimitTokens: oneOf(120_000, 160_000),
+} satisfies WireFields<AggregateSubtaskUsageBudget>;
+const receiptFields = {
+  ...ownerFields, receiptId: wireText, operationId: wireText, workflowSequence: wireCount,
+  profile: wireProfile, writeEnabled: wireBoolean, startPolicy: oneOf("MANUAL", "WHEN_READY"),
+  manualStartAuthorityId: nullable(wireText), worktreeOwnershipId: canonical(WorktreeOwnershipIdSchema),
+  gateEvidenceReferences: arrayOf(wireText), status: oneOf("RESERVED", "ACTIVE", "COMPLETED", "HUMAN_REQUIRED"),
+  reservedAt: isCanonicalTimestamp, updatedAt: isCanonicalTimestamp, terminalAt: nullable(isCanonicalTimestamp),
+} satisfies WireFields<GovernedDispatchReceipt>;
+const authorizationFields = {
+  ...ownerFields, authorizationId: wireText, dispatchReceiptId: wireText, workflowSequence: wireCount,
+  workflowStage: wireRole, repairCyclesUsed: oneOf(0, 1), role: wireRole,
+  contextProfile: oneOf("STANDARD_SUBTASK_EXECUTION", "FRESH_INDEPENDENT_QA", "FOCUSED_RE_QA"),
+  writeEnabled: wireBoolean, worktreeOwnershipId: canonical(WorktreeOwnershipIdSchema),
+  candidateSha: canonical(RepositoryCommitShaSchema), authorizedAt: isCanonicalTimestamp,
+} satisfies WireFields<GovernedRoleAuthorization>;
+const wireEvidenceReference: WireCheck = value => matchesFields(value, {
+  sourceType: oneOf("WORKFLOW_EVIDENCE", "IMPLEMENTATION_CHECKPOINT", "CANONICAL_MATERIALIZATION", "PERSISTED_DEPENDENCY_READINESS"),
+  sourceReference: wireText,
+});
+const transitionFields = {
+  ...ownerFields, operationId: wireText, sequence: wirePositive,
+  priorStage: wireStage, resultingStage: wireStage,
+  priorRepairCyclesUsed: oneOf(0, 1), resultingRepairCyclesUsed: oneOf(0, 1),
+  evidenceReferences: arrayOf(wireEvidenceReference), occurredAt: isCanonicalTimestamp,
+} satisfies WireFields<DurableWorkflowTransition>;
+const humanFields = {
+  ...ownerFields, subtaskId: nullable(canonical(SubtaskIdSchema)), operationId: wireText,
+  scope: oneOf("BIG_TASK", "SUBTASK"), sequence: nullable(wireCount),
+  currentStage: nullable(wireStage), requestedNextStage: nullable(wireStage), repairCyclesUsed: oneOf(null, 0, 1),
+  reason: oneOf("REPLAN_REQUIRED", "REPAIR_REQA_EXHAUSTED", "AUTHORITY_BLOCKED"),
+  evidenceReferences: arrayOf(wireEvidenceReference), sourceReference: wireText, createdAt: isCanonicalTimestamp,
+} satisfies WireFields<DurableWorkflowHumanRequirement>;
+const workflowFields = {
+  ...ownerFields, profile: wireProfile, writeEnabled: wireBoolean,
+  initialStage: oneOf("MATERIALIZE", "EXECUTE"), initializedAt: isCanonicalTimestamp,
+  currentStage: wireStage, initialRepairCyclesUsed: oneOf(0), repairCyclesUsed: oneOf(0, 1),
+  boardStatus: canonical(SubtaskStatusSchema), deliveryMaturity: canonical(SubtaskMaturitySchema),
+  transitionCount: wireCount, transitions: arrayOf(value => matchesFields(value, transitionFields)),
+  unresolvedHumanRequired: nullable(value => matchesFields(value, humanFields)),
+} satisfies WireFields<DurableWorkflowControlView>;
+const sameFields = (
+  left: Readonly<Record<string, unknown>>, right: Readonly<Record<string, unknown>>, keys: readonly string[],
+): boolean => keys.every(key => left[key] === right[key]);
+const sameOwner = (left: Readonly<Record<string, unknown>>, right: Readonly<Record<string, unknown>>): boolean =>
+  sameFields(left, right, Object.keys(ownerFields));
+
+const isGovernedInspection = (value: Readonly<Record<string, unknown>>, bigTaskId: BigTaskId): boolean => {
+  if (!matchesFields(value, {
+    bigTaskId: canonical(BigTaskIdSchema), status: oneOf("IN_PROGRESS", "DONE"),
+    candidateBinding: nullable(wireText), workflows: arrayOf(item => matchesFields(item, workflowFields)),
+    budgets: arrayOf(item => matchesFields(item, budgetFields)),
+    dispatchReceipts: arrayOf(item => matchesFields(item, receiptFields)),
+  }) || value.bigTaskId !== bigTaskId || !Array.isArray(value.workflows) ||
+    !Array.isArray(value.budgets) || !Array.isArray(value.dispatchReceipts)) return false;
+  const workflows = value.workflows as readonly Readonly<Record<string, unknown>>[];
+  if (value.budgets.length !== workflows.length || new Set(workflows.map(item => item.subtaskId)).size !== workflows.length) return false;
+  return workflows.every(workflow =>
+    workflow.bigTaskId === bigTaskId && workflow.candidateBinding === value.candidateBinding &&
+    Array.isArray(workflow.transitions) && workflow.transitionCount === workflow.transitions.length &&
+    workflow.transitions.every((transition: unknown) => isRecord(transition) && sameOwner(transition, workflow)) &&
+    (workflow.unresolvedHumanRequired === null || (isRecord(workflow.unresolvedHumanRequired) &&
+      sameFields(workflow.unresolvedHumanRequired, workflow, ["projectId", "bigTaskId", "planRevision", "candidateBinding"]) &&
+      (workflow.unresolvedHumanRequired.scope === "BIG_TASK"
+        ? workflow.unresolvedHumanRequired.subtaskId === null
+        : workflow.unresolvedHumanRequired.subtaskId === workflow.subtaskId)))) &&
+    value.dispatchReceipts.every((receipt: unknown) => isRecord(receipt) &&
+      workflows.some(workflow => sameOwner(receipt, workflow)));
+};
+
+const isGovernedAdvance = (value: Readonly<Record<string, unknown>>, bigTaskId: BigTaskId): boolean => {
+  if (!hasExactKeys(value, ["prepared", "execution"]) || !isRecord(value.prepared)) return false;
+  const prepared = value.prepared;
+  if (prepared.kind === "BLOCKED" || prepared.kind === "HUMAN_REQUIRED") {
+    return value.execution === null && matchesFields(prepared, {
+      kind: oneOf("BLOCKED", "HUMAN_REQUIRED"), subtaskId: nullable(canonical(SubtaskIdSchema)),
+      reason: prepared.kind === "BLOCKED"
+        ? oneOf("PLANNING_AUTHORITY_NOT_READY", "DEPENDENCY_BLOCKED", "REPOSITORY_PREFLIGHT_BLOCKED", "CONTEXT_PREFLIGHT_BLOCKED",
+          "BUDGET_BLOCKED", "CONCURRENCY_BLOCKED", "WORKTREE_BLOCKED", "PROVIDER_ROLE_FAILED", "ROLE_RESULT_BLOCKED", "NO_ELIGIBLE_ACTION")
+        : oneOf("MANUAL_START_REQUIRED", "BUDGET_EXTENSION_REQUIRED", "REPAIR_REQA_EXHAUSTED", "AUTHORITY_BLOCKED", "REPLAN_REQUIRED"),
+    });
+  }
+  if (prepared.kind === "BIG_TASK_COMPLETE") {
+    return value.execution === null && matchesFields(prepared, {
+      kind: oneOf("BIG_TASK_COMPLETE"), bigTaskId: canonical(BigTaskIdSchema), completionReceiptId: wireText,
+    }) && prepared.bigTaskId === bigTaskId;
+  }
+  if (prepared.kind !== "ROLE_AUTHORIZED" && prepared.kind !== "ROLE_IN_PROGRESS") return false;
+  const fields = {
+    kind: oneOf("ROLE_AUTHORIZED", "ROLE_IN_PROGRESS"),
+    authorization: (item: unknown) => matchesFields(item, authorizationFields),
+    receipt: (item: unknown) => matchesFields(item, receiptFields),
+  };
+  if (!matchesFields(prepared, prepared.kind === "ROLE_AUTHORIZED" ? {
+    ...fields, budget: (item: unknown) => matchesFields(item, budgetFields),
+  } : {
+    ...fields, executionRunId: canonical(ExecutionRunIdSchema), runStatus: oneOf("CREATED", "RUNNING"),
+  }) || !isRecord(prepared.authorization) || !isRecord(prepared.receipt)) return false;
+  const authorization = prepared.authorization;
+  if (authorization.bigTaskId !== bigTaskId || !sameOwner(authorization, prepared.receipt) ||
+    authorization.dispatchReceiptId !== prepared.receipt.receiptId || authorization.role !== authorization.workflowStage ||
+    authorization.worktreeOwnershipId !== prepared.receipt.worktreeOwnershipId) return false;
+  if (prepared.kind === "ROLE_IN_PROGRESS") return value.execution === null;
+  const execution = value.execution;
+  if (!matchesFields(execution, {
+    success: wireBoolean, failureCode: nullable(oneOf(...GOVERNED_ROLE_CODEX_EXECUTION_FAILURE_CODES)),
+    authorizationId: nullable(wireText), role: nullable(wireRole), executionRunId: nullable(canonical(ExecutionRunIdSchema)),
+    outcome: oneOf(null, "READY", "BLOCKED", "PASS", "BLOCKING_FAIL"),
+    reconciliationKind: oneOf(null, "TRANSITION_RECORDED", "HUMAN_REQUIRED", "ROLE_RESULT_BLOCKED"),
+  })) return false;
+  if ((execution.authorizationId !== null && execution.authorizationId !== authorization.authorizationId) ||
+    (execution.role !== null && execution.role !== authorization.role)) return false;
+  return execution.success
+    ? execution.failureCode === null && execution.authorizationId !== null && execution.role !== null &&
+      execution.executionRunId !== null && execution.outcome !== null && execution.reconciliationKind !== null
+    : execution.failureCode !== null;
+};
+
+const governedAdvanceSucceeded = (value: Readonly<Record<string, unknown>>): boolean =>
+  isRecord(value.prepared) && (value.prepared.kind === "BIG_TASK_COMPLETE" ||
+    (value.prepared.kind === "ROLE_AUTHORIZED" && isRecord(value.execution) && value.execution.success === true &&
+      value.execution.reconciliationKind === "TRANSITION_RECORDED" &&
+      (value.execution.outcome === "READY" || value.execution.outcome === "PASS")));
+
 const validateResponseShape = (
   command: OperatorCommand,
   status: number,
@@ -488,6 +669,14 @@ const validateResponseShape = (
       return isExecutionResponse(value);
     case "release":
       return isWorktreeResponse(value, "RELEASED");
+    case "governed-status":
+      return isGovernedInspection(value, command.bigTaskId);
+    case "governed-advance":
+      return isGovernedAdvance(value, command.bigTaskId);
+    case "governed-manual-start":
+      return matchesFields(value, manualAuthorityFields) && value.subtaskId === command.subtaskId;
+    case "governed-budget-extension":
+      return matchesFields(value, extensionAuthorityFields) && value.subtaskId === command.subtaskId;
   }
 };
 
@@ -509,11 +698,19 @@ export const parseOperatorCommand = (
   if (command === "ping" && subtaskId === undefined) {
     return Object.freeze({ name: "ping" });
   }
+  if ((command === "governed-status" || command === "governed-advance") && subtaskId !== undefined) {
+    if (!schemaMatchesExactly(BigTaskIdSchema, subtaskId)) {
+      throw new LocalOperatorError("INVALID_COMMAND");
+    }
+    return Object.freeze({ name: command, bigTaskId: BigTaskIdSchema.parse(subtaskId) });
+  }
   if (
     (command === "status" ||
       command === "provision" ||
       command === "run" ||
-      command === "release") &&
+      command === "release" ||
+      command === "governed-manual-start" ||
+      command === "governed-budget-extension") &&
     subtaskId !== undefined
   ) {
     return Object.freeze({ name: command, subtaskId: parseSubtaskId(subtaskId) });
@@ -529,6 +726,26 @@ const commandRequest = (
   readonly body: Buffer | undefined;
 } => {
   switch (command.name) {
+    case "governed-status":
+      return {
+        method: "GET",
+        path: `/v0/governed/big-tasks/${encodeURIComponent(command.bigTaskId)}`,
+        body: undefined,
+      };
+    case "governed-advance":
+      return {
+        method: "POST",
+        path: "/v0/governed/advance",
+        body: Buffer.from(JSON.stringify({ bigTaskId: command.bigTaskId }), "utf-8"),
+      };
+    case "governed-manual-start":
+    case "governed-budget-extension":
+      return {
+        method: "POST",
+        path: command.name === "governed-manual-start"
+          ? "/v0/governed/manual-start" : "/v0/governed/budget-extension",
+        body: Buffer.from(JSON.stringify({ subtaskId: command.subtaskId }), "utf-8"),
+      };
     case "ping":
       return { method: "GET", path: "/v0/ping", body: undefined };
     case "status":
@@ -701,7 +918,8 @@ const requestDaemon = async (
             Object.freeze({
               httpStatus: status,
               body: parsed,
-              succeeded: status >= 200 && status < 300 && !executionFailed,
+              succeeded: status >= 200 && status < 300 && !executionFailed &&
+                (command.name !== "governed-advance" || governedAdvanceSucceeded(parsed)),
             }),
           );
         });

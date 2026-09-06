@@ -367,24 +367,26 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8D repair verification: two consecutive canonical full runs PASS, each 139 files / 4,409 tests with normal four workers/default timeout; 183 governed storage tests, 32 mock adapter tests, 84 gate ownership/substitution cases, 190 immutable-row mutation attempts; public:check, lint, typecheck, build, and diff checks PASS
 - Step 8D Fresh Focused Re-QA: PASS WITH DOCUMENTED HANLIN WAIVER
 - Step 8D: ACCEPTED; accepted evidence target `a8b994ad1c8e2b9cfde7d755625cac93330b9af1`
-- `CTC-ORCH-8D-FQA-007` / `CTC-ORCH-8D-FRQA-001`: REPAIR_CANDIDATE_PENDING_RE_QA, not technically CLOSED. The former exact accepted timeout limitation has a bounded test-quality repair: isolated prerequisite EXECUTE preparation retains its full policy assertions; HARDEN/FRESH_QA and completion remain in the ordinary 5-second test body. No broader waiver.
+- `CTC-ORCH-8D-FQA-007` / `CTC-ORCH-8D-FRQA-001`: CLOSED by the final Step 8 Focused Re-QA on `d23d32359d3db9e1453df608143a3134553bfe70`, per the supplied 2026-09-06 acceptance handoff. No continuing timeout waiver.
 - Step 8E durable amendments: APPROVED by Hanlin on 2026-09-06; implemented internal normal turnover after authoritative completion, exact terminal RELEASED/releaseHeadSha completion provenance, and bounded exact RELEASING resume. HUMAN_REQUIRED candidates preserved; capacity 2 and autonomous write dispatch 1 unchanged.
 - `CTC-ORCH-8E-HARD-001` through `003`: CLOSED — turnover/completion, interrupted-release recovery, and same-action materialization/dispatch races repaired with exact provenance and atomic writer exclusion. [Integration evidence and Handoff](docs/STEP_8E_INTEGRATED_HARDENING.md).
-- Step 8E: HARDENED. Integrated verification: 10 files /43 tests PASS; governed storage 183/183 PASS; ownership base/hardening/generation 76/76 PASS. Public hygiene, lint, typecheck, build and diff checks PASS.
+- Step 8E hardening evidence: Integrated verification: 10 files /43 tests PASS; governed storage 183/183 PASS; ownership base/hardening/generation 76/76 PASS. Public hygiene, lint, typecheck, build and diff checks PASS.
 - Historical Step 8E canonical verification: 149 files /4,452 tests, normal four workers; 4,451 PASS /1 FAIL. Sole failure: exact waived HIGH_RISK adapter timeout, 5,478 ms against 5,000 ms, without semantic failure or new/systemic timeout. Raw suite exit 1; authorized hardening gate satisfied with the existing ACCEPTED_P2_LIMITATION, not an all-green claim.
-- Final Fresh Independent QA on `b4049d81e6ec41fc27215aaf71525e6d1dd586f9`: FAIL; acceptance-blocking P2 findings `CTC-ORCH-STEP8-FQA-001` and `CTC-ORCH-STEP8-FQA-002`.
-- `CTC-ORCH-STEP8-FQA-001`: REPAIRED / awaiting Focused Re-QA — exact first-provisioning race authority readback, including receipt/generation/candidate matching and real blocker preservation.
-- `CTC-ORCH-STEP8-FQA-002`: REPAIRED / awaiting Focused Re-QA — historical fixture separation plus an 8,000 ms policy scoped only to three serial multi-role/Subtask turnover-and-reopen integration tests; ordinary 5-second behavior remains strict.
+- Historical final Fresh Independent QA on `b4049d81e6ec41fc27215aaf71525e6d1dd586f9`: FAIL; acceptance-blocking P2 findings `CTC-ORCH-STEP8-FQA-001` and `CTC-ORCH-STEP8-FQA-002`.
+- `CTC-ORCH-STEP8-FQA-001`: CLOSED / final Focused Re-QA PASS — exact first-provisioning race authority readback, including receipt/generation/candidate matching and real blocker preservation.
+- `CTC-ORCH-STEP8-FQA-002`: CLOSED / final Focused Re-QA PASS — historical fixture separation plus an 8,000 ms policy scoped only to three serial multi-role/Subtask turnover-and-reopen integration tests; ordinary 5-second behavior remains strict.
 - Step 8 Final-QA repair verification: focused 367 tests PASS; final race/provenance regressions 37/37 PASS; canonical `pnpm test` 152 files /4,483 tests PASS in 334.33 s, normal four workers, exit 0, no waiver or rerun. Public hygiene, lint, typecheck, build and diff checks PASS; [phase timings, scope and Handoff](docs/STEP_8_FINAL_QA_REPAIR.md).
-- Overall Step 8: HARDENED / REPAIRED / NOT ACCEPTED. Step 8D remains ACCEPTED; Step 8E remains HARDENED; HARD-001 through HARD-003 remain CLOSED. Final Focused Re-QA NOT performed here.
-- Real provider/model turns for this repair: 0; real target orchestration: NONE; no deployment.
-- Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
-- Real Step 8D provider/model turns: 0; real target orchestration: NONE
-- Real Step 8E provider/model turns: 0; real target orchestration: NONE; Step 9: NOT STARTED
-- Hanlin manual QA: NOT REQUIRED
+- Overall Step 8A–8E: ACCEPTED. Final Focused Re-QA target `d23d32359d3db9e1453df608143a3134553bfe70`, tree `af0ea15edb9ef2ab73a596899ab7eb7de80db5bb`; supplied 2026-09-06 transition handoff records PASS, 152 files /4,483 tests and canonical checks PASS. Step 9A reconciles that no-write acceptance; it does not rerun or claim authorship of Step 8 QA.
+- Step 8E HARD-001 through HARD-003 remain CLOSED. Step 8 final QA/repair/Re-QA used zero real provider/model turns and no real target orchestration or deployment.
+- Step 9A Governed Operator CLI V0: IMPLEMENTED on `codex/step9a-governed-operator`; four fixed commands map to existing inspect/advance/manual-start/budget-extension routes, preserve bounded validation, and make no automatic next request.
+- Step 9A gate: Step 8 ACCEPTED. Separate comprehensive hardening and fresh independent no-write QA are still required before 9A becomes ACCEPTED for live dogfood.
+- Step 9A focused operator verification: 103 tests PASS; adjacent HTTP/service verification: 17 tests PASS. Canonical `pnpm test`: 152 files /4,511 tests PASS, normal four workers, 348.77 s, exit 0. Executable daemon/operator E2E PASS, including governed routes, explicit manual authority, refused early extension, and zero implicit dispatch/provider execution. Public hygiene, lint, typecheck, build and `git diff --check` PASS.
+- Hanlin's 2026-09-06 Step 9 direction: real end-to-end AI Update Board Big Task, with Console planning/review/decomposition/execution and escalation for product decisions or hard authority exceptions. This supersedes the earlier proposed Console-maintenance pilot target. Target state and existing work must be reconciled; no target writes or execution are authorized by Step 9A.
+- Step 9 live dogfood: NOT STARTED. Big Task intake, real Planner/Reviewer execution, bounded automatic progression, and candidate integration require a separately approved connection contract after 9A acceptance; no new authority is implied here.
+- Step 9A real provider/model turns: 0; real dogfood/AI Update Board writes: 0; no deployment or runtime activation. Hanlin manual QA: NOT REQUIRED for 9A; REQUIRED for later live workflow/product acceptance.
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Focused Re-QA of CTC-ORCH-STEP8-FQA-001 and -002, including closure of any repaired historical timeout limitation
+**Next safe task:** separately authorize bounded comprehensive Step 9A operator hardening, followed by fresh independent no-write QA. Implementation alone is not ACCEPTED. Preserve the approved four-command scope; defer live AI Update Board orchestration until its connection and write envelope are approved.
 
 ## Not operational yet
 - browser Console UI

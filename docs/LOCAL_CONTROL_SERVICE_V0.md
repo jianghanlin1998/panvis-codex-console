@@ -79,3 +79,57 @@ Unexpected process crashes can leave lock/session evidence or accepted Step 5B d
 There is no generic shell, command, SQL, filesystem-write, provider-request, or raw App Server endpoint. There is no task authoring, generic CRUD, streaming/WebSocket/SSE, orchestration, planner/reviewer/dispatcher, queue, scheduling, retry, maturity automation, or browser UI in this slice. Tests use synthetic disposable repositories only and make zero provider/model turns.
 
 Roadmap Step 7 backend dogfood completed successfully and Fresh Independent QA passed. Browser UI and orchestration remain later roadmap work; Step 8 is not authorized.
+
+
+## Step 9A governed operator commands
+
+The existing Step 8 governed HTTP/service boundary is also available through
+four fixed CLI commands. These add client access to accepted operations; they
+add no planning, lifecycle, execution or budget authority.
+
+| Command | Existing route | Effect |
+| --- | --- | --- |
+| `pnpm ctc:operator governed-status <big-task-id>` | `GET /v0/governed/big-tasks/<id>` | Inspect authoritative workflow state, budgets and dispatch receipts |
+| `pnpm ctc:operator governed-advance <big-task-id>` | `POST /v0/governed/advance` | Ask the controller for one bounded advance; execute at most its one authorized role |
+| `pnpm ctc:operator governed-manual-start <subtask-id>` | `POST /v0/governed/manual-start` | Explicitly authorize manual start; does not dispatch or run |
+| `pnpm ctc:operator governed-budget-extension <subtask-id>` | `POST /v0/governed/budget-extension` | Request the existing one-time 40K extension at its eligible pause; does not run |
+
+Each invocation makes exactly one request. It accepts only a canonical task ID;
+there are no URL, session-token, role, prompt, path, evidence, or loop options.
+Use the command forms above without inserting an extra `--`. The earlier five
+commands and their result/exit behavior remain unchanged. Earlier slice
+non-goals above describe Step 6, not the later accepted Step 8 backend.
+
+Successful responses preserve the existing route-specific JSON shape. Client
+validation checks exact fields, canonical IDs/enums, timestamps and nested
+objects, plus returned task/role/receipt identity associations. It does not
+replace the controller's eligibility decisions. The existing 64 KiB response
+cap, timeout, valid UTF-8, duplicate-key and session-token-reflection protections
+apply unchanged; oversized results fail explicitly without truncation.
+
+Exit behavior for the new commands:
+
+- `0`: a valid successful inspection, manual-start grant or budget grant; for
+  advance, either `BIG_TASK_COMPLETE` or one successful role result reconciled
+  as `TRANSITION_RECORDED` with `READY`/`PASS` outcome.
+- `1`: an HTTP/transport/validation failure, failed role execution, or an advance
+  returning `BLOCKED`, `HUMAN_REQUIRED`, `ROLE_IN_PROGRESS`, or a blocked/human
+  reconciliation. These structured observations remain in stdout when valid.
+- `2`: invalid command syntax or a noncanonical ID, before session discovery.
+
+Exit `0` for an inspection or a role advance does not itself mean the Big Task
+is DONE. Inspect its explicit status; an advance completion result includes its
+Big Task ID and completion receipt. Status/advance never grant manual-start or
+budget-extension authority implicitly. Human authority operations should be
+issued only for that explicit human decision, not as an error-recovery default.
+
+`OPERATOR_TIMEOUT` remains an indeterminate observation, not cancellation or
+permission to retry. Use `governed-status <big-task-id>` and the existing
+`status <subtask-id>` to reconcile authoritative workflow and recent run state.
+An active run must not trigger another advance. A terminal failure grants no
+replacement attempt. A later action still needs the approved task policy and
+normal deterministic gates; no operator command retries or automatically polls.
+
+This slice does not add Big Task intake, live Planner/Reviewer execution,
+automatic progression loops, cross-worktree integration or real provider
+execution. Real dogfood and its external-target write envelope remain separate.
