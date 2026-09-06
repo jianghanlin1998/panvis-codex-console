@@ -375,10 +375,11 @@ describe("governed operator commands", () => {
 
   it("distinguishes an active role and unsuccessful reconciliation from successful progression", async () => {
     const { response, authorization, receipt } = governedWire();
+    const assessment = governedWire("FOCUSED_RE_QA").response;
     for (const body of [
       { prepared: { kind: "ROLE_IN_PROGRESS", authorization, receipt, executionRunId: "run_operator", runStatus: "RUNNING" }, execution: null },
       { ...response, execution: { ...response.execution, success: false, failureCode: "APP_SERVER_TIMEOUT", outcome: null, reconciliationKind: null } },
-      { ...response, execution: { ...response.execution, success: true, outcome: "BLOCKING_FAIL", reconciliationKind: "HUMAN_REQUIRED" } },
+      { ...assessment, execution: { ...assessment.execution, success: true, outcome: "BLOCKING_FAIL", reconciliationKind: "HUMAN_REQUIRED" } },
       { ...response, execution: { ...response.execution, success: true, outcome: "BLOCKED", reconciliationKind: "ROLE_RESULT_BLOCKED" } },
       { ...response, execution: { success: false, failureCode: "GOVERNED_AUTHORITY_REQUIRED", authorizationId: null, role: null, executionRunId: null, outcome: null, reconciliationKind: null } },
     ]) {

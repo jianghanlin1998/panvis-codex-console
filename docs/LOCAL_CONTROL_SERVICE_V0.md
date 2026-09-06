@@ -133,3 +133,62 @@ normal deterministic gates; no operator command retries or automatically polls.
 This slice does not add Big Task intake, live Planner/Reviewer execution,
 automatic progression loops, cross-worktree integration or real provider
 execution. Real dogfood and its external-target write envelope remain separate.
+
+### Step 9A comprehensive hardening
+
+The operator rejects internally contradictory responses as `RESPONSE_MALFORMED`
+before exposing them as valid command output. These checks compare the existing
+wire contract and its linked fields; they do not authorize work or recreate the
+backend's workflow engine. A self-consistent response still relies on the trusted
+local service for provenance and eligibility.
+
+| Finding | Reproduced behavior | Repair and regression |
+| --- | --- | --- |
+| `CTC-OPERATOR-9A-HARD-001` | A role could report another role family's outcome, incompatible write/context metadata, or a partially populated execution identity and still pass validation | Check role/outcome family, role write/context policy against its receipt, and identity/result/reconciliation presence. Preserve legitimate failures before claim, during a provider attempt, after a result, and after reconciliation |
+| `CTC-OPERATOR-9A-HARD-002` | Budget totals, status, permission, warning and extension flags could contradict each other | Check summary coherence against the existing V1 thresholds, including unknown usage, 80K warning, 120K pause and 160K ceiling; never grant an extension locally |
+| `CTC-OPERATOR-9A-HARD-003` | DONE could accompany an empty/unfinished graph or missing completion receipts; duplicate receipts and mixed project/revision views could pass | Require completion evidence already present in the response and consistent graph ownership. Preserve IN_PROGRESS after every Subtask completes until the controller records Big Task completion |
+| `CTC-OPERATOR-9A-HARD-004` | Opaque evidence fields accepted whitespace-only text or unpaired Unicode surrogates | Apply the source's canonical text boundary, preserving legitimate Unicode including astral characters and encoded replacement characters |
+| `CTC-OPERATOR-9A-HARD-005` | Rejection of bad content-type or oversized declared content-length cleared the deadline while leaving a never-ending response connected | Every failure closes the owned request and clears its timer once. Compiled executable tests prove the client exits even when the responder never ends; no retry, timeout increase or daemon-side cancellation is implied |
+
+All five findings are closed by the bounded operator changes. The original
+26 failing reproduction cases pass after repair. Existing role-stage sequence
+and dispatch sequence may legitimately differ; a read-only assessment can also
+follow a write-enabled dispatch. Neither case is rejected merely for that
+difference. A fresh-QA blocking finding can validly record a transition into
+Repair while the CLI still returns exit 1.
+
+Verification uses independent wire fixtures plus actual storage, governed
+execution and service serialization with a mock App Server. It covers all six
+roles, LOW/STANDARD/HIGH_RISK completion, failed fresh QA, Repair, focused QA
+pass and human escalation, provider failure, active unknown usage, reopen,
+manual authority, one replayable budget grant, exact routes, fixed request
+counts, Unicode IDs, error output, and executable exit 0/1/2. Historical role
+setup uses separate ordinary-timeout hooks and fresh disposable fixtures; no
+existing assertion or timeout is relaxed.
+
+The initial oracle setup accidentally allowed the service constructor to create
+its default worktree manager. The final fixture binds that constructor to the
+real governed store with the fixture's private manager and clock. Two empty
+synthetic worktree directories from that failed setup were identified by their
+exact temporary Git origins and synthetic-only contents and removed. No real
+target or application database was changed.
+
+Focused verification: 155 operator tests plus 48 adjacent HTTP/service tests
+PASS (203 total). Canonical full-suite and executable results are recorded in
+CURRENT_STATE.md. Fresh independent no-write QA remains a separate gate;
+hardening does not make Step 9A ACCEPTED or authorize live AI Update Board work.
+
+Approved versus actual scope: the same six files only —
+`packages/local-control/src/operator.ts`, `packages/local-control/test/operator.test.ts`,
+`packages/local-control/test/operator-hardening.test.ts`,
+`packages/local-control/test/executable-e2e.mjs`, this document, and `CURRENT_STATE.md`.
+Backend APIs, storage, orchestration, provider behavior, public response shapes,
+limits and runtime activation are unchanged. No deployment or data migration is
+needed. Reverting the hardening commit restores the original Step 9A client;
+no database rollback is involved.
+
+Environment normalization: the offline preflight was READY. Approved localhost
+fixtures and ordinary Git operations used the required sandbox permissions;
+no dependency refresh, runtime replacement, test-timeout relaxation or full-suite
+recovery rerun was used. Development fixture/type/lint failures were corrected
+at their source before final verification.

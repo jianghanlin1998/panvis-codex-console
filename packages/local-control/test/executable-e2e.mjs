@@ -14,10 +14,12 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { once } from "node:events";
+import { createServer } from "node:http";
 import process from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
 
 import { openTaskDatabase } from "@codex-task-console/storage";
+import { ensureProductionStateDirectories, localControlPathsForTesting, writeSessionDescriptor } from "../dist/state.js";
 
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const daemonEntrypoint = join(
@@ -151,6 +153,49 @@ const runOperator = (arguments_, expectedStatus) => {
   ).sessionToken;
   assert.equal(result.stdout.includes(sessionToken), false, "operator leaked token");
   return parsed;
+};
+
+const runIsolatedOperator = async (arguments_, reply, expectedStatus, expectedBody, expectedError) => {
+  const mockHome = mkdtempSync(join(fixtureRoot, "operator-mock-home-"));
+  const paths = localControlPathsForTesting(join(mockHome, "Library", "Application Support", "Codex Task Console"));
+  ensureProductionStateDirectories(paths);
+  const token = "f".repeat(64);
+  let requests = 0;
+  const server = createServer((request, response) => {
+    requests++;
+    assert.equal(request.headers.authorization, `Bearer ${token}`);
+    request.resume();
+    reply(response);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  writeSessionDescriptor(paths, { schemaVersion: 1, instanceId: `inst_${"f".repeat(32)}`, pid: 88,
+    port: server.address().port, startedAt: "2026-09-07T00:00:00.000Z", sessionToken: token });
+  try {
+    const child = spawn(process.execPath, [operatorEntrypoint, ...arguments_], {
+      cwd: repositoryRoot, env: { ...childEnvironment, HOME: mockHome }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf-8").on("data", chunk => { stdout += chunk; });
+    child.stderr.setEncoding("utf-8").on("data", chunk => { stderr += chunk; });
+    const [status, signal] = await waitWithTimeout(once(child, "close"), "isolated operator exit");
+    assert.equal(signal, null);
+    assert.equal(status, expectedStatus);
+    assert.equal((stdout + stderr).includes(token), false, "operator reflected session authority");
+    assert.equal(requests, expectedStatus === 2 ? 0 : 1, "operator must never retry");
+    if (expectedError === undefined) {
+      assert.equal(stderr, "");
+      assert.deepEqual(JSON.parse(stdout), expectedBody);
+    } else {
+      assert.equal(stdout, "");
+      assert.deepEqual(JSON.parse(stderr), { error: { code: expectedError } });
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolveClosed => server.close(resolveClosed));
+  }
 };
 
 try {
@@ -312,11 +357,39 @@ try {
   assert.equal(existsSync(sessionPath), false, "SIGINT session cleanup");
   assert.equal(existsSync(lockPath), false, "SIGINT lock cleanup");
 
+  const owner = { projectId: "prj_executable", bigTaskId: "bt_executable", subtaskId: "st_executable",
+    planRevision: 1, candidateBinding: "candidate-审阅-🚀" };
+  const stamp = "2026-09-07T00:00:00.000Z";
+  const commandCases = [
+    { args: ["governed-status", owner.bigTaskId], body: { bigTaskId: owner.bigTaskId, status: "IN_PROGRESS",
+      candidateBinding: null, workflows: [], budgets: [], dispatchReceipts: [] } },
+    { args: ["governed-advance", owner.bigTaskId], body: { prepared: { kind: "BIG_TASK_COMPLETE",
+      bigTaskId: owner.bigTaskId, completionReceiptId: "completion-🚀" }, execution: null } },
+    { args: ["governed-manual-start", owner.subtaskId], body: { ...owner, authorityId: "manual-🚀", workflowSequence: 0, authorizedAt: stamp } },
+    { args: ["governed-budget-extension", owner.subtaskId], body: { ...owner, authorityId: "budget-🚀", grantedTokens: 40_000, authorizedAt: stamp } },
+  ];
+  const jsonReply = body => response => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify(body)); };
+  for (const { args, body } of commandCases) {
+    await runIsolatedOperator(args, jsonReply(body), 0, body);
+    await runIsolatedOperator([...args, "--auto"], jsonReply(body), 2, undefined, "INVALID_COMMAND");
+    await runIsolatedOperator(args, jsonReply({ ...body, unexpected: true }), 1, undefined, "RESPONSE_MALFORMED");
+  }
+  const stopped = { prepared: { kind: "BLOCKED", reason: "NO_ELIGIBLE_ACTION", subtaskId: null }, execution: null };
+  await runIsolatedOperator(["governed-advance", owner.bigTaskId], jsonReply(stopped), 1, stopped);
+  for (const header of ["content-type", "content-length"]) {
+    await runIsolatedOperator(["governed-advance", owner.bigTaskId], response => {
+      response.setHeader("content-type", header === "content-type" ? "text/plain" : "application/json");
+      if (header === "content-length") response.setHeader("content-length", "65537");
+      response.flushHeaders(); // deliberately never end: the operator must close its socket and exit
+    }, 1, undefined, header === "content-type" ? "RESPONSE_MALFORMED" : "RESPONSE_TOO_LARGE");
+  }
+
   process.stdout.write(
     `${JSON.stringify({
       executableE2E: "PASS",
       daemonRace: "PASS",
       governedCommands: "PASS",
+      governedExitAndCleanup: "PASS",
       signals: ["SIGTERM", "SIGINT"],
       providerModelTurns: 0,
       realTargetWrites: 0,

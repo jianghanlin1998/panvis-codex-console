@@ -10,6 +10,7 @@ import {
   BigTaskIdSchema,
   ChatThreadIdSchema,
   ChatThreadStatusSchema,
+  DEFAULT_V1_BUDGET_POLICY,
   DependencyValidationErrorCodeSchema,
   ExecutionProviderIdSchema,
   ExecutionRunIdSchema,
@@ -494,7 +495,11 @@ const matchesFields = (
 ): value is Readonly<Record<string, unknown>> =>
   isRecord(value) && hasExactKeys(value, Object.keys(fields)) &&
   Object.entries(fields).every(([key, check]) => check(value[key]));
-const wireText: WireCheck = value => typeof value === "string" && value.length > 0;
+const wireText: WireCheck = value => typeof value === "string" && value.length > 0 &&
+  value.trim() === value && !/[\ud800-\udfff]/u.test(value) && Array.from(value).every(character => {
+    const code = character.codePointAt(0)!;
+    return (code >= 32 || code === 9 || code === 10 || code === 13) && (code < 127 || code > 159);
+  });
 const wireBoolean: WireCheck = value => typeof value === "boolean";
 const wireCount: WireCheck = value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const wirePositive: WireCheck = value => wireCount(value) && value !== 0;
@@ -521,6 +526,22 @@ const budgetFields = {
   allowed: wireBoolean, totalTokens: nullable(wireCount), warning: wireBoolean,
   extensionApplied: wireBoolean, effectiveLimitTokens: oneOf(120_000, 160_000),
 } satisfies WireFields<AggregateSubtaskUsageBudget>;
+const isGovernedBudget: WireCheck = value => {
+  if (!matchesFields(value, budgetFields)) return false;
+  const policy = DEFAULT_V1_BUDGET_POLICY.subtask;
+  if (value.status === "UNKNOWN_USAGE") {
+    return value.allowed === false && value.totalTokens === null && value.warning === false &&
+      value.extensionApplied === false && value.effectiveLimitTokens === policy.hardPauseTokens;
+  }
+  if (typeof value.totalTokens !== "number") return false;
+  const limit = value.extensionApplied ? policy.absoluteContinuationCeilingTokens : policy.hardPauseTokens;
+  const allowed = value.totalTokens < limit;
+  const warning = value.totalTokens >= policy.warningTokens;
+  const status = value.totalTokens >= policy.absoluteContinuationCeilingTokens ? "ABSOLUTE_CEILING"
+    : !allowed ? "HARD_PAUSE" : warning ? "AVAILABLE_WARNING" : "AVAILABLE";
+  return value.effectiveLimitTokens === limit && value.allowed === allowed &&
+    value.warning === warning && value.status === status;
+};
 const receiptFields = {
   ...ownerFields, receiptId: wireText, operationId: wireText, workflowSequence: wireCount,
   profile: wireProfile, writeEnabled: wireBoolean, startPolicy: oneOf("MANUAL", "WHEN_READY"),
@@ -570,14 +591,21 @@ const isGovernedInspection = (value: Readonly<Record<string, unknown>>, bigTaskI
   if (!matchesFields(value, {
     bigTaskId: canonical(BigTaskIdSchema), status: oneOf("IN_PROGRESS", "DONE"),
     candidateBinding: nullable(wireText), workflows: arrayOf(item => matchesFields(item, workflowFields)),
-    budgets: arrayOf(item => matchesFields(item, budgetFields)),
+    budgets: arrayOf(isGovernedBudget),
     dispatchReceipts: arrayOf(item => matchesFields(item, receiptFields)),
   }) || value.bigTaskId !== bigTaskId || !Array.isArray(value.workflows) ||
     !Array.isArray(value.budgets) || !Array.isArray(value.dispatchReceipts)) return false;
   const workflows = value.workflows as readonly Readonly<Record<string, unknown>>[];
+  const receipts = value.dispatchReceipts as readonly Readonly<Record<string, unknown>>[];
   if (value.budgets.length !== workflows.length || new Set(workflows.map(item => item.subtaskId)).size !== workflows.length) return false;
+  if (["receiptId", "subtaskId"].some(key => new Set(receipts.map(item => item[key])).size !== receipts.length)) return false;
+  if (value.status === "DONE" && (value.candidateBinding === null || workflows.length === 0 ||
+    !workflows.every(workflow => workflow.currentStage === "COMPLETE" && workflow.boardStatus === "DONE" &&
+      workflow.unresolvedHumanRequired === null && receipts.some(receipt =>
+        sameOwner(receipt, workflow) && receipt.status === "COMPLETED")))) return false;
   return workflows.every(workflow =>
     workflow.bigTaskId === bigTaskId && workflow.candidateBinding === value.candidateBinding &&
+    sameFields(workflow, workflows[0]!, ["projectId", "planRevision"]) &&
     Array.isArray(workflow.transitions) && workflow.transitionCount === workflow.transitions.length &&
     workflow.transitions.every((transition: unknown) => isRecord(transition) && sameOwner(transition, workflow)) &&
     (workflow.unresolvedHumanRequired === null || (isRecord(workflow.unresolvedHumanRequired) &&
@@ -585,7 +613,7 @@ const isGovernedInspection = (value: Readonly<Record<string, unknown>>, bigTaskI
       (workflow.unresolvedHumanRequired.scope === "BIG_TASK"
         ? workflow.unresolvedHumanRequired.subtaskId === null
         : workflow.unresolvedHumanRequired.subtaskId === workflow.subtaskId)))) &&
-    value.dispatchReceipts.every((receipt: unknown) => isRecord(receipt) &&
+    receipts.every(receipt =>
       workflows.some(workflow => sameOwner(receipt, workflow)));
 };
 
@@ -613,13 +641,18 @@ const isGovernedAdvance = (value: Readonly<Record<string, unknown>>, bigTaskId: 
     receipt: (item: unknown) => matchesFields(item, receiptFields),
   };
   if (!matchesFields(prepared, prepared.kind === "ROLE_AUTHORIZED" ? {
-    ...fields, budget: (item: unknown) => matchesFields(item, budgetFields),
+    ...fields, budget: isGovernedBudget,
   } : {
     ...fields, executionRunId: canonical(ExecutionRunIdSchema), runStatus: oneOf("CREATED", "RUNNING"),
   }) || !isRecord(prepared.authorization) || !isRecord(prepared.receipt)) return false;
   const authorization = prepared.authorization;
+  const writes = ["EXECUTE", "HARDEN", "REPAIR"].includes(String(authorization.role));
+  const contextProfile = authorization.role === "FRESH_QA" ? "FRESH_INDEPENDENT_QA"
+    : authorization.role === "FOCUSED_RE_QA" ? "FOCUSED_RE_QA" : "STANDARD_SUBTASK_EXECUTION";
   if (authorization.bigTaskId !== bigTaskId || !sameOwner(authorization, prepared.receipt) ||
     authorization.dispatchReceiptId !== prepared.receipt.receiptId || authorization.role !== authorization.workflowStage ||
+    authorization.writeEnabled !== (writes && prepared.receipt.writeEnabled === true) ||
+    authorization.contextProfile !== contextProfile ||
     authorization.worktreeOwnershipId !== prepared.receipt.worktreeOwnershipId) return false;
   if (prepared.kind === "ROLE_IN_PROGRESS") return value.execution === null;
   const execution = value.execution;
@@ -631,6 +664,13 @@ const isGovernedAdvance = (value: Readonly<Record<string, unknown>>, bigTaskId: 
   })) return false;
   if ((execution.authorizationId !== null && execution.authorizationId !== authorization.authorizationId) ||
     (execution.role !== null && execution.role !== authorization.role)) return false;
+  const hasIdentity = execution.authorizationId !== null;
+  if ((execution.role !== null) !== hasIdentity || (execution.executionRunId !== null) !== hasIdentity ||
+    (execution.outcome !== null && !hasIdentity) ||
+    (execution.reconciliationKind !== null && execution.outcome === null)) return false;
+  const producesImplementation = authorization.role === "EXECUTE" || authorization.role === "REPAIR";
+  if (execution.outcome !== null && !(producesImplementation ? ["READY", "BLOCKED"] : ["PASS", "BLOCKING_FAIL"])
+    .includes(String(execution.outcome))) return false;
   return execution.success
     ? execution.failureCode === null && execution.authorizationId !== null && execution.role !== null &&
       execution.executionRunId !== null && execution.outcome !== null && execution.reconciliationKind !== null
@@ -794,11 +834,11 @@ const requestDaemon = async (
         if (timing.deadline !== undefined) {
           clearTimeout(timing.deadline);
         }
+        timing.clientRequest?.destroy();
         reject(error);
       }
     };
     timing.deadline = setTimeout(() => {
-      timing.clientRequest?.destroy();
       fail(new LocalOperatorError("OPERATOR_TIMEOUT"));
     }, timeoutMilliseconds);
     timing.deadline.unref();
@@ -831,7 +871,6 @@ const requestDaemon = async (
             contentTypes[0] ?? "",
           )
         ) {
-          response.resume();
           fail(new LocalOperatorError("RESPONSE_MALFORMED"));
           return;
         }
@@ -841,7 +880,6 @@ const requestDaemon = async (
           (/^(?:0|[1-9][0-9]*)$/u.test(contentLength) === false ||
             Number(contentLength) > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES)
         ) {
-          response.resume();
           fail(
             new LocalOperatorError(
               Number(contentLength) > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES
@@ -857,7 +895,6 @@ const requestDaemon = async (
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           bytes += buffer.byteLength;
           if (bytes > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES) {
-            outboundRequest.destroy();
             fail(new LocalOperatorError("RESPONSE_TOO_LARGE"));
             return;
           }

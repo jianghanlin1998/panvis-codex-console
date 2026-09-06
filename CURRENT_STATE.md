@@ -1,11 +1,11 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-09-06
+Last reconciled: 2026-09-07
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
 - Repo: `jianghanlin1998/panvis-codex-console`
-- Branch: `main`
+- Branch: `codex/step9a-governed-operator` (unmerged Step 9A work)
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 - Public-repository hygiene guard: enabled
 - Development verification: offline fail-closed preflight; explicit stable pnpm settings; full suite bounded to four workers
@@ -331,7 +331,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 7 blocker-repair verification: focused 253 tests PASS; full suite 107 files / 3,519 tests PASS; lint/typecheck/build PASS
 - Step 7 historical operator invocation recovery remains closed and is not counted again in the integrated sweep
 - Hanlin manual UI QA: PASS — explicit human product/workflow acceptance of implementation `9117e2f19fd7a5e9b93640f1bf6735acdac6c4f9`
-- Roadmap Step 8: in progress; overall step NOT COMPLETE
+- Roadmap Step 8: ACCEPTED; final exact-SHA acceptance evidence is recorded below.
 - Repository Development Environment Preflight V0: PASS
 - Step 8A Deterministic Orchestration Kernel V0: ACCEPTED — evidence `addc44200662cdddd69095065bee27eaeac43ddb`
 - Step 8B1 Durable Planning / Review / Materialized-Graph Authority: ACCEPTED — evidence `1b7714ddee0b79671c67972e132b61ec110fa12a`
@@ -378,15 +378,16 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8 Final-QA repair verification: focused 367 tests PASS; final race/provenance regressions 37/37 PASS; canonical `pnpm test` 152 files /4,483 tests PASS in 334.33 s, normal four workers, exit 0, no waiver or rerun. Public hygiene, lint, typecheck, build and diff checks PASS; [phase timings, scope and Handoff](docs/STEP_8_FINAL_QA_REPAIR.md).
 - Overall Step 8A–8E: ACCEPTED. Final Focused Re-QA target `d23d32359d3db9e1453df608143a3134553bfe70`, tree `af0ea15edb9ef2ab73a596899ab7eb7de80db5bb`; supplied 2026-09-06 transition handoff records PASS, 152 files /4,483 tests and canonical checks PASS. Step 9A reconciles that no-write acceptance; it does not rerun or claim authorship of Step 8 QA.
 - Step 8E HARD-001 through HARD-003 remain CLOSED. Step 8 final QA/repair/Re-QA used zero real provider/model turns and no real target orchestration or deployment.
-- Step 9A Governed Operator CLI V0: IMPLEMENTED on `codex/step9a-governed-operator`; four fixed commands map to existing inspect/advance/manual-start/budget-extension routes, preserve bounded validation, and make no automatic next request.
-- Step 9A gate: Step 8 ACCEPTED. Separate comprehensive hardening and fresh independent no-write QA are still required before 9A becomes ACCEPTED for live dogfood.
-- Step 9A focused operator verification: 103 tests PASS; adjacent HTTP/service verification: 17 tests PASS. Canonical `pnpm test`: 152 files /4,511 tests PASS, normal four workers, 348.77 s, exit 0. Executable daemon/operator E2E PASS, including governed routes, explicit manual authority, refused early extension, and zero implicit dispatch/provider execution. Public hygiene, lint, typecheck, build and `git diff --check` PASS.
+- Step 9A Governed Operator CLI V0: HARDENED on `codex/step9a-governed-operator`; four fixed commands map to existing inspect/advance/manual-start/budget-extension routes and make no automatic next request. Implementation base: `2fc151b1b6ff02883c0756327ec1bd297198a98d`.
+- Step 9A gate: Step 8 ACCEPTED; comprehensive hardening PASS. Fresh independent no-write QA is NOT YET RUN; 9A is not yet ACCEPTED for live dogfood.
+- Step 9A hardening findings `CTC-OPERATOR-9A-HARD-001` through `005`: CLOSED — contradictory role/result, budget and completion summaries, malformed evidence text, and stalled-response connection cleanup. [Bounded findings, source-backed positive oracles and test isolation](docs/LOCAL_CONTROL_SERVICE_V0.md#step-9a-comprehensive-hardening).
+- Step 9A hardening verification: 155 operator tests and 48 adjacent HTTP/service tests PASS (203 total). Canonical `pnpm test`: 152 files /4,563 tests PASS, normal four workers, 332.33 s, exit 0, no waiver or full-suite rerun. Executable daemon/operator E2E PASS, including governed routes, exit 0/1/2, explicit grants, no retries, and process exit after stalled invalid headers. Public hygiene, lint, typecheck, build and `git diff --check` PASS.
 - Hanlin's 2026-09-06 Step 9 direction: real end-to-end AI Update Board Big Task, with Console planning/review/decomposition/execution and escalation for product decisions or hard authority exceptions. This supersedes the earlier proposed Console-maintenance pilot target. Target state and existing work must be reconciled; no target writes or execution are authorized by Step 9A.
 - Step 9 live dogfood: NOT STARTED. Big Task intake, real Planner/Reviewer execution, bounded automatic progression, and candidate integration require a separately approved connection contract after 9A acceptance; no new authority is implied here.
 - Step 9A real provider/model turns: 0; real dogfood/AI Update Board writes: 0; no deployment or runtime activation. Hanlin manual QA: NOT REQUIRED for 9A; REQUIRED for later live workflow/product acceptance.
 
 ## Next safe task
-**Next safe task:** separately authorize bounded comprehensive Step 9A operator hardening, followed by fresh independent no-write QA. Implementation alone is not ACCEPTED. Preserve the approved four-command scope; defer live AI Update Board orchestration until its connection and write envelope are approved.
+**Next safe task:** separately authorize fresh independent no-write QA against the exact Step 9A hardening commit. Hardening alone is not ACCEPTED. Preserve the approved four-command scope; defer live AI Update Board orchestration until its connection and write envelope are approved. Hanlin reviews plain-language actions directly, approves, and receives a concise result; no ChatGPT intermediary or copy-paste prompt is required.
 
 ## Not operational yet
 - browser Console UI

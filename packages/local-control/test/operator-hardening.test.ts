@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { ClientRequest, createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import type { AddressInfo } from "node:net";
@@ -18,7 +18,8 @@ import {
   SubtaskStatusSchema,
 } from "@codex-task-console/domain";
 import type { SubtaskId } from "@codex-task-console/domain";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as storageApi from "@codex-task-console/storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LOCAL_CONTROL_HOST } from "../src/http-server.js";
 import {
@@ -31,6 +32,8 @@ import {
   writeSessionDescriptor,
 } from "../src/state.js";
 import type { LocalControlPaths } from "../src/state.js";
+import { createLocalControlServiceForTesting } from "../src/service.js";
+import { BIG_TASK_ID, IntegratedOrchestrationFixture, SUBTASK_IDS } from "./integrated-orchestration-fixture.js";
 
 const TOKEN = "e".repeat(64);
 const SUBTASK_ID = "st_operator_hardening" as SubtaskId;
@@ -707,5 +710,306 @@ describe("governed operator response boundaries", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(requests).toBe(1);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+
+// Independent wire fixtures use the published response contracts, not the
+// operator's validators or the implementation test's response builder.
+const hardeningAdvance = (role = "VERIFY") => {
+  const owner = { projectId: "prj_operator_hard", bigTaskId: "bt_operator_hard", subtaskId: SUBTASK_ID,
+    candidateBinding: "reviewed-candidate", planRevision: 1 };
+  const timestamp = "2026-09-07T00:00:00.000Z";
+  const receipt = { ...owner, receiptId: "gdr_hard", operationId: "op_hard", workflowSequence: 2,
+    profile: "STANDARD", writeEnabled: true, startPolicy: "WHEN_READY", manualStartAuthorityId: null,
+    worktreeOwnershipId: `wt_${"a".repeat(32)}`, gateEvidenceReferences: ["gate_hard"],
+    status: "ACTIVE", reservedAt: timestamp, updatedAt: timestamp, terminalAt: null };
+  const authorization = { ...owner, authorizationId: "gra_hard", dispatchReceiptId: receipt.receiptId,
+    workflowSequence: 3, workflowStage: role, repairCyclesUsed: 0, role,
+    contextProfile: role === "FRESH_QA" ? "FRESH_INDEPENDENT_QA" : role === "FOCUSED_RE_QA" ? "FOCUSED_RE_QA" : "STANDARD_SUBTASK_EXECUTION",
+    writeEnabled: ["EXECUTE", "HARDEN", "REPAIR"].includes(role), worktreeOwnershipId: receipt.worktreeOwnershipId,
+    candidateSha: "b".repeat(40), authorizedAt: timestamp };
+  const budget = { status: "AVAILABLE", allowed: true, totalTokens: 1_000, warning: false, extensionApplied: false,
+    effectiveLimitTokens: 120_000 };
+  return { prepared: { kind: "ROLE_AUTHORIZED", authorization, receipt, budget },
+    execution: { success: true, failureCode: null, authorizationId: authorization.authorizationId, role,
+      executionRunId: "run_hard", outcome: role === "EXECUTE" || role === "REPAIR" ? "READY" : "PASS",
+      reconciliationKind: "TRANSITION_RECORDED" } };
+};
+const hardeningStatus = () => {
+  const { prepared: { authorization, budget } } = hardeningAdvance();
+  const { projectId, bigTaskId, subtaskId, planRevision, candidateBinding } = authorization;
+  return { bigTaskId, status: "IN_PROGRESS", candidateBinding,
+    workflows: [{ projectId, bigTaskId, subtaskId, planRevision, candidateBinding, profile: "STANDARD",
+      writeEnabled: true, initialStage: "MATERIALIZE", initializedAt: authorization.authorizedAt,
+      currentStage: "MATERIALIZE", initialRepairCyclesUsed: 0, repairCyclesUsed: 0,
+      boardStatus: "TODO", deliveryMaturity: "NOT_STARTED", transitionCount: 0, transitions: [], unresolvedHumanRequired: null }],
+    budgets: [budget], dispatchReceipts: [] as ReturnType<typeof hardeningAdvance>["prepared"]["receipt"][] };
+};
+
+describe("Step 9A comprehensive contradiction and cleanup regressions", () => {
+  it.each(["EXECUTE", "REPAIR", "VERIFY", "HARDEN", "FRESH_QA", "FOCUSED_RE_QA"])(
+    "rejects an outcome belonging to a different role family: %s", async role => {
+      const body = hardeningAdvance(role);
+      expect((await runResponse(["governed-advance", "bt_operator_hard"], JSON.stringify(body))).succeeded).toBe(true);
+      body.execution.outcome = role === "EXECUTE" || role === "REPAIR" ? "PASS" : "READY";
+      await expect(runResponse(["governed-advance", "bt_operator_hard"], JSON.stringify(body)))
+        .rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    });
+
+  it.each(["write policy", "context profile", "partial provider identity", "result without run", "reconciliation without result"])(
+    "rejects contradictory governed execution metadata: %s", async variant => {
+      const body = hardeningAdvance();
+      const execution: Record<string, unknown> = { ...body.execution };
+      if (variant === "write policy") body.prepared.authorization.writeEnabled = true;
+      if (variant === "context profile") body.prepared.authorization.contextProfile = "FOCUSED_RE_QA";
+      if (variant === "partial provider identity") Object.assign(execution, { success: false, failureCode: "APP_SERVER_TIMEOUT", authorizationId: null });
+      if (variant === "result without run") Object.assign(execution, { success: false, failureCode: "GOVERNED_AUTHORITY_REQUIRED", executionRunId: null });
+      if (variant === "reconciliation without result") Object.assign(execution, { success: false, failureCode: "GOVERNED_AUTHORITY_REQUIRED", outcome: null });
+      await expect(runResponse(["governed-advance", "bt_operator_hard"], JSON.stringify({ ...body, execution })))
+        .rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    });
+
+  it.each(["allowed", "status", "warning", "extension", "unknown"])("rejects contradictory budget %s", async variant => {
+    const body = hardeningStatus();
+    const budget: Record<string, unknown> = { ...body.budgets[0] };
+    if (variant === "allowed") budget.allowed = false;
+    if (variant === "status") budget.status = "HARD_PAUSE";
+    if (variant === "warning") budget.warning = true;
+    if (variant === "extension") budget.extensionApplied = true;
+    if (variant === "unknown") budget.totalTokens = null;
+    await expect(runResponse(["governed-status", "bt_operator_hard"], JSON.stringify({ ...body, budgets: [budget] })))
+      .rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+  });
+
+  it.each(["unfinished", "no graph", "no receipt", "duplicate receipt", "foreign project"])(
+    "rejects contradictory inspection/completion evidence: %s", async variant => {
+      const body = hardeningStatus();
+      if (variant === "unfinished") body.status = "DONE";
+      if (variant === "no graph") Object.assign(body, { candidateBinding: null, workflows: [], budgets: [], status: "DONE" });
+      if (variant === "no receipt") {
+        body.status = "DONE";
+        Object.assign(body.workflows[0]!, { currentStage: "COMPLETE", boardStatus: "DONE", deliveryMaturity: "ACCEPTED" });
+      }
+      if (variant === "duplicate receipt") {
+        const receipt = hardeningAdvance().prepared.receipt;
+        body.dispatchReceipts = [receipt, receipt];
+      }
+      if (variant === "foreign project") body.workflows.push({ ...body.workflows[0]!, projectId: "prj_foreign", subtaskId: "st_foreign" as SubtaskId });
+      if (variant === "foreign project") body.budgets.push({ ...body.budgets[0]! });
+      await expect(runResponse(["governed-status", "bt_operator_hard"], JSON.stringify(body)))
+        .rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+    });
+
+  it.each([" ", "\ud800", "\udfff"])("rejects malformed opaque evidence text %j", async text => {
+    const body = { prepared: { kind: "BIG_TASK_COMPLETE", bigTaskId: "bt_operator_hard", completionReceiptId: text }, execution: null };
+    await expect(runResponse(["governed-advance", "bt_operator_hard"], JSON.stringify(body)))
+      .rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
+  });
+
+  it.each(["content-type", "content-length"])("closes a stalled response after invalid %s headers", async variant => {
+    let requests = 0;
+    const port = await startHttpServer((request, response) => {
+      requests++;
+      request.resume();
+      response.writeHead(200, variant === "content-type"
+        ? { "content-type": "text/plain" }
+        : { "content-type": "application/json", "content-length": "65537" });
+      response.flushHeaders(); // deliberately never ends; the client must close it
+    });
+    const paths = createPaths(); installSession(paths, port);
+    const destroy = vi.spyOn(ClientRequest.prototype, "destroy");
+    try {
+      await expect(runOperatorCommandForTesting(parseOperatorCommand(["governed-advance", "bt_operator_hard"]), paths, 1_000))
+        .rejects.toMatchObject({ code: variant === "content-type" ? "RESPONSE_MALFORMED" : "RESPONSE_TOO_LARGE" });
+      expect(requests).toBe(1);
+      expect(destroy).toHaveBeenCalled();
+    } finally { destroy.mockRestore(); }
+  });
+});
+
+// Real storage + adapter fixtures are the positive oracle. Only the App Server
+// is synthetic; the service produces the wire response with its own serializer.
+type FixtureRole = Parameters<IntegratedOrchestrationFixture["runRole"]>[1];
+const actualService = (fixture: IntegratedOrchestrationFixture, role: FixtureRole,
+  options: Parameters<IntegratedOrchestrationFixture["runRole"]>[2] = {}) => {
+  // The service normally creates its own worktree manager. Bind its constructor
+  // to this real governed store so all clocks and filesystem roots stay inside
+  // the disposable fixture. No governed methods or response values are mocked.
+  const factory = vi.spyOn(storageApi, "createGovernedExecutionStore").mockImplementation(storage => {
+    expect(storage).toBe(fixture.storage);
+    return fixture.governed;
+  });
+  try { return createLocalControlServiceForTesting(fixture.storage, fixture.worktrees,
+    () => { throw new Error("The legacy execution route must not be called."); },
+    async (governed, authorizationId) => {
+      const prepared = governed.prepareNextRole(BIG_TASK_ID);
+      expect(prepared).toMatchObject({ kind: "ROLE_AUTHORIZED", authorization: { authorizationId, role } });
+      return fixture.runRole(SUBTASK_IDS[0]!, role, options);
+    }); } finally { factory.mockRestore(); }
+};
+const roundTrip = async (command: string, id: string, body: object, succeeded: boolean) => {
+  const result = await runResponse([command, id], JSON.stringify(body));
+  expect(result).toEqual({ body, httpStatus: 200, succeeded });
+};
+
+const actualCases: readonly {
+  label: string; profile: "LOW" | "STANDARD" | "HIGH_RISK_FOUNDATION";
+  before: readonly FixtureRole[]; role: FixtureRole; scenario?: string; fails?: boolean; complete?: boolean;
+}[] = [
+  { label: "LOW completion", profile: "LOW", before: ["EXECUTE"], role: "VERIFY", complete: true },
+  { label: "STANDARD completion", profile: "STANDARD", before: ["EXECUTE"], role: "VERIFY", complete: true },
+  { label: "execution with active observation", profile: "HIGH_RISK_FOUNDATION", before: [], role: "EXECUTE" },
+  { label: "hardening", profile: "HIGH_RISK_FOUNDATION", before: ["EXECUTE"], role: "HARDEN" },
+  { label: "fresh QA completion", profile: "HIGH_RISK_FOUNDATION", before: ["EXECUTE", "HARDEN"], role: "FRESH_QA", complete: true },
+  { label: "fresh QA requests repair", profile: "HIGH_RISK_FOUNDATION", before: ["EXECUTE", "HARDEN"], role: "FRESH_QA", scenario: "two-blockers" },
+  { label: "repair", profile: "HIGH_RISK_FOUNDATION", before: ["EXECUTE", "HARDEN", "FRESH_QA"], role: "REPAIR" },
+  { label: "focused QA completion", profile: "HIGH_RISK_FOUNDATION", before: ["EXECUTE", "HARDEN", "FRESH_QA", "REPAIR"], role: "FOCUSED_RE_QA", complete: true },
+  { label: "focused QA requires human", profile: "HIGH_RISK_FOUNDATION", before: ["EXECUTE", "HARDEN", "FRESH_QA", "REPAIR"], role: "FOCUSED_RE_QA", scenario: "two-blockers" },
+  { label: "provider failure", profile: "HIGH_RISK_FOUNDATION", before: [], role: "EXECUTE", scenario: "process-exit", fails: true },
+];
+for (const item of actualCases) describe(`Step 9A backend oracle: ${item.label}`, () => {
+  let fixture: IntegratedOrchestrationFixture;
+  beforeEach(() => { fixture = new IntegratedOrchestrationFixture({ profiles: [item.profile] }); });
+  // Each setup phase keeps the ordinary hook timeout, independent of the number
+  // of historical roles needed to reach the response being tested.
+  for (const role of item.before) beforeEach(async () => {
+    await fixture.runRole(SUBTASK_IDS[0]!, role, role === "FRESH_QA" ? { scenario: "two-blockers" } : {});
+    fixture.reopen();
+  });
+  afterEach(() => { fixture?.close(); });
+  it("preserves actual service output, durable ownership and restart state", async () => {
+    const active: object[] = [];
+    const service = actualService(fixture, item.role, {
+      ...(item.scenario === undefined ? {} : { scenario: item.scenario }),
+      ...(item.fails ? { success: false } : {}),
+      ...(item.label !== "execution with active observation" ? {} : { onTurn: () => {
+        active.push({ prepared: fixture.governed.prepareNextRole(BIG_TASK_ID), execution: null });
+        active.push(fixture.governed.inspectBigTask(BIG_TASK_ID));
+      } }),
+    });
+    const before = fixture.counts();
+    const response = await service.advanceGovernedBigTask!(BIG_TASK_ID);
+    await roundTrip("governed-advance", BIG_TASK_ID, response, !item.fails && item.scenario !== "two-blockers");
+    expect(fixture.counts().execution_runs).toBe(before.execution_runs! + 1);
+    if (active.length !== 0) {
+      // With no terminal usage yet, the source's budget guard takes precedence
+      // over its ROLE_IN_PROGRESS response. Preserve that conservative result.
+      expect(active[0]).toMatchObject({ prepared: { kind: "BLOCKED", reason: "BUDGET_BLOCKED" }, execution: null });
+      expect(active[1]).toMatchObject({ budgets: [{ status: "UNKNOWN_USAGE", allowed: false }] });
+      await roundTrip("governed-advance", BIG_TASK_ID, active[0]!, false);
+      await roundTrip("governed-status", BIG_TASK_ID, active[1]!, true);
+    }
+    const snapshot = fixture.governed.inspectBigTask(BIG_TASK_ID);
+    await roundTrip("governed-status", BIG_TASK_ID, snapshot, true);
+    const counts = fixture.counts();
+    fixture.reopen();
+    expect(fixture.governed.inspectBigTask(BIG_TASK_ID)).toEqual(snapshot);
+    await roundTrip("governed-status", BIG_TASK_ID, fixture.governed.inspectBigTask(BIG_TASK_ID), true);
+    expect(fixture.counts()).toEqual(counts);
+    if (item.complete) {
+      // Inspection cannot itself finalize an otherwise complete graph.
+      expect(snapshot.status).toBe("IN_PROGRESS");
+      const prepared = fixture.governed.prepareNextRole(BIG_TASK_ID);
+      expect(prepared.kind).toBe("BIG_TASK_COMPLETE");
+      await roundTrip("governed-advance", BIG_TASK_ID, { prepared, execution: null }, true);
+      fixture.reopen();
+      const done = fixture.governed.inspectBigTask(BIG_TASK_ID);
+      expect(done.status).toBe("DONE");
+      await roundTrip("governed-status", BIG_TASK_ID, done, true);
+    }
+    if (item.fails || (item.role === "FOCUSED_RE_QA" && item.scenario)) {
+      const prepared = fixture.governed.prepareNextRole(BIG_TASK_ID);
+      expect(prepared).toMatchObject(item.fails
+        ? { kind: "BLOCKED", reason: "PROVIDER_ROLE_FAILED" }
+        : { kind: "HUMAN_REQUIRED", reason: "REPAIR_REQA_EXHAUSTED" });
+      await roundTrip("governed-advance", BIG_TASK_ID, { prepared, execution: null }, false);
+      expect(fixture.counts()).toEqual(counts);
+    }
+  });
+});
+
+describe("Step 9A actual budget extension oracle", () => {
+  let fixture: IntegratedOrchestrationFixture;
+  beforeEach(() => { fixture = new IntegratedOrchestrationFixture({ profiles: ["HIGH_RISK_FOUNDATION"] }); });
+  beforeEach(async () => { await fixture.runRole(SUBTASK_IDS[0]!, "EXECUTE", { tokens: 120_000 }); fixture.reopen(); });
+  afterEach(() => { fixture?.close(); });
+  it("preserves pause, one replayable 40K grant and the absolute ceiling without extra execution", async () => {
+    const id = SUBTASK_IDS[0]!;
+    const paused = fixture.governed.inspectBigTask(BIG_TASK_ID);
+    expect(paused.budgets[0]).toMatchObject({ status: "HARD_PAUSE", allowed: false, totalTokens: 120_000 });
+    await roundTrip("governed-status", BIG_TASK_ID, paused, true);
+    const blocked = await actualService(fixture, "HARDEN").advanceGovernedBigTask!(BIG_TASK_ID);
+    expect(blocked).toMatchObject({ prepared: { reason: "BUDGET_EXTENSION_REQUIRED" }, execution: null });
+    await roundTrip("governed-advance", BIG_TASK_ID, blocked, false);
+    const grant = await actualService(fixture, "HARDEN").authorizeGovernedBudgetExtension!(id);
+    expect(grant).toMatchObject({ grantedTokens: 40_000 });
+    await roundTrip("governed-budget-extension", id, grant, true);
+    fixture.reopen();
+    const extended = fixture.governed.inspectBigTask(BIG_TASK_ID);
+    expect(extended.budgets[0]).toMatchObject({ status: "AVAILABLE_WARNING", allowed: true, effectiveLimitTokens: 160_000 });
+    await roundTrip("governed-status", BIG_TASK_ID, extended, true);
+    const response = await actualService(fixture, "HARDEN", { tokens: 40_000 }).advanceGovernedBigTask!(BIG_TASK_ID);
+    await roundTrip("governed-advance", BIG_TASK_ID, response, true);
+    fixture.reopen();
+    const ceiling = fixture.governed.inspectBigTask(BIG_TASK_ID);
+    expect(ceiling.budgets[0]).toMatchObject({ status: "ABSOLUTE_CEILING", totalTokens: 160_000, allowed: false });
+    await roundTrip("governed-status", BIG_TASK_ID, ceiling, true);
+    const before = fixture.counts();
+    const replay = await actualService(fixture, "FRESH_QA").authorizeGovernedBudgetExtension!(id);
+    expect(replay).toEqual(grant);
+    await roundTrip("governed-budget-extension", id, replay, true);
+    const terminal = await actualService(fixture, "FRESH_QA").advanceGovernedBigTask!(BIG_TASK_ID);
+    expect(terminal).toMatchObject({ prepared: { kind: "BLOCKED", reason: "BUDGET_BLOCKED" }, execution: null });
+    await roundTrip("governed-advance", BIG_TASK_ID, terminal, false);
+    expect(fixture.counts()).toEqual(before);
+    expect(before.execution_runs).toBe(2);
+  });
+});
+
+describe("Step 9A preserved boundary states", () => {
+  it.each([
+    [0, false, "AVAILABLE", true, false, 120_000],
+    [79_999, false, "AVAILABLE", true, false, 120_000],
+    [80_000, false, "AVAILABLE_WARNING", true, true, 120_000],
+    [119_999, false, "AVAILABLE_WARNING", true, true, 120_000],
+    [120_000, false, "HARD_PAUSE", false, true, 120_000],
+    [120_000, true, "AVAILABLE_WARNING", true, true, 160_000],
+    [159_999, true, "AVAILABLE_WARNING", true, true, 160_000],
+    [160_000, true, "ABSOLUTE_CEILING", false, true, 160_000],
+    [160_001, false, "ABSOLUTE_CEILING", false, true, 120_000],
+    [null, false, "UNKNOWN_USAGE", false, false, 120_000],
+  ])("preserves the explicit budget boundary %j / extension %j", async (totalTokens, extensionApplied, status, allowed, warning, effectiveLimitTokens) => {
+    const body = { ...hardeningStatus(), budgets: [{ totalTokens, extensionApplied, status, allowed, warning, effectiveLimitTokens }] };
+    await roundTrip("governed-status", "bt_operator_hard", body, true);
+  });
+
+  it.each(["before claim", "during provider", "after result", "after reconciliation"])(
+    "preserves a legitimate failure %s without inventing successful progression", async phase => {
+      const body = hardeningAdvance();
+      const execution: Record<string, unknown> = { ...body.execution, success: false, failureCode: "GOVERNED_AUTHORITY_REQUIRED" };
+      if (phase === "before claim") Object.assign(execution, { authorizationId: null, role: null, executionRunId: null });
+      if (phase === "before claim" || phase === "during provider") execution.outcome = null;
+      if (phase !== "after reconciliation") execution.reconciliationKind = null;
+      await roundTrip("governed-advance", "bt_operator_hard", { ...body, execution }, false);
+    });
+
+  it("preserves valid Unicode command IDs and text without path substitution", async () => {
+    const id = "bt_看板 /?#🚀";
+    let requests = 0;
+    const body = { bigTaskId: id, status: "IN_PROGRESS", candidateBinding: null, workflows: [], budgets: [], dispatchReceipts: [] };
+    const port = await startHttpServer((request, response) => {
+      requests++;
+      expect(request.url).toBe(`/v0/governed/big-tasks/${encodeURIComponent(id)}`);
+      expect(request.method).toBe("GET");
+      respond(response, 200, JSON.stringify(body));
+    });
+    const paths = createPaths();
+    installSession(paths, port);
+    const result = await runOperatorCommandForTesting(parseOperatorCommand(["governed-status", id]), paths, 1_000);
+    expect(result).toEqual({ body, httpStatus: 200, succeeded: true });
+    expect(requests).toBe(1);
+    const completion = { prepared: { kind: "BIG_TASK_COMPLETE", bigTaskId: id, completionReceiptId: "receipt-\ufffd-🚀" }, execution: null };
+    await roundTrip("governed-advance", id, completion, true);
   });
 });
