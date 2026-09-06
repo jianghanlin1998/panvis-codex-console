@@ -43,6 +43,7 @@ import {
   createWorktreeOwnershipManager,
   releaseCompletedGovernedWorktree,
   validateReleasedGovernedWorktree,
+  WorktreeOwnershipError,
   type ResolvedActiveOwnedWorktree,
   type WorktreeOwnershipManager,
 } from "./worktree-ownership.js";
@@ -1617,7 +1618,7 @@ export class GovernedExecutionStore {
       if (this.#storage.getSubtaskById(view.subtaskId)?.startPolicy === "MANUAL" && this.#getManualStart(view.subtaskId) === null) {
         throw new GovernedPreparationBlock(freeze({kind:"HUMAN_REQUIRED",reason:"MANUAL_START_REQUIRED",subtaskId:view.subtaskId}));
       }
-      this.#ensureOwnedWorktree(view.subtaskId);
+      this.#ensureOwnedWorktree(view);
       view = this.#storage.runInTransaction(() => {
         const current = this.#requiredWorkflowView(view.subtaskId);
         // A competing bounded advance may already have committed exactly this
@@ -1692,7 +1693,7 @@ export class GovernedExecutionStore {
           );
         }
       }
-      const worktree = this.#ensureOwnedWorktree(view.subtaskId);
+      const worktree = this.#ensureOwnedWorktree(view);
       receipt = this.#storage.runInTransaction(() => {
         const existing = this.#getDispatchReceiptForSubtask(view.subtaskId);
         if (existing !== null) return existing;
@@ -2821,7 +2822,8 @@ export class GovernedExecutionStore {
     });
   }
 
-  #ensureOwnedWorktree(subtaskId: SubtaskId): ResolvedActiveOwnedWorktree {
+  #ensureOwnedWorktree(view: DurableWorkflowControlView): ResolvedActiveOwnedWorktree {
+    const { subtaskId } = view;
     try {
       return this.#worktrees.resolveActiveOwnedWorktreeForSubtask(subtaskId);
     } catch {
@@ -2836,7 +2838,40 @@ export class GovernedExecutionStore {
         }
         this.#worktrees.provisionOwnedWorktreeForSubtask(subtaskId);
         return this.#worktrees.resolveActiveOwnedWorktreeForSubtask(subtaskId);
-      } catch {
+      } catch (error) {
+        // A competing provision/dispatch may obsolete the earlier ownership or
+        // hierarchy read. Read authority once; never retry provisioning or adopt
+        // a checkout after an arbitrary Git, capacity, drift or recovery failure.
+        if (error instanceof WorktreeOwnershipError &&
+            (error.code === "OWNERSHIP_CONFLICT" || error.code === "TASK_HIERARCHY_UNAVAILABLE")) {
+          try {
+            const current = this.#requiredWorkflowView(subtaskId);
+            const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(subtaskId);
+            const receipt = this.#getDispatchReceiptForSubtask(subtaskId);
+            const authorization = this.#getRoleAuthorizationForSequence(subtaskId, current.transitionCount + 1);
+            const sameAction = current.currentStage === view.currentStage && current.transitionCount === view.transitionCount;
+            const materialized = view.currentStage === "MATERIALIZE" && current.currentStage === "EXECUTE" &&
+              current.transitionCount === view.transitionCount + 1 &&
+              current.transitions.at(-1)?.operationId === stableId("wop", subtaskId, view.transitionCount + 1, "EXECUTE");
+            if (current.unresolvedHumanRequired !== null) {
+              throw new GovernedPreparationBlock(freeze({ kind: "HUMAN_REQUIRED",
+                reason: current.unresolvedHumanRequired.reason, subtaskId }));
+            }
+            if ((sameAction || materialized) && current.projectId === view.projectId && current.bigTaskId === view.bigTaskId &&
+                current.planRevision === view.planRevision && current.candidateBinding === view.candidateBinding &&
+                worktree.ownership.projectId === view.projectId && worktree.ownership.subtaskId === subtaskId &&
+                worktree.ownership.status === "ACTIVE" &&
+                (receipt === null || receipt.worktreeOwnershipId === worktree.ownership.id) &&
+                (authorization === null || (authorization.worktreeOwnershipId === worktree.ownership.id &&
+                  authorization.candidateSha === worktree.currentHeadSha)) &&
+                (latest === undefined || ((latest.status === "PROVISIONING" || latest.status === "ACTIVE") && latest.id === worktree.ownership.id)) &&
+                candidateIsClean(worktree.ownership.worktreePath)) {
+              return worktree;
+            }
+          } catch (readbackError) {
+            if (readbackError instanceof GovernedPreparationBlock) throw readbackError;
+          }
+        }
         throw new GovernedPreparationBlock(
           freeze({
             kind: "BLOCKED",

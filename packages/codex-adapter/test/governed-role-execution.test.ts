@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   ChatThreadIdSchema, ExecutionProviderIdSchema, ExecutionRunIdSchema, ProviderThreadReferenceSchema, ProviderRunReferenceSchema,
@@ -316,11 +316,27 @@ describe("governed Codex role execution", () => {
     }
   });
 
-  it("binds HIGH_RISK hardening and fresh QA to write/read policies", async () => {
-    const fixture = createFixture("HIGH_RISK_FOUNDATION");
-    try {
+  describe("HIGH_RISK role policies", () => {
+    let fixture: Fixture;
+
+    // EXECUTE establishes this isolated candidate. It remains a complete mock
+    // provider run with its original policy assertions, outside the two-role
+    // hardening/QA test body. No shared fixture or fabricated role completion.
+    beforeEach(async () => {
+      fixture = createFixture("HIGH_RISK_FOUNDATION");
+      const prepared = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      expect(prepared.authorization.role).toBe("EXECUTE");
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(
+        fixture.governed, prepared.authorization.authorizationId, dependencies("EXECUTE"),
+      );
+      expect(result.success, JSON.stringify(result)).toBe(true);
+      expect(result.threadPolicy?.sandbox).toBe("workspaceWrite");
+      expect(result.preflight?.profile).toBe("STANDARD_SUBTASK_EXECUTION");
+    });
+    afterEach(() => { cleanup(fixture); });
+
+    it("binds HIGH_RISK hardening and fresh QA to write/read policies", async () => {
       for (const expected of [
-        ["EXECUTE", "workspaceWrite", "STANDARD_SUBTASK_EXECUTION"],
         ["HARDEN", "workspaceWrite", "STANDARD_SUBTASK_EXECUTION"],
         ["FRESH_QA", "readOnly", "FRESH_INDEPENDENT_QA"],
       ] as const) {
@@ -340,9 +356,7 @@ describe("governed Codex role execution", () => {
       expect(fixture.governed.prepareNextRole(BIG_TASK_ID).kind).toBe(
         "BIG_TASK_COMPLETE",
       );
-    } finally {
-      cleanup(fixture);
-    }
+    });
   });
 });
 

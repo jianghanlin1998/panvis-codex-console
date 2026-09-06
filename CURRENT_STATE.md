@@ -367,19 +367,24 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 8D repair verification: two consecutive canonical full runs PASS, each 139 files / 4,409 tests with normal four workers/default timeout; 183 governed storage tests, 32 mock adapter tests, 84 gate ownership/substitution cases, 190 immutable-row mutation attempts; public:check, lint, typecheck, build, and diff checks PASS
 - Step 8D Fresh Focused Re-QA: PASS WITH DOCUMENTED HANLIN WAIVER
 - Step 8D: ACCEPTED; accepted evidence target `a8b994ad1c8e2b9cfde7d755625cac93330b9af1`
-- `CTC-ORCH-8D-FQA-007` / `CTC-ORCH-8D-FRQA-001`: technically unresolved P2 test-reliability issue; DEFERRED / ACCEPTED_P2_LIMITATION by explicit Hanlin decision, not technically CLOSED. Waiver covers one observed 5,368 ms timeout against the existing 5,000 ms limit, with focused reliability evidence otherwise passing and no semantic invariant failure; it does not cover new/systemic timeouts or Step 8E integration failures.
+- `CTC-ORCH-8D-FQA-007` / `CTC-ORCH-8D-FRQA-001`: REPAIR_CANDIDATE_PENDING_RE_QA, not technically CLOSED. The former exact accepted timeout limitation has a bounded test-quality repair: isolated prerequisite EXECUTE preparation retains its full policy assertions; HARDEN/FRESH_QA and completion remain in the ordinary 5-second test body. No broader waiver.
 - Step 8E durable amendments: APPROVED by Hanlin on 2026-09-06; implemented internal normal turnover after authoritative completion, exact terminal RELEASED/releaseHeadSha completion provenance, and bounded exact RELEASING resume. HUMAN_REQUIRED candidates preserved; capacity 2 and autonomous write dispatch 1 unchanged.
 - `CTC-ORCH-8E-HARD-001` through `003`: CLOSED — turnover/completion, interrupted-release recovery, and same-action materialization/dispatch races repaired with exact provenance and atomic writer exclusion. [Integration evidence and Handoff](docs/STEP_8E_INTEGRATED_HARDENING.md).
 - Step 8E: HARDENED. Integrated verification: 10 files /43 tests PASS; governed storage 183/183 PASS; ownership base/hardening/generation 76/76 PASS. Public hygiene, lint, typecheck, build and diff checks PASS.
-- Final canonical verification: 149 files /4,452 tests, normal four workers; 4,451 PASS /1 FAIL. Sole failure: exact waived HIGH_RISK adapter timeout, 5,478 ms against 5,000 ms, without semantic failure or new/systemic timeout. Raw suite exit 1; authorized hardening gate satisfied with the existing ACCEPTED_P2_LIMITATION, not an all-green claim.
-- Overall Step 8: HARDENED / NOT ACCEPTED; final Fresh Independent no-write QA: PENDING / ELIGIBLE.
+- Historical Step 8E canonical verification: 149 files /4,452 tests, normal four workers; 4,451 PASS /1 FAIL. Sole failure: exact waived HIGH_RISK adapter timeout, 5,478 ms against 5,000 ms, without semantic failure or new/systemic timeout. Raw suite exit 1; authorized hardening gate satisfied with the existing ACCEPTED_P2_LIMITATION, not an all-green claim.
+- Final Fresh Independent QA on `b4049d81e6ec41fc27215aaf71525e6d1dd586f9`: FAIL; acceptance-blocking P2 findings `CTC-ORCH-STEP8-FQA-001` and `CTC-ORCH-STEP8-FQA-002`.
+- `CTC-ORCH-STEP8-FQA-001`: REPAIRED / awaiting Focused Re-QA — exact first-provisioning race authority readback, including receipt/generation/candidate matching and real blocker preservation.
+- `CTC-ORCH-STEP8-FQA-002`: REPAIRED / awaiting Focused Re-QA — historical fixture separation plus an 8,000 ms policy scoped only to three serial multi-role/Subtask turnover-and-reopen integration tests; ordinary 5-second behavior remains strict.
+- Step 8 Final-QA repair verification: focused 367 tests PASS; final race/provenance regressions 37/37 PASS; canonical `pnpm test` 152 files /4,483 tests PASS in 334.33 s, normal four workers, exit 0, no waiver or rerun. Public hygiene, lint, typecheck, build and diff checks PASS; [phase timings, scope and Handoff](docs/STEP_8_FINAL_QA_REPAIR.md).
+- Overall Step 8: HARDENED / REPAIRED / NOT ACCEPTED. Step 8D remains ACCEPTED; Step 8E remains HARDENED; HARD-001 through HARD-003 remain CLOSED. Final Focused Re-QA NOT performed here.
+- Real provider/model turns for this repair: 0; real target orchestration: NONE; no deployment.
 - Step 9 real Console orchestration dogfood: BLOCKED until overall Step 8 ACCEPTED
 - Real Step 8D provider/model turns: 0; real target orchestration: NONE
 - Real Step 8E provider/model turns: 0; real target orchestration: NONE; Step 9: NOT STARTED
 - Hanlin manual QA: NOT REQUIRED
 
 ## Next safe task
-**Next safe task:** NEW CHAT Fresh Independent no-write Step 8E / overall Step 8 QA
+**Next safe task:** NEW CHAT Fresh Focused Re-QA of CTC-ORCH-STEP8-FQA-001 and -002, including closure of any repaired historical timeout limitation
 
 ## Not operational yet
 - browser Console UI

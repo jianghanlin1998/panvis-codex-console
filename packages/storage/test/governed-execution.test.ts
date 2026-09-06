@@ -55,6 +55,11 @@ import { makeBigTask, makeContextItem, makeContextDigest } from "./fixtures.js";
 // This yields between isolated cases; it does not change their timeout or work.
 afterEach(async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
 
+// Only the three two-Subtask, multi-role Git/SQLite turnover-and-reopen cases
+// qualify for this integration bound. Ordinary tests retain Vitest's 5s limit.
+// Phase evidence and the 8s rationale: docs/STEP_8_FINAL_QA_REPAIR.md.
+const SERIAL_REOPEN_TIMEOUT_MS = 8_000;
+
 const PROVIDER_ID = ExecutionProviderIdSchema.parse("codex-app-server");
 const MODEL = ProviderModelReferenceSchema.parse({
   providerId: PROVIDER_ID,
@@ -1603,7 +1608,7 @@ describe("Step 8D post-FQA repair", () => {
       expect(db.prepare("SELECT status FROM governed_dispatch_receipts WHERE subtask_id=?").get(subtaskIds[0]!)).toEqual({status:"COMPLETED"});
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);db.close();
     } finally {reopened?.close();cleanupScenario(scenario);}
-  });
+  }, SERIAL_REOPEN_TIMEOUT_MS);
   it("rejects changed promotion conclusion on semantic replay",()=>{
     const scenario=createScenario();
     try {
