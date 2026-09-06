@@ -83,6 +83,10 @@ Roadmap Step 7 backend dogfood completed successfully and Fresh Independent QA p
 
 ## Step 9A governed operator commands
 
+Status: ACCEPTED after fresh independent no-write QA on
+`0447ff48964a1da133d62b6fff9b0fd793d49472` (2026-09-07). Hanlin approved
+integration into main; this state synchronization changes no implementation code.
+
 The existing Step 8 governed HTTP/service boundary is also available through
 four fixed CLI commands. These add client access to accepted operations; they
 add no planning, lifecycle, execution or budget authority.
@@ -175,8 +179,10 @@ target or application database was changed.
 
 Focused verification: 155 operator tests plus 48 adjacent HTTP/service tests
 PASS (203 total). Canonical full-suite and executable results are recorded in
-CURRENT_STATE.md. Fresh independent no-write QA remains a separate gate;
-hardening does not make Step 9A ACCEPTED or authorize live AI Update Board work.
+CURRENT_STATE.md. Subsequent fresh independent no-write QA passed on the exact
+hardening candidate: 12 additional source/transport probes and the full 4,563-test
+suite passed, with no blocking findings. The interface is ACCEPTED; live AI Update
+Board work still needs its separately approved connection and target-write scope.
 
 Approved versus actual scope: the same six files only —
 `packages/local-control/src/operator.ts`, `packages/local-control/test/operator.test.ts`,
