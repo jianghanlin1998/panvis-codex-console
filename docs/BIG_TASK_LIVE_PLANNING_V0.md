@@ -105,6 +105,15 @@ reuses that accepted runtime boundary and does not widen it.
 
 ## Product direction recorded during implementation
 
+Hanlin confirmed on 2026-09-07 that approving a task already authorizes normal
+task-scoped calls through the established local Codex runtime and existing
+ChatGPT login to OpenAI. Do not request a second human approval solely because
+the model processes that approved task context in the cloud. This removes the
+duplicate conversational approval step; it does not disable an enforcing tool
+approval mechanism or change product-scope, context, budget or execution gates.
+If a tool itself blocks an authorized action, present the existing authorization
+and concrete evidence, respect the result, and explain any remaining blocker.
+
 Hanlin wants both whole goals and explicit small tasks, with Project/Repo, Big
 Task and Subtask discussion/context levels. The current durable hierarchy already
 has those three scopes, while execution chats are Subtask-bound. Three discussion
@@ -178,11 +187,33 @@ its lock/session files are absent. The target repository and retained UI branch
 are unchanged. This approval blocker is outside the accepted feature's QA and
 does not consume the second product repair round.
 
-Resume only after that explicit consent: restart the accepted daemon, inspect
-the existing intake, and invoke planning-run for its existing Big Task ID; do not
-create a duplicate intake. Full automatic Subtask progression and cross-worktree
-integration remain unimplemented later slices, so planning approval alone is
-not an end-to-end Board delivery claim.
+Hanlin subsequently accepted the explicit local/remote data-flow explanation
+and reiterated that normal Codex calls were included in the task authorization.
+The same planning-run action was then approved and invoked once on the existing
+intake, without recreating it. The Planner attempt started at
+`2026-09-06T20:53:14.171Z` and terminalized at `2026-09-06T20:54:04.960Z` as
+`HUMAN_REQUIRED / PROVIDER_FAILED`. Separate provider thread/run identity and
+the configured `gpt-6-astra` model were recorded. Normalized usage is unavailable;
+the reported numeric total of zero is not evidence of zero consumed usage.
+No candidate, review or Subtask was generated. The daemon stopped cleanly again.
+
+Read-only diagnostics limited to this exact provider thread classified the
+failure as a TLS handshake EOF while connecting to `chatgpt.com`. Credential-free
+HEAD checks from the local execution environment to both `chatgpt.com` and
+`api.openai.com` independently failed the TLS handshake (curl exit 35, no HTTP
+response). No raw provider error, headers, credentials or unrelated logs were
+printed or copied. This is an unresolved connection blocker; no code change,
+runtime upgrade, TLS-verification bypass or additional model attempt was made.
+The original one-repair fresh-QA PASS remains valid; a second product repair
+round was not consumed by this connection diagnosis.
+
+The old consent blocker is resolved. The existing intake now has a sticky human
+stop, one attempted Planner run and unknown usage; ordinary planning-run must
+not retry it. Resolve the connection issue and reconcile the unknown-usage /
+new-request authority before a later live attempt, preserving this evidence.
+Full automatic Subtask progression and cross-worktree integration remain
+unimplemented later slices, so planning approval alone is not an end-to-end
+Board delivery claim.
 
 ### Original implementation verification
 
