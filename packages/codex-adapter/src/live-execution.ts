@@ -29,6 +29,7 @@ import type {
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
 import {
+  BIG_TASK_PLANNING_LIMITS,
   PLANNER_OUTPUT_SCHEMA,
   PLANNER_REVIEW_OUTPUT_SCHEMA,
   ChatThreadIdSchema,
@@ -2377,7 +2378,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       if (!preflight.allowed) {
         throw new LiveExecutionError("PREFLIGHT_BLOCKED");
       }
-    } else if (Buffer.byteLength(planning.text, "utf8") > 64_000) {
+    } else if (Buffer.byteLength(planning.text, "utf8") > BIG_TASK_PLANNING_LIMITS.maxInputBytes) {
       throw new LiveExecutionError("PREFLIGHT_BLOCKED");
     }
 
@@ -2399,7 +2400,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     assertDisposableWorkspace(executionWorkspace);
     const eventTracker = new TurnEventTracker(
       diagnostics,
-      dependencies.limits.maxAgentResponseBytes,
+      planning === undefined ? dependencies.limits.maxAgentResponseBytes : BIG_TASK_PLANNING_LIMITS.maxResponseBytes,
       { kind: "READ_ONLY" },
       planning === undefined ? undefined : (usage) => {
         evidence.normalizedUsage = usage;

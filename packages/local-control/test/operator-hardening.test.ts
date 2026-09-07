@@ -826,6 +826,26 @@ describe("Step 9A comprehensive contradiction and cleanup regressions", () => {
       expect(destroy).toHaveBeenCalled();
     } finally { destroy.mockRestore(); }
   });
+
+  it.each(["planning-status", "execution-review"])("bounds declared and streamed %s responses at 256 KiB", async command => {
+    for (const declared of [false, true]) {
+      for (const bytes of [262_143, 262_144, 262_145]) {
+        const error = JSON.stringify({ error: { code: "LOCAL_OPERATION_FAILED" } });
+        const body = error + " ".repeat(bytes - Buffer.byteLength(error, "utf8"));
+        let calls = 0;
+        const port = await startHttpServer((request, response) => {
+          calls += 1; request.resume();
+          response.writeHead(503, { "content-type": "application/json", ...(declared ? { "content-length": String(bytes) } : {}) });
+          response.end(body);
+        });
+        const paths = createPaths(); installSession(paths, port);
+        const result = runOperatorCommandForTesting(parseOperatorCommand([command, "bt_capacity"]), paths, 1_000);
+        if (bytes > 262_144) await expect(result).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
+        else expect(await result).toMatchObject({ httpStatus: 503, succeeded: false, body: { error: { code: "LOCAL_OPERATION_FAILED" } } });
+        expect(calls).toBe(1);
+      }
+    }
+  });
 });
 
 // Real storage + adapter fixtures are the positive oracle. Only the App Server

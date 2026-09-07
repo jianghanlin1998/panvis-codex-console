@@ -4,6 +4,13 @@ import { BigTaskSchema } from "./tasks.js";
 import { isWellFormedUnicode } from "./well-formed-unicode.js";
 import { NormalizedUsageSchema, ProviderModelReferenceSchema, ProviderRunReferenceSchema, ProviderThreadReferenceSchema } from "./execution.js";
 
+/** Planning-only byte limits; execution context and token budgets are unchanged. */
+export const BIG_TASK_PLANNING_LIMITS = Object.freeze({
+  maxResponseBytes: 100 * 1024,
+  // Full proposal/contracts plus approved intent, repository rules and revision requirements.
+  maxInputBytes: 256 * 1024,
+});
+
 const text = z.string().min(1).max(1_000)
   .refine((value) => value.trim() === value && isWellFormedUnicode(value))
   .refine((value) => Array.from(value).every((character) => {

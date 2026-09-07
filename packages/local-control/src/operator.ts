@@ -48,7 +48,7 @@ import type {
 
 import {
   LOCAL_CONTROL_HOST,
-  LOCAL_CONTROL_RESPONSE_LIMIT_BYTES,
+  localControlResponseLimitBytes,
 } from "./http-server.js";
 import {
   LocalStateError,
@@ -839,6 +839,7 @@ const requestDaemon = async (
   timeoutMilliseconds: number,
 ): Promise<OperatorResult> => {
   const outbound = commandRequest(command);
+  const responseLimitBytes = localControlResponseLimitBytes(outbound.path);
   const authority = `${LOCAL_CONTROL_HOST}:${descriptor.port}`;
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -896,11 +897,11 @@ const requestDaemon = async (
         if (
           contentLength !== undefined &&
           (/^(?:0|[1-9][0-9]*)$/u.test(contentLength) === false ||
-            Number(contentLength) > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES)
+            Number(contentLength) > responseLimitBytes)
         ) {
           fail(
             new LocalOperatorError(
-              Number(contentLength) > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES
+              Number(contentLength) > responseLimitBytes
                 ? "RESPONSE_TOO_LARGE"
                 : "RESPONSE_MALFORMED",
             ),
@@ -912,7 +913,7 @@ const requestDaemon = async (
         response.on("data", (chunk: Buffer | string) => {
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           bytes += buffer.byteLength;
-          if (bytes > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES) {
+          if (bytes > responseLimitBytes) {
             fail(new LocalOperatorError("RESPONSE_TOO_LARGE"));
             return;
           }

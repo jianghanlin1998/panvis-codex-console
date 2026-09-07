@@ -3,9 +3,33 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BigTaskPlanningIntakeSchema, ProjectSchema } from "@codex-task-console/domain";
+import { BigTaskPlanningIntakeSchema, PlannerResponseSchema, ProjectSchema } from "@codex-task-console/domain";
 import { LivePlanningStore, openTaskDatabase } from "../src/index.js";
 import { fixedClock, makeBigTask, makeProject } from "./fixtures.js";
+
+/** A real four-task JSON shape, filled evenly with Unicode scope text to an exact byte boundary. */
+export const sizedPlanningProposal = (byteLength: number) => {
+  const tasks = ["ui", "collector", "integration", "validation"].map(key => ({
+    key, title: key, goal: `Complete ${key}`, scopeIn: [key], scopeOut: ["Deployment"],
+    acceptanceCriteria: [`Verify ${key}`], untouchedAreas: [], promptSeed: `Implement ${key}`,
+    profile: "HIGH_RISK_FOUNDATION", writeEnabled: true,
+  }));
+  const proposal = { outcome: "PROPOSE", questions: [], tasks,
+    dependencies: tasks.slice(1).map((task, index) => ({ upstreamKey: tasks[index]!.key,
+      downstreamKey: task.key, requiredGate: "ACCEPTED", reason: "Use the integrated predecessor." })),
+  };
+  for (let index = 0; ; index += 1) {
+    const remaining = byteLength - Buffer.byteLength(JSON.stringify(proposal), "utf8");
+    if (remaining < 0) throw new Error("Requested fixture size is too small.");
+    if (remaining <= 12) { tasks[0]!.goal += "x".repeat(remaining); break; }
+    const task = tasks[index % tasks.length]!;
+    if (task.scopeIn.length >= 24) throw new Error("Requested fixture size exceeds field limits.");
+    const prefix = `${index}:`;
+    const fillBytes = Math.min(2_800, remaining - 3) - prefix.length;
+    task.scopeIn.push(prefix + "你".repeat(Math.floor(fillBytes / 3)) + "x".repeat(fillBytes % 3));
+  }
+  return PlannerResponseSchema.parse(proposal);
+};
 
 export const makePlanningFixture = (clock: () => Date = fixedClock) => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "ctc-planning-test-"));

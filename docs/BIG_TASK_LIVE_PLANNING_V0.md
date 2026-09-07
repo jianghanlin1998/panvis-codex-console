@@ -6,6 +6,33 @@ Status: ACCEPTED after fresh independent re-QA round 1 on
 accepted Step 9A main at `d4fae592b3b4213d99506489c7d5e08ca267762b`.
 Hanlin approved this bounded slice on 2026-09-07.
 
+## Approved 100 KiB planning capacity follow-up
+
+Hanlin approved raising the planning reply limit to 100 KB, implemented as
+102,400 UTF-8 bytes (100 KiB), including stream accumulation and stored-output
+validation. The shared planning-only input ceiling is 262,144 bytes (256 KiB),
+leaving room for the full proposal/contracts, approved intent, repository rules
+and revision requirements. Reopened run records use the same input ceiling.
+No content is truncated, and a byte over a bound still stops the operation.
+
+Only the planning intake/status/run responses and the exact execution-plan
+review response use a 256 KiB HTTP/CLI envelope. Other control responses remain
+64 KiB, request bodies/intake files remain 16 KiB, and ordinary model execution
+reply/context limits, token budgets, deadlines, retry policy and human approval
+are unchanged. The larger byte allowance is a ceiling, not an output target.
+
+Deterministic coverage includes a four-task 100 KiB Unicode proposal through
+revision, fresh review, persistence/reopen, complete CLI display and exact human
+approval without task execution; exact response boundaries on both sides of
+100 KiB; and declared/chunked HTTP response boundaries on both sides of 256 KiB.
+This does not claim a new live-provider trial or independent acceptance.
+
+No schema migration is needed. Older binaries may reject newly stored planning
+inputs above their former 64,000-byte limit; do not downgrade against such state
+without verified read compatibility. Existing failure and usage records remain
+unchanged. Difficulty-based approval settings and asynchronous planning status
+are separate work and are not implemented by this capacity change.
+
 ## Result and boundary
 
 A human approves a Big Task's goal, scope, acceptance criteria, product decisions
@@ -151,15 +178,15 @@ compatibility requirements above apply before rollback.
   existing canonical candidate binding. The coordinator verifies that digest
   against the current captured proposal, then submits the original full binding
   to durable review. The durable binding format and matching are unchanged;
-  large valid graphs do not have to echo the full binding in the 16 KiB output.
+  large valid graphs do not have to echo the full binding in the planning output.
 - Each role starts a fresh ephemeral read-only Codex App Server session using
   the existing owned, pinned runtime and ChatGPT authentication. API-key fallback,
   network-enabled sandboxing, writes, plugins and native delegation are unavailable;
   observed tool attempts fail the operation. A reused Planner thread is rejected
   before a Reviewer turn starts.
 - Exact compiled input and its SHA-256 binding stay in local storage. Inputs over
-  64,000 UTF-8 bytes are blocked, with no truncation. Structured output is bounded
-  to 16,384 bytes, at most 24 proposed tasks and 64 blocking dependencies, and
+  262,144 UTF-8 bytes are blocked, with no truncation. Structured output is bounded
+  to 102,400 bytes, at most 24 proposed tasks and 64 blocking dependencies, and
   validated before any candidate/review authority is recorded.
 - Big Task planning has its own ledger; no synthetic Subtask or fake execution
   thread is created. Provider identities, model and normalized usage are persisted

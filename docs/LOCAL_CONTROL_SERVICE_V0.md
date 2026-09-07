@@ -63,7 +63,7 @@ All operational requests require `Authorization: Bearer <token>` and the exact `
 
 ## Narrow HTTP API
 
-All responses are bounded JSON. Errors have a stable `{ "error": { "code": "..." } }` shape and contain no stacks, raw storage/Git/provider errors, paths, prompt/context, response text, JSONL, stderr, environment, or credentials.
+All responses are bounded JSON. The planning intake/status/run and execution-plan review responses use 256 KiB after the approved 100 KiB planning-capacity change; all other routes retain 64 KiB. The server and CLI use the same route-specific bound for declared and streamed response bytes. Errors have a stable `{ "error": { "code": "..." } }` shape and contain no stacks, raw storage/Git/provider errors, paths, prompt/context, response text, JSONL, stderr, environment, or credentials.
 
 | Method and route | Exact caller input | Trusted producer | Result |
 | --- | --- | --- | --- |
@@ -75,7 +75,7 @@ All responses are bounded JSON. Errors have a stable `{ "error": { "code": "..."
 
 Provision does not run a provider. Run does not auto-provision. Release offers no force, cleanup, reset, prune, or branch-deletion option. Callers cannot supply repository/worktree paths, roots, branches, SHAs, ownership IDs, cwd, sandbox, writable roots, network, runtime, model, approval policy, profile, retry, or provider request data.
 
-The built-in Node HTTP boundary caps request bodies at 16 KiB, responses at 64 KiB, routes at 256 characters, headers at 8 KiB/32 fields, and active requests at 16. Header byte/count limits are enforced explicitly instead of relying on Node's truncating `maxHeadersCount` behavior, and parser-level malformed requests receive the same bounded JSON error surface. It also sets finite request, header, and keep-alive timeouts. Raw JSON mutation bodies must have exact length and valid UTF-8 before JSON interpretation, then be one strict object with the one allowed field; malformed JSON, duplicate or escaped-duplicate keys, unknown fields, arrays, primitives, and noncanonical IDs are rejected. Inspection counts durable threads separately but fetches only the eight returned threads and eight returned runs per thread from SQLite.
+The built-in Node HTTP boundary caps request bodies at 16 KiB, ordinary responses at 64 KiB, routes at 256 characters, headers at 8 KiB/32 fields, and active requests at 16. Header byte/count limits are enforced explicitly instead of relying on Node's truncating `maxHeadersCount` behavior, and parser-level malformed requests receive the same bounded JSON error surface. It also sets finite request, header, and keep-alive timeouts. Raw JSON mutation bodies must have exact length and valid UTF-8 before JSON interpretation, then be one strict object with the one allowed field; malformed JSON, duplicate or escaped-duplicate keys, unknown fields, arrays, primitives, and noncanonical IDs are rejected. Inspection counts durable threads separately but fetches only the eight returned threads and eight returned runs per thread from SQLite.
 
 ## Operator CLI
 
@@ -89,7 +89,7 @@ pnpm ctc:operator run <subtask-id>
 pnpm ctc:operator release <subtask-id>
 ```
 
-It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and 64 KiB response limit, and handles resets/aborted responses without hanging. Before parsing, it requires the bounded response bytes to be valid UTF-8, structurally validates the resulting JSON text, and rejects duplicate decoded object keys at every nesting level. It then validates the exact route-specific result shape using canonical Domain schemas and the canonical Step 5B failure-code vocabulary. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
+It sends the token only in the Authorization header, applies the exact Host and mutation headers, enforces an absolute bounded timeout and the route-specific response limit, and handles resets/aborted responses without hanging. Before parsing, it requires the bounded response bytes to be valid UTF-8, structurally validates the resulting JSON text, and rejects duplicate decoded object keys at every nesting level. It then validates the exact route-specific result shape using canonical Domain schemas and the canonical Step 5B failure-code vocabulary. Token-reflection checks run both on raw response bytes and on the parsed value that will be serialized, so Unicode escapes cannot reconstitute the token in CLI output. The operator prints one scriptable JSON object and exits nonzero for transport, HTTP, or Step 5B result failure.
 
 `OPERATOR_TIMEOUT` is an indeterminate operator observation, not proof that trusted daemon-side execution failed or stopped. After it occurs, the operator must reconcile through authoritative `status` before any later run decision: if the execution is `CREATED` or `RUNNING`, no new run is allowed; if it terminalized, that durable terminal result is authoritative. The timeout grants no retry. Any later execution is a distinct attempt requiring normal higher-level authority and retry budget, with no automatic retry.
 

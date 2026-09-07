@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { ProviderThreadReferenceSchema, ProviderRunReferenceSchema, ProviderModelReferenceSchema } from "@codex-task-console/domain";
 
-import { makePlanningFixture } from "./live-planning-fixture.js";
+import { makePlanningFixture, sizedPlanningProposal } from "./live-planning-fixture.js";
 
 type Fixture = ReturnType<typeof makePlanningFixture>;
 const run = (f: Fixture, output: unknown, tokens: number | null = 100) => {
@@ -30,6 +30,31 @@ const review = (f: Fixture, outcome = "APPROVE") => {
 };
 
 describe("Big Task live planning ownership", () => {
+  it.each([102_399, 102_400, 102_401])("validates and durably reopens a planning response at %i UTF-8 bytes", (bytes) => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const proposal = sizedPlanningProposal(bytes);
+      const text = JSON.stringify(proposal);
+      expect(Buffer.byteLength(text, "utf8")).toBe(bytes);
+      const state = run(f, text);
+      if (bytes > 102_400) {
+        expect(state).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "INVALID_OUTPUT", totalTokens: 100 });
+        expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
+      } else {
+        expect(state.phase).toBe("READY");
+        f.reopen();
+        expect(run(f, review(f)).phase).toBe("APPROVED");
+        const stored = f.storage.getDurablePlanningReviewBundle(f.intake.bigTask.id)!;
+        expect(stored.taskContracts.map(contract => contract.scopeIn)).toEqual(proposal.tasks.map(task => task.scopeIn));
+      }
+      const latest = f.planning.inspect(f.intake.bigTask.id);
+      f.reopen();
+      expect(f.planning.inspect(f.intake.bigTask.id)).toEqual(latest);
+      expect(f.storage.listSubtasksByBigTask(f.intake.bigTask.id)).toEqual([]);
+    } finally { f.close(); }
+  });
+
   it("measures above 120K only for the explicitly approved intake, preserving usage and approval across reopen", () => {
     const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
     try {

@@ -1,4 +1,4 @@
-import { BigTaskExecutionAcceptanceSchema, hasUnambiguousJsonStructure } from "@codex-task-console/domain";
+import { BIG_TASK_PLANNING_LIMITS, BigTaskExecutionAcceptanceSchema, hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
@@ -19,6 +19,9 @@ import type { LocalControlService } from "./service.js";
 export const LOCAL_CONTROL_HOST = "127.0.0.1";
 export const LOCAL_CONTROL_BODY_LIMIT_BYTES = 16 * 1_024;
 export const LOCAL_CONTROL_RESPONSE_LIMIT_BYTES = 64 * 1_024;
+export const localControlResponseLimitBytes = (path: string): number =>
+  ["/v0/planning/intake", "/v0/planning/status", "/v0/planning/run", "/v0/execution/review"].includes(path)
+    ? BIG_TASK_PLANNING_LIMITS.maxInputBytes : LOCAL_CONTROL_RESPONSE_LIMIT_BYTES;
 export const LOCAL_CONTROL_ROUTE_LIMIT = 256;
 export const LOCAL_CONTROL_MAX_ACTIVE_REQUESTS = 16;
 export const LOCAL_CONTROL_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
@@ -53,10 +56,11 @@ const writeJson = (
   response: ServerResponse,
   status: number,
   body: object,
+  limitBytes = LOCAL_CONTROL_RESPONSE_LIMIT_BYTES,
 ): void => {
   let bytes = Buffer.from(JSON.stringify(body), "utf-8");
   let finalStatus = status;
-  if (bytes.byteLength > LOCAL_CONTROL_RESPONSE_LIMIT_BYTES) {
+  if (bytes.byteLength > limitBytes) {
     finalStatus = 500;
     bytes = Buffer.from(
       JSON.stringify({ error: { code: "LOCAL_OPERATION_FAILED" } }),
@@ -565,7 +569,7 @@ export const createLocalControlHttpServer = (
           }
           rejectAmbiguousHeaders(request);
           requireBoundary(request, authority, sessionToken);
-          writeJson(response, 200, await routeRequest(request, service));
+          writeJson(response, 200, await routeRequest(request, service), localControlResponseLimitBytes(url));
         } catch (error) {
           if (response.headersSent) {
             response.destroy();
