@@ -342,6 +342,8 @@ export type {
 } from "./durable-execution.js";
 export {
   BigTaskPlanningIntakeSchema,
+  PlanningBudgetExceptionSchema,
+  PlanningProviderDiagnosticsSchema,
   PlannerResponseSchema,
   PlannerReviewResponseSchema,
   PLANNER_OUTPUT_SCHEMA,

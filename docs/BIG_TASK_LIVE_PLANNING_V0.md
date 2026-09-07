@@ -43,10 +43,92 @@ The CLI accepts a regular file of at most 16,384 bytes and rejects invalid UTF-8
 duplicate JSON keys and unknown fields. The human's file is intent, not a prompt
 to paste into another chat.
 
+Hanlin authorized one measured trial on 2026-09-07, without changing the default
+120,000-token cap. An intake may explicitly include `budgetException` with
+`approved: true`, `mode: "MEASURE_ONLY"`, a bounded `reason`, and `expiresAt`.
+Storage accepts a future expiry no more than three hours after intake and freezes
+the exception with that Big Task. Its status echoes the exception; `tokenLimit`
+remains the baseline for comparison and warning, not an enforced token ceiling
+for that intake. The adapter interrupts an active turn at the remaining deadline;
+storage blocks further turns and plan acceptance at expiry (`TIME_LIMIT_REACHED`).
+The two-revision/six-turn limit, per-turn liveness bounds, reported-usage ledger,
+unknown-usage stops and all execution boundaries remain enforced. No existing
+stopped intake is reset or amended, and later intakes do not inherit the exception.
+
+The first measured production attempt stopped on `JSONL_LIMIT_EXCEEDED` at
+notification 2,001, before usage was returned. Planning now meters nonempty
+`item/agentMessage/delta` notifications through the existing accumulated
+16,384-byte UTF-8 output bound instead of charging each tiny chunk against the
+2,000-control-notification cap. Empty deltas, other events and server requests
+still consume that cap; exact thread/turn checks, per-message bounds, time limits,
+tool rejection and all non-planning execution paths remain enforced. The repair
+allows a bounded answer to arrive in many chunks without making streaming unlimited.
+The next attempt passed 2,000 messages, then stopped at the unchanged output-byte
+limit (`AGENT_RESPONSE_LIMIT_EXCEEDED`, 3,032 notifications, usage unavailable).
+The compiled role instructions now state the existing 16,384-byte hard limit,
+request compact JSON with a 12,000-byte target for headroom, and explain the
+existing trimmed/single-line/1,000-character string constraints. They require
+complete goal coverage or a typed human escalation; no truncation or acceptance
+of an incomplete plan is permitted. This changes guidance, not the output limit.
+
+Compatibility/rollback: this reader still accepts old records. New exception and
+diagnostic fields require this reader or a compatible successor; an older strict
+reader rejects them, including during daemon recovery. Stop the daemon to
+deactivate. Do not restore an old database or remove historical fields to run an
+older binary; a code rollback must retain compatible record reading first.
+
 The current operator wait deadline is unchanged. A client timeout ends its wait,
 not the bounded daemon operation; inspect status rather than blindly retrying.
 There is no automatic client retry. The service rejects duplicate active requests,
 and SQLite serializes provider claims across storage connections.
+
+## 2026-09-07 measured-trial evidence
+
+Final continuation `bt_ai_update_board_step9_measured_repair2_20260907` reached
+durable `APPROVED` at `2026-09-07T06:59:55.565Z`. A real fresh Astra Planner
+produced four contracts and three dependencies; a separate fresh Astra Reviewer
+approved revision 1 without any modification/review cycle. The measured calls
+took 6 minutes 24 seconds, within the original session deadline `08:50:23Z`.
+
+| Role | Input tokens | Cached input (included) | Output tokens | Reasoning (included in output) | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Planner | 14,709 | 14,592 | 8,103 | 5,447 | 22,812 |
+| Reviewer | 18,208 | 0 | 953 | 877 | 19,161 |
+| Total | 32,917 | 14,592 | 9,056 | 6,324 | **41,973** |
+
+These are reported tokens, not a monetary bill. Cached/reasoning tokens are
+subsets and are not added again. This successful continuation consumed about
+35% of the unchanged 120K planning baseline. The measured exception was effective
+but did not need to exceed that baseline. Do not infer the cost of future revision
+cycles, Subtask implementation or integration from this single result.
+
+The four proposed tasks cover retained-UI reconciliation, public-news collection,
+Board integration/refresh and operation instructions, then independent integrated
+delivery verification. They remain an approved planning bundle: no canonical
+Subtask was materialized, no worktree execution or integration was performed,
+and the target main/retained UI are unchanged. Both real model processes and
+temporary workspaces were cleaned; the daemon, lock and session were closed.
+
+Preserved predecessors, each with one stopped Planner record and unknown usage:
+
+- `bt_ai_update_board_step9_real_news_20260907`: original connection failure.
+- `bt_ai_update_board_step9_real_news_retry1_20260907`: generic provider stop; the old adapter did not retain its exact cause.
+- `bt_ai_update_board_step9_measured_20260907`: `JSONL_LIMIT_EXCEEDED`, 2,001 notifications.
+- `bt_ai_update_board_step9_measured_repair1_20260907`: `AGENT_RESPONSE_LIMIT_EXCEEDED`, 3,032 notifications.
+
+Thus 41,973 is not the total cost of the whole debugging/trial history. The
+predecessors were not reset, overwritten or counted as zero. The same one-time
+exception deadline was retained through the two bounded repairs; no further
+retry was needed after the final continuation succeeded. Operator observation
+timed out at five minutes; read-only status confirmed the same background run
+completed, with no duplicate `planning-run` request.
+
+Final verification: 54 focused tests and canonical 155 files /4,655 tests PASS,
+four workers, 372.78 seconds. Stream/adjacent regressions previously passed 107
+tests. Public hygiene, lint, typecheck, build, executable local-control E2E and
+`git diff --check` PASS. These code checks and the independent plan review do not
+constitute a new independent acceptance of the Console implementation. Record
+compatibility requirements above apply before rollback.
 
 ## Context, independence and accounting
 
@@ -83,9 +165,13 @@ and SQLite serializes provider claims across storage connections.
   thread is created. Provider identities, model and normalized usage are persisted
   as they become available. Raw provider JSONL and errors are never returned or
   stored in the ledger. Operator status omits compiled context text.
+  New completed attempts also retain optional `providerDiagnostics`: a closed
+  failure-code enum, notification/interrupt counts and cleanup booleans. This
+  distinguishes local transport/limit failures without retaining provider error
+  strings. Historical stopped records remain unchanged and may lack this detail.
 - The human-selected planning cap is separate from Subtask execution budgets.
   Usage from all attempts counts toward it, with warning at the lower of 80,000
-  tokens or the selected cap. A usage event reaching the cap stops the operation
+  tokens or the selected cap. Without an explicit measured-trial exception, a usage event reaching the cap stops the operation
   and shuts down its dedicated provider process;
   missing final usage prevents further calls. Metering is based on reported usage,
   not a promise that a provider cannot overshoot between usage notifications.
@@ -95,7 +181,7 @@ and SQLite serializes provider claims across storage connections.
 
 Product questions, exhausted reviews, missing usage, provider failure, stale
 context and budget stops require a human decision. This slice does not erase or
-reopen those records, grant extensions, or mutate an already approved graph.
+reopen those records, extend an existing intake, or mutate an already approved graph.
 A separately approved new planning request can carry clarified product decisions;
 the earlier record and usage remain intact.
 

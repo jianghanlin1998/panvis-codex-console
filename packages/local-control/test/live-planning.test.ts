@@ -15,21 +15,24 @@ import { parseOperatorCommand, runOperatorCommandForTesting } from "../src/opera
 import { ensureProductionStateDirectories, localControlPathsForTesting, writeSessionDescriptor } from "../src/state.js";
 
 describe("Big Task planning local control", () => {
-  it.each([true, false])("runs the bounded live planning loop with independent reviews (final approval=%s)", async (approve) => {
-    const f = makePlanningFixture();
+  it.each([[true, false], [false, false], [true, true], [false, true]])("runs the bounded live planning loop with independent reviews (approval=%s, exception=%s)", async (approve, exception) => {
+    const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
     try {
       const provider = planningProviderFixture((packet) => packet.role === "PLANNER" ? f.proposal : {
         outcome: approve && packet.proposal!.candidate.revision === 3 ? "APPROVE" : "REJECT",
         planRevision: packet.proposal!.candidate.revision, candidateBinding: packet.proposal!.candidateBinding,
         revisionRequirements: approve && packet.proposal!.candidate.revision === 3 ? [] : ["Test empty and unavailable news sources."], questions: [],
-      });
+      }, { tokens: exception ? 150_000 : 100 });
       const forbidden = async (): Promise<never> => { throw new Error("Execution is outside planning."); };
       const service = createLocalControlServiceForTesting(f.storage, createWorktreeOwnershipManager(f.storage), forbidden, forbidden,
         (storage, id) => executeBigTaskPlanningCodexForTest(storage, id, provider.dependencies));
-      await service.acceptPlanningIntake!(f.intake);
+      await service.acceptPlanningIntake!({ ...f.intake, ...(exception ? { budgetException: {
+        approved: true, mode: "MEASURE_ONLY", reason: "One measured trial", expiresAt: "2026-09-07T08:00:00.000Z",
+      } } : {}) });
       const result = await service.runPlanning!(f.intake.bigTask.id);
       expect(result.phase).toBe(approve ? "APPROVED" : "HUMAN_REQUIRED");
       expect(result.automaticRevisionsUsed).toBe(2);
+      expect(result.totalTokens).toBe(exception ? 900_000 : 600);
       expect(provider.launches).toHaveLength(6);
       expect(provider.packets.map((packet) => packet.role)).toEqual(["PLANNER", "REVIEWER", "PLANNER", "REVIEWER", "PLANNER", "REVIEWER"]);
       expect(provider.packets[2]?.revisionRequirements).toEqual(["Test empty and unavailable news sources."]);
@@ -67,14 +70,14 @@ describe("Big Task planning local control", () => {
     } finally { f.close(); }
   });
 
-  it("connects intake/status/run CLI commands through the authenticated localhost boundary", async () => {
-    const f = makePlanningFixture();
+  it.each([false, true])("connects intake/status/run CLI commands through authenticated localhost (exception=%s)", async (exception) => {
+    const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
     const token = "e".repeat(64);
     const forbidden = async (): Promise<never> => { throw new Error("Out of scope"); };
     const provider = planningProviderFixture((packet) => packet.role === "PLANNER" ? f.proposal : {
       outcome: "APPROVE", planRevision: packet.proposal!.candidate.revision,
       candidateBinding: packet.proposal!.candidateBinding, revisionRequirements: [], questions: [],
-    });
+    }, { tokens: exception ? 150_000 : 100 });
     const service = createLocalControlServiceForTesting(f.storage, createWorktreeOwnershipManager(f.storage), forbidden, forbidden,
       (storage, id) => executeBigTaskPlanningCodexForTest(storage, id, provider.dependencies));
     const http = createLocalControlHttpServer(service, token);
@@ -87,7 +90,9 @@ describe("Big Task planning local control", () => {
       writeSessionDescriptor(paths, { schemaVersion: 1, instanceId: `inst_${"e".repeat(32)}`, pid: 77, port,
         startedAt: "2026-09-01T00:00:00.000Z", sessionToken: token });
       const file = join(f.root, "intake.json");
-      writeFileSync(file, JSON.stringify(f.intake), "utf8");
+      writeFileSync(file, JSON.stringify({ ...f.intake, ...(exception ? { budgetException: {
+        approved: true, mode: "MEASURE_ONLY", reason: "One measured trial", expiresAt: "2026-09-07T08:00:00.000Z",
+      } } : {}) }), "utf8");
       for (const args of [["planning-intake", file], ["planning-status", f.intake.bigTask.id], ["planning-run", f.intake.bigTask.id]]) {
         const result = await runOperatorCommandForTesting(parseOperatorCommand(args), paths, 5_000);
         expect(result.succeeded).toBe(true);

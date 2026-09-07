@@ -30,6 +30,56 @@ const review = (f: Fixture, outcome = "APPROVE") => {
 };
 
 describe("Big Task live planning ownership", () => {
+  it("measures above 120K only for the explicitly approved intake, preserving usage and approval across reopen", () => {
+    const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
+    try {
+      const budgetException = { approved: true, mode: "MEASURE_ONLY", reason: "One trial to measure actual usage.", expiresAt: "2026-09-07T08:00:00.000Z" };
+      f.planning.accept({ ...f.intake, budgetException });
+      expect(run(f, f.proposal, 140_000)).toMatchObject({ phase: "READY", totalTokens: 140_000, tokenLimit: 120_000, warning: true, budgetException });
+      f.reopen();
+      expect(run(f, review(f), 100_000)).toMatchObject({ phase: "APPROVED", totalTokens: 240_000, usageComplete: true, budgetException });
+      expect(f.planning.readIntake(f.intake.bigTask.id).intake.planningTokenLimit).toBe(120_000);
+      expect(() => f.planning.claim(f.intake.bigTask.id)).toThrow();
+    } finally { f.close(); }
+  });
+
+  it.each(["2026-09-07T05:59:59.999Z", "2026-09-07T06:00:00.000Z", "2026-09-07T09:00:00.001Z"])("rejects an expired or over-three-hour exception (%s)", (expiresAt) => {
+    const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
+    try {
+      expect(() => f.planning.accept({ ...f.intake, budgetException: { approved: true, mode: "MEASURE_ONLY", reason: "Trial", expiresAt } })).toThrow();
+      expect(f.storage.getBigTaskById(f.intake.bigTask.id)).toBeNull();
+    } finally { f.close(); }
+  });
+
+  it("requires explicit exception approval and still stops on unknown usage", () => {
+    const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
+    try {
+      const budgetException = { approved: true, mode: "MEASURE_ONLY", reason: "Trial", expiresAt: "2026-09-07T09:00:00.000Z" };
+      expect(() => f.planning.accept({ ...f.intake, budgetException: { ...budgetException, approved: false } })).toThrow();
+      f.planning.accept({ ...f.intake, budgetException });
+      expect(run(f, f.proposal, null)).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "USAGE_UNKNOWN", usageComplete: false });
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
+    } finally { f.close(); }
+  });
+
+  it.each([false, true])("enforces the immutable deadline before or during a turn (running=%s)", (running) => {
+    let now = new Date("2026-09-07T06:00:00.000Z");
+    const f = makePlanningFixture(() => now);
+    try {
+      f.planning.accept({ ...f.intake, budgetException: { approved: true, mode: "MEASURE_ONLY", reason: "Trial", expiresAt: "2026-09-07T06:30:00.000Z" } });
+      const claim = running ? f.planning.claim(f.intake.bigTask.id) : null;
+      now = new Date("2026-09-07T06:30:00.000Z");
+      if (claim !== null) {
+        f.planning.observe(f.intake.bigTask.id, claim.sequence, { providerThread: null, providerRun: null, model: null, normalizedUsage: { totalTokens: 180_000 } });
+        f.planning.finish(f.intake.bigTask.id, claim.sequence, true, JSON.stringify(f.proposal));
+      }
+      f.reopen();
+      expect(f.planning.inspect(f.intake.bigTask.id)).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "TIME_LIMIT_REACHED", totalTokens: running ? 180_000 : 0 });
+      expect(() => f.planning.claim(f.intake.bigTask.id)).toThrow();
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
+    } finally { f.close(); }
+  });
+
   it("accepts a clean gitlink baseline but stops when its worktree contents change", () => {
     const f = makePlanningFixture();
     try {

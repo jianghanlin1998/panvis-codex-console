@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   hasUnambiguousJsonStructure, BigTaskIdSchema, BigTaskPlanningIntakeSchema, PlannerResponseSchema,
-  PlannerReviewResponseSchema, PlanningRunRecordSchema, SubtaskIdSchema,
+  PlannerReviewResponseSchema, PlanningRunRecordSchema, PlanningProviderDiagnosticsSchema, SubtaskIdSchema,
   TaskContractV0Schema,
 } from "@codex-task-console/domain";
 import type {
@@ -41,6 +41,7 @@ export interface LivePlanningStatus {
   readonly totalTokens: number;
   readonly usageComplete: boolean;
   readonly tokenLimit: number;
+  readonly budgetException?: NonNullable<BigTaskPlanningIntake["budgetException"]>;
   readonly warning: boolean;
   readonly automaticRevisionsUsed: number;
   readonly reviewPhase: "AWAITING_REVIEW" | "AWAITING_REVISION" | "APPROVED" | "HUMAN_REQUIRED" | null;
@@ -64,6 +65,10 @@ export class LivePlanningStore {
     if (!parsed.success || canonical(input) !== canonical(parsed.data)
       || Buffer.byteLength(canonical(parsed.data), "utf8") > 24_000) fail("INVALID_INPUT");
     const intake = parsed.data;
+    if (intake.budgetException !== undefined) {
+      const remaining = Date.parse(intake.budgetException.expiresAt) - Date.parse(this.#now());
+      if (remaining <= 0 || remaining > 3 * 60 * 60_000) fail("INVALID_INPUT");
+    }
     return this.#storage.runInTransaction(() => {
       if (this.#storage.getBigTaskById(intake.bigTask.id) !== null) fail();
       this.#storage.createBigTask(intake.bigTask);
@@ -96,7 +101,10 @@ export class LivePlanningStore {
       phase = "HUMAN_REQUIRED";
       stopReason = review.humanReason;
     } else if (review?.phase === "APPROVED") phase = "APPROVED";
-    else if (runs.length >= 6 || totalTokens >= intake.planningTokenLimit || !usageComplete) {
+    else if (this.remainingTimeMs(input) === 0) {
+      phase = "HUMAN_REQUIRED";
+      stopReason = "TIME_LIMIT_REACHED";
+    } else if (runs.length >= 6 || (intake.budgetException === undefined && totalTokens >= intake.planningTokenLimit) || !usageComplete) {
       phase = "HUMAN_REQUIRED";
       stopReason = usageComplete ? "BUDGET_BLOCKED" : "USAGE_UNKNOWN";
     }
@@ -105,11 +113,18 @@ export class LivePlanningStore {
       nextRole: phase === "READY" ? (review?.phase === "AWAITING_REVIEW" ? "REVIEWER" : "PLANNER") : null,
       stopReason, questions: latest?.questions ?? [], totalTokens, usageComplete,
       tokenLimit: intake.planningTokenLimit,
+      ...(intake.budgetException === undefined ? {} : { budgetException: intake.budgetException }),
       warning: totalTokens >= Math.min(80_000, intake.planningTokenLimit),
       automaticRevisionsUsed: review?.automaticRevisionsUsed ?? 0,
       reviewPhase: review?.phase ?? null,
       runs: runs.map(({ inputText, ...run }) => { void inputText; return run; }),
     });
+  }
+
+  /** Uses the injected storage clock; zero prevents another provider turn. */
+  remainingTimeMs(input: BigTaskId): number | null {
+    const exception = this.#intake(input).intake.budgetException;
+    return exception === undefined ? null : Math.max(0, Date.parse(exception.expiresAt) - Date.parse(this.#now()));
   }
 
   claim(input: BigTaskId): PlanningRunRecord {
@@ -123,9 +138,13 @@ export class LivePlanningStore {
       // Only the current proposal enters fresh review. No transcripts, old runs or private notes.
       const packet = {
         format: "CTC_BIG_TASK_PLANNING_V0", role,
-        instruction: role === "PLANNER"
+        instruction: (role === "PLANNER"
           ? "Propose a complete bounded task graph and precise contracts for the approved goal. Respect scope and repository rules. No tools, edits, execution, self-approval or invented evidence. Ask product questions when intent is ambiguous. Dependencies must use task keys. Revision must satisfy the supplied review requirements."
-          : "Independently review goal coverage, scope, testable acceptance, dependencies and risk profiles. Review only; do not rewrite tasks or approve your own plan. APPROVE only a complete executable plan consistent with the approved goal. REJECT with concrete engineering revisions; ESCALATE product decisions. No tools or edits. Echo the exact candidate binding and revision.",
+          : "Independently review goal coverage, scope, testable acceptance, dependencies and risk profiles. Review only; do not rewrite tasks or approve your own plan. APPROVE only a complete executable plan consistent with the approved goal. REJECT with concrete engineering revisions; ESCALATE product decisions. No tools or edits. Echo the exact candidate binding and revision.")
+          + " Return compact JSON without indentation or formatting whitespace. The entire response has a hard limit of 16,384 UTF-8 bytes; aim below 12,000 bytes to leave room. Every text field must be a trimmed single-line string of at most 1,000 characters, with no control characters. Be concise and do not repeat shared intent or repository rules inside every contract. Use only the tasks needed for complete, independently verifiable delivery. Preserve all goal coverage and acceptance criteria."
+          + (role === "PLANNER"
+            ? " If a complete plan cannot fit, return HUMAN_REQUIRED with a concise scope question instead of truncating or omitting required work."
+            : " If a complete review cannot fit, use ESCALATE with a concise question instead of truncating or omitting blocking findings."),
         approvedIntent: source.intake,
         project: source.project,
         repository: source.repository,
@@ -168,9 +187,11 @@ export class LivePlanningStore {
     });
   }
 
-  finish(input: BigTaskId, sequence: number, success: boolean, output: string | null): LivePlanningStatus {
+  finish(input: BigTaskId, sequence: number, success: boolean, output: string | null,
+    diagnostics?: NonNullable<PlanningRunRecord["providerDiagnostics"]>): LivePlanningStatus {
     return this.#storage.runInTransaction(() => {
       const run = this.#running(input, sequence);
+      const providerDiagnostics = diagnostics === undefined ? undefined : PlanningProviderDiagnosticsSchema.parse(diagnostics);
       let stopReason: PlanningRunRecord["stopReason"] = null;
       let questions: string[] = [];
       const before = this.inspect(input);
@@ -178,7 +199,8 @@ export class LivePlanningStore {
       const currentProposal = bundle === null ? null : { candidate: bundle.reviewState.candidate, candidateBinding: digest(bundle.candidateBinding), taskContracts: bundle.taskContracts };
       const captured = JSON.parse(run.inputText) as { proposal?: unknown };
       if (!this.#contextMatches(input, this.#intake(input)) || canonical(currentProposal) !== canonical(captured.proposal)) stopReason = "CONTEXT_CHANGED";
-      else if (before.totalTokens >= before.tokenLimit) stopReason = "BUDGET_BLOCKED";
+      else if (this.remainingTimeMs(input) === 0) stopReason = "TIME_LIMIT_REACHED";
+      else if (before.budgetException === undefined && before.totalTokens >= before.tokenLimit) stopReason = "BUDGET_BLOCKED";
       else if (!success) stopReason = "PROVIDER_FAILED";
       else if (!before.usageComplete) stopReason = "USAGE_UNKNOWN";
       else if (run.providerThread === null || run.providerRun === null || run.model === null) stopReason = "PROVIDER_FAILED";
@@ -236,6 +258,7 @@ export class LivePlanningStore {
         } catch { stopReason = "INVALID_OUTPUT"; }
       }
       this.#write(input, PlanningRunRecordSchema.parse({ ...run,
+        ...(providerDiagnostics === undefined ? {} : { providerDiagnostics }),
         status: stopReason === null ? "COMPLETED" : "HUMAN_REQUIRED",
         endedAt: this.#now(), stopReason, questions,
       }));
@@ -272,11 +295,15 @@ export class LivePlanningStore {
     if (!this.#access.isOpen()) fail();
     const id = BigTaskIdSchema.safeParse(input);
     if (!id.success || id.data !== input) fail("INVALID_INPUT");
-    const row = this.#access.sqlite.prepare("SELECT payload FROM live_planning_intakes WHERE big_task_id = ?").get(input);
+    const row = this.#access.sqlite.prepare("SELECT payload, created_at FROM live_planning_intakes WHERE big_task_id = ?").get(input);
     if (row === undefined) fail();
     try {
       const value = JSON.parse(String(row.payload)) as { intake: unknown; project: unknown; repository: unknown };
       const intake = BigTaskPlanningIntakeSchema.parse(value.intake);
+      if (intake.budgetException !== undefined) {
+        const duration = Date.parse(intake.budgetException.expiresAt) - Date.parse(String(row.created_at));
+        if (!Number.isFinite(duration) || duration <= 0 || duration > 3 * 60 * 60_000) fail("MALFORMED_STORED_DATA");
+      }
       if (Object.keys(value).sort().join(",") !== "intake,project,repository"
         || intake.bigTask.id !== input || canonical({ ...value, intake }) !== row.payload) fail("MALFORMED_STORED_DATA");
       return { intake, project: value.project, repository: value.repository };

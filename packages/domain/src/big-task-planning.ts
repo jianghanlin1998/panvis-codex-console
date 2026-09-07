@@ -12,12 +12,37 @@ const text = z.string().min(1).max(1_000)
   }));
 const texts = z.array(text).max(24);
 
+/** Explicit, immutable authority for one intake; never a new default budget. */
+export const PlanningBudgetExceptionSchema = z.object({
+  approved: z.literal(true),
+  mode: z.literal("MEASURE_ONLY"),
+  reason: text,
+  expiresAt: z.iso.datetime(),
+}).strict();
+
+export const PlanningProviderDiagnosticsSchema = z.object({
+  failureCode: z.enum([
+    "INVALID_INPUT", "PREFLIGHT_FAILED", "PREFLIGHT_BLOCKED", "ACTIVE_RUNTIME_REQUIRED",
+    "APP_SERVER_START_FAILED", "APP_SERVER_PROTOCOL_ERROR", "APP_SERVER_TIMEOUT", "APP_SERVER_EXITED",
+    "JSONL_LIMIT_EXCEEDED", "CHATGPT_AUTH_REQUIRED", "AUTH_RESPONSE_MALFORMED", "EPHEMERAL_THREAD_REQUIRED",
+    "READ_ONLY_POLICY_REQUIRED", "TURN_FAILED", "TURN_INTERRUPTED", "TERMINAL_EVENT_REQUIRED",
+    "AGENT_RESPONSE_LIMIT_EXCEEDED", "APPROVAL_REQUESTED", "TOOL_ACTION_ATTEMPTED",
+    "UNEXPECTED_SERVER_REQUEST", "PROCESS_CLEANUP_FAILED", "WORKSPACE_CLEANUP_FAILED",
+  ]).nullable(),
+  notificationsReceived: z.number().int().nonnegative(),
+  unknownNotificationsIgnored: z.number().int().nonnegative(),
+  interruptRequests: z.number().int().nonnegative(),
+  appServerChildCleaned: z.boolean(),
+  disposableWorkspaceCleaned: z.boolean(),
+}).strict();
+
 /** Human intake contains intent, never a caller-authored execution graph. */
 export const BigTaskPlanningIntakeSchema = z.object({
   bigTask: BigTaskSchema.extend({ status: z.literal("IN_PROGRESS") }).strict(),
   approved: z.literal(true),
   productDecisions: texts,
   planningTokenLimit: z.number().int().min(1).max(120_000),
+  budgetException: PlanningBudgetExceptionSchema.optional(),
 }).strict();
 export type BigTaskPlanningIntake = z.infer<typeof BigTaskPlanningIntakeSchema>;
 
@@ -86,7 +111,8 @@ export const PlanningRunRecordSchema = z.object({
   providerRun: ProviderRunReferenceSchema.nullable(),
   model: ProviderModelReferenceSchema.nullable(),
   normalizedUsage: NormalizedUsageSchema.nullable(),
-  stopReason: z.enum(["PRODUCT_QUESTION", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"]).nullable(),
+  providerDiagnostics: PlanningProviderDiagnosticsSchema.optional(),
+  stopReason: z.enum(["PRODUCT_QUESTION", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "TIME_LIMIT_REACHED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"]).nullable(),
   questions: texts,
 }).strict().superRefine((value, context) => {
   if ((value.status === "RUNNING") !== (value.endedAt === null)

@@ -10,6 +10,7 @@ import {
 } from "@codex-task-console/codex-adapter";
 import {
   BigTaskPlanningIntakeSchema,
+  PlanningBudgetExceptionSchema,
   PlanningRunRecordSchema,
   BigTaskIdSchema,
   ChatThreadIdSchema,
@@ -127,7 +128,9 @@ const readPlanningIntake = (path: string): BigTaskPlanningIntake => {
 };
 
 const isPlanningStatus = (value: Readonly<Record<string, unknown>>, id: BigTaskId): boolean => {
-  if (!hasExactKeys(value, ["bigTaskId", "phase", "nextRole", "stopReason", "questions", "totalTokens", "usageComplete", "tokenLimit", "warning", "automaticRevisionsUsed", "reviewPhase", "runs"])
+  const exception = "budgetException" in value;
+  if ((exception && !PlanningBudgetExceptionSchema.safeParse(value.budgetException).success)
+    || !hasExactKeys(value, ["bigTaskId", "phase", "nextRole", "stopReason", "questions", "totalTokens", "usageComplete", "tokenLimit", "warning", "automaticRevisionsUsed", "reviewPhase", "runs", ...(exception ? ["budgetException"] : [])])
     || value.bigTaskId !== id || !["READY", "RUNNING", "APPROVED", "HUMAN_REQUIRED"].includes(value.phase as string)
     || !Array.isArray(value.runs) || value.runs.length > 6
     || !Array.isArray(value.questions) || value.questions.length > 24
@@ -153,9 +156,9 @@ const isPlanningStatus = (value: Readonly<Record<string, unknown>>, id: BigTaskI
     && value.warning === (total >= Math.min(80_000, Number(value.tokenLimit)))
     && (value.phase === "READY" ? ["PLANNER", "REVIEWER"].includes(value.nextRole as string) : value.nextRole === null)
     && (value.phase === "RUNNING") === (last?.status === "RUNNING")
-    && (value.phase === "HUMAN_REQUIRED" ? ["PRODUCT_QUESTION", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"].includes(value.stopReason as string) : value.stopReason === null)
-    && (value.phase !== "APPROVED" || (value.reviewPhase === "APPROVED" && last?.role === "REVIEWER" && last.status === "COMPLETED" && complete && total < Number(value.tokenLimit)))
-    && (value.phase !== "READY" || (complete && total < Number(value.tokenLimit) && value.runs.length < 6
+    && (value.phase === "HUMAN_REQUIRED" ? ["PRODUCT_QUESTION", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "TIME_LIMIT_REACHED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"].includes(value.stopReason as string) : value.stopReason === null)
+    && (value.phase !== "APPROVED" || (value.reviewPhase === "APPROVED" && last?.role === "REVIEWER" && last.status === "COMPLETED" && complete && (exception || total < Number(value.tokenLimit))))
+    && (value.phase !== "READY" || (complete && (exception || total < Number(value.tokenLimit)) && value.runs.length < 6
       && value.nextRole === (value.reviewPhase === "AWAITING_REVIEW" ? "REVIEWER" : "PLANNER")
       && [null, "AWAITING_REVIEW", "AWAITING_REVISION"].includes(value.reviewPhase as string | null)));
 };

@@ -1,13 +1,105 @@
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { executeBigTaskPlanningCodexForTest } from "../src/live-execution.js";
 import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js";
 import { planningProviderFixture } from "./planning-provider-fixture.js";
 
 describe("real Big Task planning adapter with deterministic JSONL peer", () => {
+  it("accepts a valid bounded plan delivered in more than 2,000 tiny text deltas", async () => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const proposal = { ...f.proposal, tasks: f.proposal.tasks.map((task) => ({ ...task, goal: "x".repeat(1_000) })) };
+      const provider = planningProviderFixture(() => proposal, { streamResponse: true });
+      const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, {
+        ...provider.dependencies, limits: { ...provider.dependencies.limits, maxNotifications: 2_000 },
+      });
+      expect(result).toMatchObject({ phase: "READY", nextRole: "REVIEWER", totalTokens: 100 });
+      expect(result.runs[0]?.providerDiagnostics?.failureCode).toBeNull();
+      expect(result.runs[0]?.providerDiagnostics?.notificationsReceived).toBeGreaterThan(2_000);
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)?.reviewState.candidate.subtasks).toHaveLength(2);
+    } finally { f.close(); }
+  });
+
+  it.each([
+    ["oversized UTF-8 output", Array.from("你".repeat(5_462)), undefined, "AGENT_RESPONSE_LIMIT_EXCEEDED"],
+    ["empty-delta flood", Array.from({ length: 65 }, () => ""), undefined, "JSONL_LIMIT_EXCEEDED"],
+    ["foreign thread", ["x"], "unrelated-thread", "APP_SERVER_PROTOCOL_ERROR"],
+  ] as const)("keeps byte, control-event and authority limits for %s", async (_name, agentChunks, deltaThreadId, failureCode) => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const provider = planningProviderFixture(() => f.proposal, { agentChunks, ...(deltaThreadId === undefined ? {} : { deltaThreadId }) });
+      const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies);
+      expect(result).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "PROVIDER_FAILED", totalTokens: 100 });
+      expect(result.runs[0]?.providerDiagnostics).toMatchObject({ failureCode, appServerChildCleaned: true, disposableWorkspaceCleaned: true });
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
+      expect(provider.launches).toHaveLength(1);
+    } finally { f.close(); }
+  });
+
+  it("interrupts an active provider at the exception deadline and retains the exact timeout cause", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T06:00:00.000Z"));
+    const f = makePlanningFixture(() => new Date());
+    try {
+      f.planning.accept({ ...f.intake, budgetException: { approved: true, mode: "MEASURE_ONLY", reason: "Deadline test", expiresAt: "2026-09-07T06:00:05.000Z" } });
+      const provider = planningProviderFixture(() => f.proposal, { silentTurn: true });
+      const pending = executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, {
+        ...provider.dependencies, limits: { ...provider.dependencies.limits, turnIdleTimeoutMs: 30_000, turnAbsoluteTimeoutMs: 60_000 },
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(f.planning.inspect(f.intake.bigTask.id).phase).toBe("RUNNING");
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(result).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "TIME_LIMIT_REACHED", usageComplete: false });
+      expect(result.runs[0]?.providerDiagnostics).toMatchObject({ failureCode: "APP_SERVER_TIMEOUT", interruptRequests: 1, appServerChildCleaned: true, disposableWorkspaceCleaned: true });
+      expect(provider.requests.filter((request) => request.method === "turn/interrupt")).toHaveLength(1);
+      expect(provider.launches).toHaveLength(1);
+    } finally { f.close(); vi.useRealTimers(); }
+  });
+
+  it("persists a bounded failure code and counts instead of discarding the adapter cause or exposing provider text", async () => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const provider = planningProviderFixture(() => f.proposal, { extraNotifications: 65 });
+      const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies);
+      expect(result).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "PROVIDER_FAILED", usageComplete: false });
+      expect(result.runs[0]?.providerDiagnostics).toEqual({ failureCode: "JSONL_LIMIT_EXCEEDED", notificationsReceived: 65,
+        unknownNotificationsIgnored: 64, interruptRequests: 0, appServerChildCleaned: true, disposableWorkspaceCleaned: true });
+      expect(JSON.stringify(result)).not.toContain("private-provider-canary");
+      f.reopen();
+      expect(f.planning.inspect(f.intake.bigTask.id)).toEqual(result);
+      expect(provider.launches).toHaveLength(1);
+    } finally { f.close(); }
+  });
+
+  it("finishes and independently reviews a measured trial above the baseline token cap", async () => {
+    const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
+    try {
+      f.planning.accept({ ...f.intake, budgetException: { approved: true, mode: "MEASURE_ONLY", reason: "One approved trial.", expiresAt: "2026-09-07T08:00:00.000Z" } });
+      const provider = planningProviderFixture((packet) => packet.role === "PLANNER" ? f.proposal : {
+        outcome: "APPROVE", planRevision: packet.proposal!.candidate.revision,
+        candidateBinding: packet.proposal!.candidateBinding, revisionRequirements: [], questions: [],
+      }, { tokens: 150_000 });
+      expect((await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies)).phase).toBe("READY");
+      const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies);
+      expect(result).toMatchObject({ phase: "APPROVED", totalTokens: 300_000, usageComplete: true, tokenLimit: 120_000 });
+      expect(provider.requests.filter((request) => request.method === "turn/interrupt")).toHaveLength(0);
+      expect(provider.launches).toHaveLength(2);
+      for (const packet of provider.packets) {
+        expect(packet.instruction).toContain("hard limit of 16,384 UTF-8 bytes");
+        expect(packet.instruction).toContain("trimmed single-line string of at most 1,000 characters");
+        expect(packet.instruction).toContain("Preserve all goal coverage and acceptance criteria");
+        expect(packet.instruction).toContain(packet.role === "PLANNER" ? "return HUMAN_REQUIRED" : "use ESCALATE");
+      }
+    } finally { f.close(); }
+  });
+
   it("disables every configured MCP server for both fresh roles without forwarding other config", async () => {
     const f = makePlanningFixture();
     try {

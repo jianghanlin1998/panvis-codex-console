@@ -7,7 +7,7 @@ import { BigTaskPlanningIntakeSchema, ProjectSchema } from "@codex-task-console/
 import { LivePlanningStore, openTaskDatabase } from "../src/index.js";
 import { fixedClock, makeBigTask, makeProject } from "./fixtures.js";
 
-export const makePlanningFixture = () => {
+export const makePlanningFixture = (clock: () => Date = fixedClock) => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "ctc-planning-test-"));
   const repository = join(root, "repository");
   mkdirSync(repository);
@@ -19,7 +19,7 @@ export const makePlanningFixture = () => {
   git(["add", "AGENTS.md"]);
   git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "Initial fixture"]);
   const databasePath = join(root, "tasks.sqlite");
-  let storage = openTaskDatabase({ databasePath, clock: fixedClock });
+  let storage = openTaskDatabase({ databasePath, clock });
   const project = ProjectSchema.parse({ ...makeProject("prj_live_plan", "live-plan"), repository: { kind: "PATH", path: repository } });
   storage.createProject(project);
   const intake = BigTaskPlanningIntakeSchema.parse({
@@ -38,7 +38,7 @@ export const makePlanningFixture = () => {
     root, repository, databasePath, intake, proposal, git,
     get storage() { return storage; },
     get planning() { return new LivePlanningStore(storage); },
-    reopen() { storage.close(); storage = openTaskDatabase({ databasePath, clock: fixedClock }); },
+    reopen() { storage.close(); storage = openTaskDatabase({ databasePath, clock }); },
     close() { if (storage.isOpen) storage.close(); rmSync(root, { recursive: true, force: true }); },
   };
 };

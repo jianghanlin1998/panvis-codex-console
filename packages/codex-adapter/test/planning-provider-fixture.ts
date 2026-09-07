@@ -11,6 +11,7 @@ import { TESTED_CODEX_VERSION } from "../src/compatibility.js";
 type Dependencies = Parameters<typeof executeBigTaskPlanningCodexForTest>[2];
 export interface PlanningMockPacket {
   role: "PLANNER" | "REVIEWER";
+  instruction: string;
   proposal: { candidateBinding: string; candidate: { revision: number } } | null;
   revisionRequirements?: string[];
 }
@@ -18,7 +19,11 @@ export interface PlanningMockPacket {
 /** In-memory JSONL peer: no provider process, network, real-time waits or shared fixtures. */
 export function planningProviderFixture(
   answer: (packet: PlanningMockPacket, sequence: number) => unknown,
-  options: { omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; duplicateThread?: boolean; configReadResult?: unknown } = {},
+  options: {
+    omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; duplicateThread?: boolean;
+    configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean;
+    streamResponse?: boolean; agentChunks?: readonly string[]; deltaThreadId?: string;
+  } = {},
 ) {
   const packets: PlanningMockPacket[] = [];
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -72,6 +77,10 @@ export function planningProviderFixture(
               packets.push(packet);
               reply({ turn: { id: turnId, status: "inProgress" } });
               queueMicrotask(() => {
+                if (options.silentTurn) return;
+                for (let i = 0; i < (options.extraNotifications ?? 0); i += 1) {
+                  send({ method: "fixture/unknown", params: { message: "private-provider-canary" } });
+                }
                 if (!options.omitUsage) {
                   const totalTokens = options.tokens ?? 100;
                   send({ method: "thread/tokenUsage/updated", params: { threadId, turnId, tokenUsage: { total: {
@@ -82,7 +91,12 @@ export function planningProviderFixture(
                 if (options.toolAttempt) {
                   send({ method: "item/started", params: { threadId, turnId, item: { id: "command", type: "commandExecution", status: "inProgress" } } });
                 } else {
-                  send({ method: "item/completed", params: { threadId, turnId, item: { id: "answer", type: "agentMessage", text: JSON.stringify(answer(packet, sequence)) } } });
+                  const text = JSON.stringify(answer(packet, sequence));
+                  const chunks = options.agentChunks ?? (options.streamResponse ? Array.from(text) : []);
+                  for (const delta of chunks) {
+                    send({ method: "item/agentMessage/delta", params: { threadId: options.deltaThreadId ?? threadId, turnId, itemId: "answer", delta } });
+                  }
+                  send({ method: "item/completed", params: { threadId, turnId, item: { id: "answer", type: "agentMessage", text } } });
                 }
                 send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed", items: [], error: null } } });
               });

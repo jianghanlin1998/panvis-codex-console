@@ -990,6 +990,7 @@ class TurnEventTracker {
 }
 
 class JsonlAppServerClient {
+  #controlNotificationsReceived = 0;
   readonly #pending = new Map<number | string, PendingRequest>();
   readonly #seenResponseIds = new Set<number | string>();
   readonly #decoder = new TextDecoder("utf-8", { fatal: true });
@@ -1005,6 +1006,7 @@ class JsonlAppServerClient {
     private readonly limits: LiveExecutionLimits,
     private readonly diagnostics: MutableDiagnostics,
     private readonly events: TurnEventTracker,
+    private readonly byteMeteredAgentDeltas = false,
   ) {
     child.stdout.on("data", (chunk: Buffer | string) => {
       this.#receiveStdout(chunk);
@@ -1215,7 +1217,15 @@ class JsonlAppServerClient {
     const record = requireRecord(message);
     if (typeof record.method === "string") {
       this.diagnostics.notificationsReceived += 1;
-      if (this.diagnostics.notificationsReceived > this.limits.maxNotifications) {
+      // Planning text is already bounded by accumulated UTF-8 bytes and exact
+      // thread/turn validation below. Stream chunk size is provider-controlled;
+      // a valid answer must not fail just because it arrives in tiny chunks.
+      // Empty deltas, unknown events and requests still consume the count cap.
+      const meteredDelta = this.byteMeteredAgentDeltas && !("id" in record)
+        && record.method === "item/agentMessage/delta"
+        && requireString(requireRecord(record.params).delta).length > 0;
+      if (!meteredDelta) this.#controlNotificationsReceived += 1;
+      if (this.#controlNotificationsReceived > this.limits.maxNotifications) {
         throw new LiveExecutionError("JSONL_LIMIT_EXCEEDED");
       }
       if ("id" in record) {
@@ -2289,7 +2299,11 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   subtaskId: SubtaskId | null,
   profile: OperationalJitContextProfile,
   dependencies: LiveExecutionDependencies,
-  planning?: { readonly text: string; readonly outputSchema: JsonValue; readonly tokenLimit: number; readonly observe: (evidence: ReturnType<typeof emptyEvidence>) => void },
+  planning?: {
+    readonly text: string; readonly outputSchema: JsonValue; readonly tokenLimit: number | null;
+    readonly remainingTimeMs: () => number | null;
+    readonly observe: (evidence: ReturnType<typeof emptyEvidence>) => void;
+  },
 ): Promise<LiveCodexExecutionResult> {
   const diagnostics = emptyDiagnostics();
   const evidence = emptyEvidence();
@@ -2353,7 +2367,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       planning === undefined ? undefined : (usage) => {
         evidence.normalizedUsage = usage;
         planning.observe(evidence);
-        if (usage.totalTokens !== undefined && usage.totalTokens >= planning.tokenLimit) {
+        if (planning.tokenLimit !== null && usage.totalTokens !== undefined && usage.totalTokens >= planning.tokenLimit) {
           throw new LiveExecutionError("TURN_INTERRUPTED");
         }
       },
@@ -2385,6 +2399,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       dependencies.limits,
       diagnostics,
       eventTracker,
+      planning !== undefined,
     );
     await client.waitForSpawn(dependencies.limits.startupTimeoutMs);
 
@@ -2456,6 +2471,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     };
 
     eventTracker.assertChatGptAuthenticated();
+    if (planning?.remainingTimeMs() === 0) throw new LiveExecutionError("APP_SERVER_TIMEOUT");
     const turnResult = await client.request(
       4,
       "turn/start",
@@ -2493,9 +2509,11 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     evidence.providerRun = mapCodexTurnReference(thread.threadId, turnId);
     planning?.observe(evidence);
 
+    const remainingTimeMs = planning?.remainingTimeMs();
+    if (remainingTimeMs === 0) throw new LiveExecutionError("APP_SERVER_TIMEOUT");
     const terminal = await eventTracker.waitForTerminal(
       dependencies.limits.turnIdleTimeoutMs,
-      dependencies.limits.turnAbsoluteTimeoutMs,
+      Math.min(dependencies.limits.turnAbsoluteTimeoutMs, remainingTimeMs ?? Infinity),
     );
     if (client.failure !== null) {
       throw client.failure;
@@ -2626,7 +2644,8 @@ async function executeBigTaskPlanningWithDependencies(
     const result = await executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", dependencies, {
       text: run.inputText,
       outputSchema: (run.role === "PLANNER" ? PLANNER_OUTPUT_SCHEMA : PLANNER_REVIEW_OUTPUT_SCHEMA) as JsonValue,
-      tokenLimit: before.tokenLimit - before.totalTokens,
+      tokenLimit: before.budgetException === undefined ? before.tokenLimit - before.totalTokens : null,
+      remainingTimeMs: () => planning.remainingTimeMs(bigTaskId),
       observe: (evidence) => planning.observe(bigTaskId, run.sequence, {
         providerThread: evidence.providerThread, providerRun: evidence.providerRun,
         model: evidence.model, normalizedUsage: evidence.normalizedUsage,
@@ -2636,7 +2655,14 @@ async function executeBigTaskPlanningWithDependencies(
       providerThread: result.providerThread, providerRun: result.providerRun,
       model: result.model, normalizedUsage: result.normalizedUsage,
     });
-    return planning.finish(bigTaskId, run.sequence, result.success, result.agentResponseText);
+    return planning.finish(bigTaskId, run.sequence, result.success, result.agentResponseText, {
+      failureCode: result.failureCode,
+      notificationsReceived: result.diagnostics.notificationsReceived,
+      unknownNotificationsIgnored: result.diagnostics.unknownNotificationsIgnored,
+      interruptRequests: result.diagnostics.interruptRequests,
+      appServerChildCleaned: result.appServerChildCleaned,
+      disposableWorkspaceCleaned: result.disposableWorkspaceCleaned,
+    });
   } catch {
     return planning.finish(bigTaskId, run.sequence, false, null);
   }
