@@ -27,6 +27,10 @@ export class GovernedExecutionStore {
     Object.freeze(this);
   }
 
+  reviewExecutionRecovery(bigTaskId: BigTaskId) { return getGovernedProviderBridge(this).reviewExecutionRecovery(bigTaskId); }
+
+  recoverExecution(input: unknown) { return getGovernedProviderBridge(this).recoverExecution(input); }
+
   inspectBigTask(bigTaskId: BigTaskId) {
     return getGovernedProviderBridge(this).inspectBigTask(bigTaskId);
   }

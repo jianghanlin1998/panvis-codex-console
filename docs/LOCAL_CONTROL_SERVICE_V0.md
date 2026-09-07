@@ -221,3 +221,7 @@ fixtures and ordinary Git operations used the required sandbox permissions;
 no dependency refresh, runtime replacement, test-timeout relaxation or full-suite
 recovery rerun was used. Development fixture/type/lint failures were corrected
 at their source before final verification.
+
+### Explicit failed-implementation recovery
+
+`execution-recovery-review <bigTaskId>` and `execution-recover <json-file>` expose the bounded, human-approved Sol/xhigh continuation described in [Big Task execution](BIG_TASK_APPROVED_EXECUTION_V0.md#explicit-sol-recovery-of-one-failed-implementation). Their fixed localhost POST routes use the existing authentication, origin checks, 16 KiB request limit and 64 KiB response limit. They preserve the original aggregate budget, deadline, usage and failed provider identity. Recovery records authority and a replacement attempt; it does not start a model until the existing execution-start command is invoked.

@@ -10,7 +10,7 @@ This bounded slice extends Step 9B's live planning and the existing governed rol
 - `execution-status <bigTaskId>` and `execution-pause <bigTaskId>`: inspect or stop a worker. Known token totals are separate from active calls and unknown completed usage. Missing usage is never represented as complete zero usage.
 - `execution-accept <json-file>`: `{bigTaskId, headSha}` confirms only the exact integrated result after automated completion. Hanlin may inspect/check out the result first. This operation does not merge, push or deploy it.
 
-Fixed authenticated localhost POST routes use `/v0/execution/{review,approve,status,start,pause,accept}`. Existing strict JSON, body, response, origin and authentication boundaries apply. No shell commands, paths, network permissions or model options may be supplied through these endpoints.
+Fixed authenticated localhost POST routes use `/v0/execution/{review,approve,status,start,pause,accept}`. Existing strict JSON, body, response, origin and authentication boundaries apply. No shell commands, paths or network permissions may be supplied through these endpoints. Existing endpoints do not accept model options; the explicit recovery endpoint below accepts only its fixed Sol/xhigh policy.
 
 ## Candidate and recovery guarantees
 
@@ -31,3 +31,18 @@ The forward migration reconstructs five counter-constrained tables with every hi
 The existing four-task AI Update Board plan is preserved. Its STANDARD upstream tasks cannot satisfy its ACCEPTED dependency gates; it requires a corrected, freshly reviewed plan before execution approval. Its final read-only verification task also cannot perform automatic code repairs. Do not silently rewrite that candidate, reset prior attempts, reuse an expired planning exception or claim that implementation has begun. The new review reports this conflict and approval rejects it before target execution.
 
 This slice adds no discussion UI, direct small-task intake, deployment, live network verification runner, automatic budget extension or automatic human acceptance.
+
+## Explicit Sol recovery of one failed implementation
+
+Hanlin approved a task-scoped continuation after the Board's first implementation exceeded its 120K subtask allowance. This amendment preserves the original plan, source, result branch, start/expiry, aggregate token limit, role-call limit, two repair cycles and all historical usage (including cached input). Other tasks and ordinary execution defaults are unchanged.
+
+- `execution-recovery-review <bigTaskId>` is read-only. It returns the exact failed authorization/run, current retained-file digest, plan/source binding, known tokens and original expiry. Only one terminal failed/interrupted writable EXECUTE role with complete usage and no accepted role result can qualify; active or unknown work, source drift, expiry and exhausted aggregate/call limits are rejected.
+- `execution-recover <json-file>` records the reviewed request after human authorization. The request fixes `model: gpt-5.6-sol`, `reasoningEffort: xhigh`, and `subtaskBudgetMode: WARNING_ONLY`. There is no arbitrary model, path or limit override. A replay of the identical request is idempotent; any different second request is rejected.
+- The recovery adds one authorization at the same workflow stage with a separate immutable identity and run. The old failed attempt remains counted and cannot be replayed. The candidate is retained without an automatic commit or acceptance. Its content digest must still match before the replacement model can start, including if deletion of partial files makes Git clean again.
+- `execution-start` resumes from the recorded PAUSED checkpoint. Both thread/start and turn/start explicitly select the requested model/effort; a different model returned by the provider is rejected. No user-wide configuration changes. Subsequent roles in this same Big Task inherit the explicit policy.
+- The original aggregate budget remains the hard stopping boundary. Subtask usage is still reported in full, with a 120K warning instead of a separate hard pause. Streaming usage can arrive after a generation step has crossed the remaining allowance; it is retained honestly and stops further execution. Unknown usage still blocks.
+- Recovery does not consume or reset QA repair cycles. It permits only one known failed initial implementation recovery, not generic replay of failed QA, uncertain provider calls, or repeated recoveries. All ordinary hardening, fresh QA, integration, and final human acceptance remain required.
+
+Migration 24 adds a default-zero recovery ordinal to role authorizations and extends the uniqueness/immutable-insert guards. Existing rows, links, provider claims and events stay unchanged. The recovery request is append-only execution evidence. Older binaries cannot understand this new evidence/schema; do not downgrade an activated database in place.
+
+Fixed authenticated localhost routes are `/v0/execution/recovery-review` and `/v0/execution/recover`, retaining the ordinary request/response size, origin, token and method checks. Activation requires all repository verification checks first.

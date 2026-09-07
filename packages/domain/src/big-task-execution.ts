@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BigTaskIdSchema, SubtaskIdSchema } from "./identifiers.js";
+import { BigTaskIdSchema, SubtaskIdSchema, ExecutionRunIdSchema } from "./identifiers.js";
 import { RepositoryCommitShaSchema } from "./implementation-checkpoint.js";
 
 export const BigTaskExecutionLimitsSchema = z.object({
@@ -17,6 +17,26 @@ export const BigTaskExecutionApprovalSchema = z.object({
 export type BigTaskExecutionApproval = z.infer<typeof BigTaskExecutionApprovalSchema>;
 export type BigTaskExecutionLimits = z.infer<typeof BigTaskExecutionLimitsSchema>;
 
+/** Explicit one-time recovery of a known failed implementation; never a budget reset. */
+export const BigTaskExecutionRecoverySchema = z.object({
+  bigTaskId: BigTaskIdSchema,
+  planDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  repositoryHeadSha: RepositoryCommitShaSchema,
+  failedAuthorizationId: z.string().regex(/^gra_[a-f0-9]{48}$/u),
+  failedExecutionRunId: ExecutionRunIdSchema,
+  candidateDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  model: z.literal("gpt-5.6-sol"),
+  reasoningEffort: z.literal("xhigh"),
+  subtaskBudgetMode: z.literal("WARNING_ONLY"),
+}).strict();
+export type BigTaskExecutionRecovery = z.infer<typeof BigTaskExecutionRecoverySchema>;
+export const BigTaskExecutionRecoveryReviewSchema = z.object({
+  request: BigTaskExecutionRecoverySchema,
+  knownTokens: z.number().int().nonnegative(),
+  expiresAt: z.string().datetime({ precision: 3 }),
+}).strict();
+const recovery = BigTaskExecutionRecoverySchema.extend({ authorizationId: z.string().regex(/^gra_[a-f0-9]{48}$/u) }).strict();
+
 export const BigTaskExecutionAcceptanceSchema = z.object({ bigTaskId: BigTaskIdSchema, headSha: RepositoryCommitShaSchema }).strict();
 const timestamp = z.string().datetime({ precision: 3 });
 const integration = z.object({ subtaskId: SubtaskIdSchema.nullable(), fromSha: RepositoryCommitShaSchema, toSha: RepositoryCommitShaSchema }).strict();
@@ -26,6 +46,7 @@ export const BigTaskExecutionStatusSchema = z.object({
   stopReason: z.enum(["USER_PAUSED", "DAEMON_STOPPING", "CHECKPOINT_RECOVERED", "INTERRUPTED", "TIME_LIMIT_REACHED", "TOKEN_LIMIT_REACHED", "ROLE_LIMIT_REACHED", "USAGE_UNKNOWN", "GOVERNED_BLOCKED", "LOCAL_OPERATION_FAILED"]).nullable(),
   startedAt: timestamp.nullable(), expiresAt: timestamp.nullable(), limits: BigTaskExecutionLimitsSchema,
   roleCalls: z.number().int().nonnegative().max(192), knownTokens: z.number().int().nonnegative(), usageComplete: z.boolean(), activeRoleCount: z.number().int().min(0).max(1), unknownCompletedUsage: z.boolean(),
+  recovery: recovery.optional(),
   resultRef: z.string().regex(/^refs\/heads\/codex\/execution\/[a-f0-9]{32}$/u), resultHeadSha: RepositoryCommitShaSchema,
   integratedSubtaskIds: z.array(SubtaskIdSchema).max(24), pendingIntegration: integration.nullable(), resultRefCreated: z.boolean(),
 }).strict().refine(v => v.roleCalls <= v.limits.roleCallLimit && v.usageComplete === (v.activeRoleCount === 0 && !v.unknownCompletedUsage) && new Set(v.integratedSubtaskIds).size === v.integratedSubtaskIds.length &&

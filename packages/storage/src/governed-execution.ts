@@ -1,9 +1,10 @@
-import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask } from "./big-task-execution.js";
+import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId } from "./big-task-execution.js";
 import { checkExecutionGitFilters, executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import {
+  BigTaskExecutionRecoverySchema,
   ChatThreadIdSchema,
   NormalizedUsageSchema,
   DEFAULT_V1_BUDGET_POLICY,
@@ -114,7 +115,8 @@ export interface AggregateSubtaskUsageBudget {
   readonly totalTokens: number | null;
   readonly warning: boolean;
   readonly extensionApplied: boolean;
-  readonly effectiveLimitTokens: 120_000 | 160_000;
+  readonly effectiveLimitTokens: number;
+  readonly scope?: "BIG_TASK";
 }
 
 export interface GovernedDispatchReceipt {
@@ -309,6 +311,7 @@ interface DispatchRow {
 
 interface RoleAuthorizationRow {
   readonly authorization_id: string;
+  readonly recovery_attempt: number;
   readonly dispatch_receipt_id: string;
   readonly project_id: string;
   readonly big_task_id: string;
@@ -718,7 +721,8 @@ const parseRoleAuthorizationRow = (
     "FOCUSED_RE_QA",
   ].find((value) => value === row.context_profile);
   if (
-    row.authorization_id !== stableId("gra", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence, row.repair_cycles_used, row.role) ||
+    (row.recovery_attempt !== 0 && row.recovery_attempt !== 1) ||
+    row.authorization_id !== (row.recovery_attempt === 1 ? recoveryAuthorizationId(stableId("gra", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence, row.repair_cycles_used, row.role)) : stableId("gra", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence, row.repair_cycles_used, row.role)) ||
     !/^gra_[0-9a-f]{48}$/u.test(row.authorization_id) ||
     !/^gdr_[0-9a-f]{48}$/u.test(row.dispatch_receipt_id) ||
     !subtaskId.success ||
@@ -1063,6 +1067,59 @@ export class GovernedExecutionStore {
     });
   }
 
+  reviewExecutionRecovery(bigTaskId: BigTaskId) {
+    const execution = new BigTaskExecutionStore(this.#storage);
+    const state = execution.inspect(bigTaskId);
+    execution.assertCurrent(bigTaskId);
+    if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" || state.recovery !== undefined ||
+      !state.usageComplete || state.expiresAt === null || Date.parse(state.expiresAt) <= this.#access().clock().getTime() ||
+      state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit || state.pendingIntegration !== null) throw conflict("Recovery is unavailable.");
+    this.#validateBigTaskAuthority(bigTaskId);
+    const rows = this.#access().sqlite.prepare(`SELECT a.authorization_id, l.execution_run_id FROM governed_role_authorizations a
+      JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id JOIN execution_runs r ON r.id=l.execution_run_id
+      WHERE a.big_task_id=? AND r.status!='SUCCEEDED'`).all(bigTaskId);
+    if (rows.length !== 1) throw conflict("One known failed implementation is required.");
+    const authorization = this.getRoleAuthorization(String(rows[0]!.authorization_id))!;
+    const run = this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(rows[0]!.execution_run_id));
+    this.#assertRoleAuthorizationCurrent(authorization);
+    if (authorization.role !== "EXECUTE" || !authorization.writeEnabled || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
+      run.normalizedUsage?.totalTokens === undefined || this.#getRoleResult(authorization.authorizationId) !== null) throw conflict("The failed role cannot be recovered.");
+    const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
+    if (worktree.ownership.id !== authorization.worktreeOwnershipId || worktree.currentHeadSha !== authorization.candidateSha) throw conflict("Recovery candidate changed.");
+    const candidateDigest = executionCandidateDigest(worktree.ownership, () => Date.parse(state.expiresAt!) - this.#access().clock().getTime());
+    return { request: { bigTaskId, planDigest: state.planDigest, repositoryHeadSha: execution.review(bigTaskId).repositoryHeadSha,
+      failedAuthorizationId: authorization.authorizationId, failedExecutionRunId: run.id, candidateDigest,
+      model: "gpt-5.6-sol" as const, reasoningEffort: "xhigh" as const, subtaskBudgetMode: "WARNING_ONLY" as const },
+      knownTokens: state.knownTokens, expiresAt: state.expiresAt };
+  }
+
+  recoverExecution(input: unknown) {
+    const request = BigTaskExecutionRecoverySchema.parse(input);
+    return this.#storage.runInTransaction(() => {
+      const execution = new BigTaskExecutionStore(this.#storage);
+      if (execution.inspect(request.bigTaskId).recovery !== undefined) return execution.recover(input);
+      if (JSON.stringify(this.reviewExecutionRecovery(request.bigTaskId).request) !== JSON.stringify(request)) throw conflict("Recovery review changed.");
+      return execution.recover(input);
+    });
+  }
+
+  approvedRoleModel(authorizationId: string) {
+    const authorization = this.getRoleAuthorization(authorizationId);
+    if (authorization === null) throw malformed();
+    if (!isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)) return null;
+    const recovery = new BigTaskExecutionStore(this.#storage).inspect(authorization.bigTaskId as BigTaskId).recovery;
+    return recovery === undefined ? null : { model: recovery.model, reasoningEffort: recovery.reasoningEffort };
+  }
+
+  #candidateReadyForRole(authorization: GovernedRoleAuthorization, worktree: ResolvedActiveOwnedWorktree): boolean {
+    if (!isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)) return candidateIsClean(this.#storage, worktree.ownership);
+    const execution = new BigTaskExecutionStore(this.#storage);
+    const recovery = execution.inspect(authorization.bigTaskId as BigTaskId).recovery;
+    return recovery?.authorizationId === authorization.authorizationId
+      ? recovery.candidateDigest === executionCandidateDigest(worktree.ownership, () => execution.remainingMilliseconds(authorization.bigTaskId as BigTaskId))
+      : candidateIsClean(this.#storage, worktree.ownership);
+  }
+
   prepareNextRole(bigTaskId: BigTaskId): GovernedPreparationResult {
     assertLivePlanApproved(this.#storage, bigTaskId, true);
     ensureExecutionResultRef(this.#storage, bigTaskId);
@@ -1288,7 +1345,7 @@ export class GovernedExecutionStore {
     if (
       worktree.ownership.id !== authorization.worktreeOwnershipId ||
       worktree.currentHeadSha !== authorization.candidateSha ||
-      !candidateIsClean(this.#storage, worktree.ownership)
+      !this.#candidateReadyForRole(authorization, worktree)
     ) {
       throw conflict("The governed candidate worktree authority drifted.");
     }
@@ -1383,7 +1440,7 @@ export class GovernedExecutionStore {
     );
     if (
       worktree.ownership.id !== authorization.worktreeOwnershipId ||
-      (!candidateIsClean(this.#storage, worktree.ownership) && !(coordinatorCompletion && run.status === "RUNNING" && authorization.writeEnabled &&
+      (!this.#candidateReadyForRole(authorization, worktree) && !(coordinatorCompletion && run.status === "RUNNING" && authorization.writeEnabled &&
         isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId))) ||
       ((run.status === "CREATED" || !authorization.writeEnabled) &&
         worktree.currentHeadSha !== authorization.candidateSha)
@@ -1449,7 +1506,7 @@ export class GovernedExecutionStore {
     const subtaskBudget = this.#deriveAggregateBudget(authorization.subtaskId, true,
       link === undefined ? undefined : String(link.execution_run_id));
     return { remainingMilliseconds: execution.remainingMilliseconds(id),
-      remainingTokens: state.unknownCompletedUsage ? 0 : Math.min(state.limits.totalTokenLimit - state.knownTokens,
+      remainingTokens: state.unknownCompletedUsage ? 0 : state.recovery !== undefined ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
         subtaskBudget.effectiveLimitTokens - (subtaskBudget.totalTokens ?? subtaskBudget.effectiveLimitTokens)) };
   }
 
@@ -1462,6 +1519,7 @@ export class GovernedExecutionStore {
     const row = this.#access().sqlite
       .prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id = ?")
       .get(authorizationId) as RoleAuthorizationRow | undefined;
+    if (row?.recovery_attempt === 1 && new BigTaskExecutionStore(this.#storage).inspect(row.big_task_id as BigTaskId).recovery?.authorizationId !== row.authorization_id) throw malformed();
     return row === undefined ? null : parseRoleAuthorizationRow(row);
   }
 
@@ -2773,6 +2831,15 @@ export class GovernedExecutionStore {
         total += row.total_tokens;
       }
     }
+    const task = this.#storage.getSubtaskById(subtaskId);
+    if (task !== null && isLivePlannedTask(this.#storage, task.bigTaskId)) {
+      const state = new BigTaskExecutionStore(this.#storage).inspect(task.bigTaskId);
+      if (state.recovery !== undefined) {
+        const allowed = total < state.limits.totalTokenLimit;
+        return freeze({ scope: "BIG_TASK" as const, status: !allowed ? "ABSOLUTE_CEILING" : total >= 120_000 ? "AVAILABLE_WARNING" : "AVAILABLE",
+          allowed, totalTokens: total, warning: total >= 120_000, extensionApplied: false, effectiveLimitTokens: state.limits.totalTokenLimit });
+      }
+    }
     const extension = includeExtension ? this.#getBudgetExtension(subtaskId) : null;
     const effectiveLimit = extension === null ? 120_000 : 160_000;
     const allowed = total < effectiveLimit;
@@ -2840,6 +2907,7 @@ export class GovernedExecutionStore {
       candidateSha: authorization.candidateSha,
       worktreeOwnershipId: authorization.worktreeOwnershipId,
       writeEnabled: authorization.writeEnabled,
+      ...(this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt === 1 ? { recovery: "Continue from the preserved partial implementation. The prior run failed; its files are unaccepted. Inspect and complete this same task, run all required tests, and return a fresh structured result. Do not redo preserved work unnecessarily or claim prior QA passed." } : {}),
       instruction: isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)
         ? roleInstruction(authorization.role).replace("Leave a clean committed candidate.",
           "Leave the exact bounded file changes for the Console coordinator to commit. Do not run Git writes, push, deploy, or change other checkouts.") +
@@ -3090,7 +3158,7 @@ export class GovernedExecutionStore {
     const row = this.#access().sqlite
       .prepare(
         `SELECT * FROM governed_role_authorizations
-          WHERE subtask_id = ? AND workflow_sequence = ?`,
+          WHERE subtask_id = ? AND workflow_sequence = ? ORDER BY recovery_attempt DESC LIMIT 1`,
       )
       .get(subtaskId, sequence) as RoleAuthorizationRow | undefined;
     return row === undefined ? null : parseRoleAuthorizationRow(row);
@@ -3146,6 +3214,7 @@ export class GovernedExecutionStore {
   ): void {
     const view = this.#requiredWorkflowView(authorization.subtaskId);
     const receipt = this.#getDispatchReceiptForSubtask(authorization.subtaskId);
+    if (this.#getRoleAuthorizationForSequence(authorization.subtaskId, authorization.workflowSequence)?.authorizationId !== authorization.authorizationId) throw conflict("The role authorization was superseded by explicit recovery.");
     if (receipt !== null) {
       this.#assertDispatchAuthority(receipt, view);
     }
@@ -3508,6 +3577,7 @@ export class GovernedExecutionStore {
       .all(bigTaskId) as unknown as readonly RoleAuthorizationRow[];
     for (const row of rows) {
       const authorization = parseRoleAuthorizationRow(row);
+      if (row.recovery_attempt === 1 && new BigTaskExecutionStore(this.#storage).inspect(bigTaskId).recovery?.authorizationId !== authorization.authorizationId) throw malformed();
       const view = this.#requiredWorkflowView(authorization.subtaskId);
       const prior = view.transitions[authorization.workflowSequence - 2];
       const expectedStage = authorization.workflowSequence === 1 ? view.initialStage : prior?.resultingStage;

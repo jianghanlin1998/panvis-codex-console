@@ -1564,13 +1564,15 @@ async function executeGovernedRoleCodexWithDependencies(
       client, worktreePath, withinDeadline(dependencies.limits.requestTimeoutMs),
     );
     governed.revalidateRoleCandidate(authorizationId);
+    const selectedModel = governed.approvedRoleModel(authorizationId);
     const threadResult = await client.request(
       3,
       "thread/start",
       {
         approvalPolicy: "never",
         approvalsReviewer: "user",
-        config: restrictedThreadConfig,
+        config: selectedModel === null ? restrictedThreadConfig : { ...restrictedThreadConfig, model_reasoning_effort: selectedModel.reasoningEffort },
+        ...(selectedModel === null ? {} : { model: selectedModel.model }),
         cwd: worktreePath,
         ephemeral: true,
         sandbox: trustedAuthorization.writeEnabled
@@ -1595,6 +1597,7 @@ async function executeGovernedRoleCodexWithDependencies(
       worktreePath,
       trustedAuthorization.writeEnabled,
     );
+    if (selectedModel !== null && thread.model !== selectedModel.model) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     providerThread = mapCodexThreadReference(thread.threadId);
     model = mapCodexModelReference(thread.model);
     try {
@@ -1623,6 +1626,7 @@ async function executeGovernedRoleCodexWithDependencies(
       {
         threadId: thread.threadId,
         input: [{ type: "text", text: promptText, text_elements: [] }],
+        ...(selectedModel === null ? {} : { model: selectedModel.model, effort: selectedModel.reasoningEffort }),
         cwd: worktreePath,
         approvalPolicy: "never",
         approvalsReviewer: "user",

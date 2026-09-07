@@ -858,7 +858,7 @@ describe("durable orchestration migration", () => {
       storage.close();
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       try {
-        expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({ count: 23 });
+        expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({ count: 24 });
       } finally {
         sqlite.close();
       }

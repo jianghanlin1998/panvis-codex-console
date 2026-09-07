@@ -20,7 +20,7 @@ describe("compiled supported governed package boundary", () => {
           'startRoleProviderRun','persistSuccessfulRoleResult','finalizeFailedRoleAttempt','reconcileRoleResult','getGovernedProviderBridge'];
         for(const name of forbidden) {assert.equal(handle[name],undefined);assert.equal(storage[name],undefined);assert.equal(adapter[name],undefined);}
         assert.deepEqual(Object.getOwnPropertyNames(storage.GovernedExecutionStore.prototype).sort(),[
-          'constructor','inspectBigTask','prepareNextRole','getRoleAuthorization','authorizeManualStart','authorizeOneTimeBudgetExtension'].sort());
+          'constructor','reviewExecutionRecovery','recoverExecution','inspectBigTask','prepareNextRole','getRoleAuthorization','authorizeManualStart','authorizeOneTimeBudgetExtension'].sort());
         assert.equal(Object.isFrozen(handle),true);
         assert.throws(()=>Object.defineProperty(handle,'persistSuccessfulRoleResult',{value:()=>({outcome:'PASS'})}));
         assert.throws(()=>storage.createGovernedExecutionStore(db,{}));

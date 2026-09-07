@@ -90,6 +90,7 @@ lines.on("line", (line) => {
   if (message.method === "thread/start") {
     if (
       !accountRead ||
+      (params.model !== undefined && (params.model !== "gpt-5.6-sol" || record(params.config).model_reasoning_effort !== "xhigh")) ||
       record(record(record(params.config).mcp_servers)["fixture.mcp"]).enabled !== false ||
       params.cwd !== process.cwd() ||
       params.ephemeral !== true ||
@@ -106,7 +107,7 @@ lines.on("line", (line) => {
       id,
       result: {
         thread,
-        model: "fixture-governed-model",
+        model: scenario === "wrong-model" ? "fixture-governed-model" : typeof params.model === "string" ? params.model : "fixture-governed-model",
         modelProvider: "fixture",
         cwd: process.cwd(),
         approvalPolicy: "never",
@@ -126,6 +127,7 @@ lines.on("line", (line) => {
     return;
   }
   if (message.method === "turn/start") {
+    if (params.model !== undefined && (params.model !== "gpt-5.6-sol" || params.effort !== "xhigh")) { error(id); return; }
     const sandbox = record(params.sandboxPolicy);
     const input = Array.isArray(params.input) ? params.input : [];
     const item = record(input[0]);
@@ -251,8 +253,8 @@ lines.on("line", (line) => {
         turnId,
         tokenUsage: {
           total: {
-            totalTokens: Number(process.argv.find(value => value.startsWith("--tokens="))?.slice(9) ?? 18),
-            inputTokens: Number(process.argv.find(value => value.startsWith("--tokens="))?.slice(9) ?? 18) - 6,
+            totalTokens: Number(process.argv.find(value => value.startsWith("--tokens="))?.slice(9) ?? (scenario === "budget-exceeded" ? 143674 : 18)),
+            inputTokens: Number(process.argv.find(value => value.startsWith("--tokens="))?.slice(9) ?? (scenario === "budget-exceeded" ? 143674 : 18)) - 6,
             cachedInputTokens: 2,
             cacheWriteInputTokens: 0,
             outputTokens: 6,

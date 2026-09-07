@@ -5,8 +5,8 @@ import { spawnSync } from "node:child_process";
 import { devNull, tmpdir } from "node:os";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
-import type { BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
+import { BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
+import type { BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
 import { TaskStorageError } from "./errors.js";
 import type { TaskStorage } from "./task-storage.js";
 import { getTaskStorageWorktreeAccess } from "./task-storage-internals.js";
@@ -76,6 +76,7 @@ type IntegrationIntent = { readonly subtaskId: string | null; readonly fromSha: 
 const integrationWriters = new WeakMap<TaskStorage, (bigTaskId: BigTaskId, intent: IntegrationIntent) => void>();
 type ExecutionEvent =
   | { readonly kind: "START"; readonly at: string }
+  | { readonly kind: "RECOVERY"; readonly at: string; readonly request: BigTaskExecutionRecovery; readonly authorizationId: string }
   | { readonly kind: "ROLE"; readonly at: string; readonly authorizationId: string }
   | ({ readonly kind: "INTEGRATION_PREPARED" | "INTEGRATE"; readonly at: string } & IntegrationIntent)
   | { readonly kind: "STOP"; readonly at: string; readonly reason: ExecutionStopReason }
@@ -93,6 +94,7 @@ export interface BigTaskExecutionStatus {
   readonly usageComplete: boolean;
   readonly activeRoleCount: number;
   readonly unknownCompletedUsage: boolean;
+  readonly recovery?: BigTaskExecutionRecovery & { readonly authorizationId: string };
   readonly resultRef: string;
   readonly resultHeadSha: string;
   readonly integratedSubtaskIds: readonly string[];
@@ -176,6 +178,7 @@ export class BigTaskExecutionStore {
     let pendingIntegration: IntegrationIntent | null = null;
     let resultRefCreated = false;
     const roles = new Set<string>();
+    let recovery: BigTaskExecutionStatus["recovery"];
     const rows = access(this.storage).sqlite.prepare("SELECT sequence, payload FROM big_task_execution_events WHERE big_task_id = ? ORDER BY sequence").all(bigTaskId);
     if (rows.length > 1024) fail("MALFORMED_STORED_DATA");
     for (const [index, row] of rows.entries()) {
@@ -188,6 +191,27 @@ export class BigTaskExecutionStore {
         case "START":
           if (Object.keys(event).length !== 2 || (phase !== "APPROVED" && phase !== "PAUSED")) fail("MALFORMED_STORED_DATA");
           startedAt ??= event.at; phase = "RUNNING"; stopReason = null; break;
+        case "RECOVERY": {
+          const request = BigTaskExecutionRecoverySchema.safeParse(event.request);
+          if (Object.keys(event).length !== 4 || !request.success || recovery !== undefined || phase !== "HUMAN_REQUIRED" ||
+            stopReason !== "GOVERNED_BLOCKED" || startedAt === null || pendingIntegration !== null ||
+            event.at >= new Date(Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString() ||
+            request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
+            request.data.repositoryHeadSha !== approval.request.repositoryHeadSha || !roles.has(request.data.failedAuthorizationId) ||
+            executionCanonical(request.data) !== executionCanonical(event.request) ||
+            event.authorizationId !== recoveryAuthorizationId(request.data.failedAuthorizationId)) fail("MALFORMED_STORED_DATA");
+          const failed = this.storage.getExecutionRunById(request.data.failedExecutionRunId);
+          const old = access(this.storage).sqlite.prepare(`SELECT a.*, l.execution_run_id FROM governed_role_authorizations a
+            JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id WHERE a.authorization_id=?`).get(request.data.failedAuthorizationId);
+          const next = access(this.storage).sqlite.prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id=?").get(event.authorizationId);
+          if (old === undefined || next === undefined || old.big_task_id !== bigTaskId || old.role !== "EXECUTE" || old.recovery_attempt !== 0 ||
+            old.execution_run_id !== request.data.failedExecutionRunId || failed === null || !["FAILED", "INTERRUPTED"].includes(failed.status) ||
+            failed.normalizedUsage?.totalTokens === undefined || next.recovery_attempt !== 1 || next.authorized_at !== event.at ||
+            Object.keys(next).some(key => !["authorization_id", "authorized_at", "recovery_attempt"].includes(key) && next[key] !== old[key]) ||
+            access(this.storage).sqlite.prepare("SELECT 1 FROM governed_role_results WHERE authorization_id=?").get(request.data.failedAuthorizationId)) fail("MALFORMED_STORED_DATA");
+          recovery = { ...request.data, authorizationId: event.authorizationId };
+          phase = "PAUSED"; stopReason = "CHECKPOINT_RECOVERED"; break;
+        }
         case "ROLE":
           if (Object.keys(event).length !== 3 || phase !== "RUNNING" || !/^gra_[a-f0-9]{48}$/u.test(event.authorizationId) || roles.has(event.authorizationId)) fail("MALFORMED_STORED_DATA");
           roles.add(event.authorizationId); roleCalls += 1; break;
@@ -218,10 +242,48 @@ export class BigTaskExecutionStore {
     const usage = this.#usage(bigTaskId);
     const status = Object.freeze({ bigTaskId, planDigest: approval.request.planDigest, phase, stopReason, startedAt,
       expiresAt: startedAt === null ? null : new Date(Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString(),
-      limits: approval.request.limits, roleCalls, ...usage, resultRef: approval.resultRef, resultHeadSha: head,
+      limits: approval.request.limits, roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }), resultRef: approval.resultRef, resultHeadSha: head,
       integratedSubtaskIds: Object.freeze(integrated), pendingIntegration, resultRefCreated });
     if (!BigTaskExecutionStatusSchema.safeParse(status).success) fail("MALFORMED_STORED_DATA");
     return status;
+  }
+
+  /** Records a human-approved replacement authorization atomically; no provider or target writes. */
+  recover(input: unknown): BigTaskExecutionStatus {
+    const request = BigTaskExecutionRecoverySchema.parse(input);
+    if (executionCanonical(request) !== executionCanonical(input)) fail("INVALID_INPUT");
+    const record = (): BigTaskExecutionStatus => {
+      const state = this.inspect(request.bigTaskId);
+      if (state.recovery !== undefined) {
+        const original = BigTaskExecutionRecoverySchema.parse(Object.fromEntries(Object.entries(state.recovery).filter(([key]) => key !== "authorizationId")));
+        if (executionCanonical(original) !== executionCanonical(request)) fail();
+        return state;
+      }
+      if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" || !state.usageComplete ||
+        state.expiresAt === null || Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage)) || state.pendingIntegration !== null ||
+        state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit ||
+        request.planDigest !== state.planDigest || request.repositoryHeadSha !== this.#approval(request.bigTaskId).request.repositoryHeadSha) fail();
+      this.assertCurrent(request.bigTaskId);
+      const sql = access(this.storage).sqlite;
+      const failed = sql.prepare(`SELECT a.*, l.execution_run_id FROM governed_role_authorizations a
+        JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id WHERE a.authorization_id=?`).get(request.failedAuthorizationId);
+      const run = this.storage.getExecutionRunById(request.failedExecutionRunId);
+      if (failed === undefined || failed.big_task_id !== request.bigTaskId || failed.role !== "EXECUTE" || failed.recovery_attempt !== 0 ||
+        failed.execution_run_id !== request.failedExecutionRunId || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
+        run.normalizedUsage?.totalTokens === undefined || sql.prepare("SELECT 1 FROM governed_role_results WHERE authorization_id=?").get(request.failedAuthorizationId)) fail();
+      const view = this.storage.getDurableWorkflowControlView(failed.subtask_id as SubtaskId);
+      if (view?.currentStage !== "EXECUTE" || view.transitionCount + 1 !== failed.workflow_sequence || view.unresolvedHumanRequired !== null) fail();
+      const at = timestamp(this.storage), authorizationId = recoveryAuthorizationId(request.failedAuthorizationId);
+      sql.prepare(`INSERT INTO governed_role_authorizations
+        (authorization_id, dispatch_receipt_id, project_id, big_task_id, plan_revision, candidate_binding, subtask_id, workflow_sequence,
+         workflow_stage, repair_cycles_used, role, context_profile, write_enabled, worktree_ownership_id, candidate_sha, authorized_at, recovery_attempt)
+        SELECT ?, dispatch_receipt_id, project_id, big_task_id, plan_revision, candidate_binding, subtask_id, workflow_sequence,
+          workflow_stage, repair_cycles_used, role, context_profile, write_enabled, worktree_ownership_id, candidate_sha, ?, 1
+        FROM governed_role_authorizations WHERE authorization_id=?`).run(authorizationId, at, request.failedAuthorizationId);
+      this.#append(request.bigTaskId, { kind: "RECOVERY", at, request, authorizationId });
+      return this.inspect(request.bigTaskId);
+    };
+    return access(this.storage).sqlite.isTransaction ? record() : this.storage.runInTransaction(record);
   }
 
   start(bigTaskId: BigTaskId): { claimed: boolean; status: BigTaskExecutionStatus } {
@@ -369,10 +431,11 @@ export class BigTaskExecutionStore {
   }
 
   #safeCheckpoint(bigTaskId: BigTaskId): boolean {
+    const recovery = this.inspect(bigTaskId).recovery;
     return access(this.storage).sqlite.prepare(`SELECT 1 FROM governed_role_execution_links link
       JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id
       LEFT JOIN execution_runs run ON run.id = link.execution_run_id
-      WHERE auth.big_task_id = ? AND (run.status IS NULL OR run.status != 'SUCCEEDED') LIMIT 1`).get(bigTaskId) === undefined;
+      WHERE auth.big_task_id = ? AND auth.authorization_id != ? AND (run.status IS NULL OR run.status != 'SUCCEEDED') LIMIT 1`).get(bigTaskId, recovery?.failedAuthorizationId ?? '') === undefined;
   }
 
   #usage(bigTaskId: BigTaskId): { knownTokens: number; usageComplete: boolean; activeRoleCount: number; unknownCompletedUsage: boolean } {
@@ -518,4 +581,29 @@ export function approvedRepairCycleLimit(storage: TaskStorage, id: BigTaskId): 1
   const row = access(storage).sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id = ?").get(id);
   if (row === undefined) return 1;
   return new BigTaskExecutionStore(storage).repairCycleLimit(id);
+}
+
+export const recoveryAuthorizationId = (failedAuthorizationId: string): string =>
+  `gra_${executionDigest(["RECOVERY", failedAuthorizationId]).slice(0, 48)}`;
+
+/** Read-only content binding for the exact retained candidate; no hooks, index or working-file writes. */
+export function executionCandidateDigest(ownership: WorktreeOwnership, remainingMilliseconds?: () => number): string {
+  const path = ownership.worktreePath;
+  const git = (args: readonly string[]) => executionGit(path, args, undefined, undefined, undefined, remainingMilliseconds);
+  const head = git(["rev-parse", "--verify", "HEAD^{commit}"]);
+  if (git(["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${ownership.branchName}`) fail();
+  const names = git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
+  if (names.length > 10_000 || new Set(names).size !== names.length) fail();
+  let bytes = 0;
+  const files = names.map(name => {
+    if (name.startsWith("/") || name.includes("\\") || name.split("/").some(part => ["", ".", "..", ".git"].includes(part))) fail();
+    const absolute = join(path, name);
+    let stat;
+    try { stat = lstatSync(absolute); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return [name, null]; throw error; }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || realpathSync.native(absolute) !== absolute || (bytes += stat.size) > 64 * 1024 * 1024) fail();
+    const body = readFileSync(absolute);
+    if (body.length !== stat.size || remainingMilliseconds !== undefined && remainingMilliseconds() <= 0) fail();
+    return [name, stat.mode & 0o111 ? "100755" : "100644", createHash("sha256").update(body).digest("hex")];
+  });
+  return executionDigest({ ownershipId: ownership.id, head, files });
 }

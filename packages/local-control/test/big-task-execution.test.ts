@@ -1,5 +1,5 @@
 import { getGovernedProviderBridge } from "../../storage/src/governed-execution-public.js";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeExecutionFixture } from "../../storage/test/big-task-execution-fixture.js";
 import { createLocalControlServiceForTesting } from "../src/service.js";
 import { BigTaskExecutionStatusSchema } from "@codex-task-console/domain";
@@ -7,21 +7,24 @@ import { BigTaskExecutionStatusSchema } from "@codex-task-console/domain";
 const forbidden = async (): Promise<never> => { throw new Error("No standalone or planning provider calls"); };
 
 describe("human-approved continuous Big Task execution", () => {
-  it("materializes only the confirmed plan and authorizes its first governed role", () => {
-    const f = makeExecutionFixture();
-    try {
-      f.execution.approve(f.approval);
-      f.execution.start(f.approval.bigTaskId);
-      const prepared = f.governed.prepareNextRole(f.approval.bigTaskId);
-      expect(prepared).toMatchObject({ kind: "ROLE_AUTHORIZED" });
-      if (prepared.kind !== "ROLE_AUTHORIZED") throw new Error("Expected exact role authority");
-      const bridge = getGovernedProviderBridge(f.governed);
-      const attempt = bridge.reserveRoleExecutionAttempt(prepared.authorization.authorizationId);
-      expect(bridge.claimRoleProviderExecution(prepared.authorization.authorizationId).attempt).toEqual(attempt);
-    } finally { f.close(); }
+  // Each case receives a private repository/database in the separately bounded
+  // setup phase. Keep the six-role execution deadline and every assertion intact.
+  const fixtures = new WeakMap<object, ReturnType<typeof makeExecutionFixture>>();
+  beforeEach(context => { fixtures.set(context, makeExecutionFixture()); });
+  afterEach(context => { fixtures.get(context)?.close(); });
+  it("materializes only the confirmed plan and authorizes its first governed role", context => {
+    const f = fixtures.get(context)!;
+    f.execution.approve(f.approval);
+    f.execution.start(f.approval.bigTaskId);
+    const prepared = f.governed.prepareNextRole(f.approval.bigTaskId);
+    expect(prepared).toMatchObject({ kind: "ROLE_AUTHORIZED" });
+    if (prepared.kind !== "ROLE_AUTHORIZED") throw new Error("Expected exact role authority");
+    const bridge = getGovernedProviderBridge(f.governed);
+    const attempt = bridge.reserveRoleExecutionAttempt(prepared.authorization.authorizationId);
+    expect(bridge.claimRoleProviderExecution(prepared.authorization.authorizationId).attempt).toEqual(attempt);
   });
-  it("requires exact human approval, executes dependencies from integrated commits and waits for final human acceptance", async () => {
-    const f = makeExecutionFixture();
+  it("requires exact human approval, executes dependencies from integrated commits and waits for final human acceptance", async context => {
+    const f = fixtures.get(context)!;
     let reportProgress = (): void => {};
     let observing = true;
     const executeObserved = async (...args: Parameters<typeof f.execute>) => {
@@ -67,6 +70,6 @@ describe("human-approved continuous Big Task execution", () => {
       expect((await service.acceptExecution!(f.approval.bigTaskId, status.resultHeadSha)).phase).toBe("ACCEPTED");
       await service.startExecution!(f.approval.bigTaskId);
       expect(f.starts).toHaveLength(6);
-    } finally { observing = false; await service.stopAndDrain!(); f.close(); }
+    } finally { observing = false; await service.stopAndDrain!(); }
   }, 30_000);
 });

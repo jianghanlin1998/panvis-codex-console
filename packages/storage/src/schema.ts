@@ -1473,11 +1473,13 @@ export const governedRoleAuthorizationsTable = sqliteTable(
       }),
     candidateSha: text("candidate_sha").notNull(),
     authorizedAt: text("authorized_at").notNull(),
+    recoveryAttempt: integer("recovery_attempt").notNull().default(0),
   },
   (table) => [
     uniqueIndex("governed_role_stage_unique").on(
       table.subtaskId,
       table.workflowSequence,
+      table.recoveryAttempt,
     ),
     index("governed_role_dispatch_index").on(
       table.dispatchReceiptId,

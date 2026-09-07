@@ -126,6 +126,8 @@ export interface ExecutionOperationResult {
 
 export interface LocalControlService {
   reviewExecution?(bigTaskId: BigTaskId): Promise<object>;
+  reviewExecutionRecovery?(bigTaskId: BigTaskId): Promise<object>;
+  recoverExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
   approveExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
   inspectExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
   startExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
@@ -406,6 +408,14 @@ class ProductionLocalControlService implements LocalControlService {
       return { bigTaskId, planDigest: review.planDigest, repositoryHeadSha: review.repositoryHeadSha,
         candidate: review.candidate, taskContracts: review.taskContracts, executionIssues: review.executionIssues, confirmation: "HANLIN_EXECUTION_APPROVAL_REQUIRED" };
     } catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async reviewExecutionRecovery(bigTaskId: BigTaskId): Promise<object> {
+    try { return this.#governed.reviewExecutionRecovery(bigTaskId); } catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async recoverExecution(input: unknown): Promise<BigTaskExecutionStatus> {
+    try { return this.#governed.recoverExecution(input); } catch (error) { throw sanitizeStorageError(error); }
   }
 
   async approveExecution(input: unknown): Promise<BigTaskExecutionStatus> {

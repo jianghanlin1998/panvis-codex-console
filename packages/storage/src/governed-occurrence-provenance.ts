@@ -1,3 +1,4 @@
+import { BigTaskExecutionApprovalSchema, BigTaskExecutionRecoverySchema } from "@codex-task-console/domain";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { AggregateSubtaskUsageBudget } from "./governed-execution.js";
@@ -133,9 +134,24 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
     }
     case "budget": {
       const {budget, extensionAuthorityId, subtaskId} = observation.value;
+      let approvedAggregateLimit: number | undefined;
+      if (budget.scope === "BIG_TASK") {
+        const approvalRow = sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id=?").get(owner.bigTaskId);
+        const events = sqlite.prepare("SELECT payload FROM big_task_execution_events WHERE big_task_id=? ORDER BY sequence").all(owner.bigTaskId);
+        try {
+          const approval = BigTaskExecutionApprovalSchema.parse(JSON.parse(String(approvalRow?.payload)).request);
+          const recoveries = events.map(row => JSON.parse(String(row.payload)) as {kind: string; request?: unknown}).filter(event => event.kind === "RECOVERY");
+          if (recoveries.length !== 1) malformed();
+          const recovery = BigTaskExecutionRecoverySchema.parse(recoveries[0]!.request);
+          if (recovery.bigTaskId !== owner.bigTaskId || recovery.planDigest !== approval.planDigest || recovery.repositoryHeadSha !== approval.repositoryHeadSha ||
+            extensionAuthorityId !== null || budget.extensionApplied || budget.warning !== (budget.totalTokens !== null && budget.totalTokens >= 120_000)) malformed();
+          approvedAggregateLimit = approval.limits.totalTokenLimit;
+        } catch { malformed(); }
+      }
+
       if (subtaskId !== owner.subtaskId || !budget.allowed || !Number.isSafeInteger(budget.totalTokens) || budget.totalTokens === null ||
           budget.totalTokens < 0 || budget.totalTokens >= budget.effectiveLimitTokens ||
-          budget.effectiveLimitTokens !== (extensionAuthorityId === null ? 120_000 : 160_000) ||
+          budget.effectiveLimitTokens !== (approvedAggregateLimit ?? (extensionAuthorityId === null ? 120_000 : 160_000)) ||
           budget.extensionApplied !== (extensionAuthorityId !== null)) malformed();
       if (extensionAuthorityId !== null) {
         const extension = sqlite.prepare("SELECT * FROM governed_budget_extensions WHERE authority_id = ?").get(extensionAuthorityId);

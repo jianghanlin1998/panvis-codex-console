@@ -1,5 +1,5 @@
-import { BigTaskExecutionApprovalSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema, TaskContractV0Schema } from "@codex-task-console/domain";
-import type { BigTaskExecutionApproval } from "@codex-task-console/domain";
+import { BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema, TaskContractV0Schema } from "@codex-task-console/domain";
+import type { BigTaskExecutionRecovery, BigTaskExecutionApproval } from "@codex-task-console/domain";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
@@ -62,9 +62,9 @@ import type {
 
 const DEFAULT_OPERATOR_TIMEOUT_MILLISECONDS = 5 * 60_000;
 
-type ExecutionIdCommand = "execution-review" | "execution-status" | "execution-start" | "execution-pause";
+type ExecutionIdCommand = "execution-recovery-review" | "execution-review" | "execution-status" | "execution-start" | "execution-pause";
 export type OperatorCommandName =
-  | ExecutionIdCommand | "execution-approve" | "execution-accept"
+  | ExecutionIdCommand | "execution-recover" | "execution-approve" | "execution-accept"
   | "planning-intake" | "planning-status" | "planning-run"
   | "ping"
   | "status"
@@ -78,13 +78,14 @@ export type OperatorCommandName =
 
 export type OperatorCommand =
   | { readonly name: ExecutionIdCommand; readonly bigTaskId: BigTaskId }
+  | { readonly name: "execution-recover"; readonly recovery: BigTaskExecutionRecovery }
   | { readonly name: "execution-approve"; readonly approval: BigTaskExecutionApproval }
   | { readonly name: "execution-accept"; readonly acceptance: { bigTaskId: BigTaskId; headSha: string } }
   | { readonly name: "planning-intake"; readonly intake: BigTaskPlanningIntake }
   | { readonly name: "planning-status" | "planning-run"; readonly bigTaskId: BigTaskId }
   | { readonly name: "ping" }
   | {
-      readonly name: Exclude<OperatorCommandName, ExecutionIdCommand | "execution-approve" | "execution-accept" | "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
+      readonly name: Exclude<OperatorCommandName, ExecutionIdCommand | "execution-recover" | "execution-approve" | "execution-accept" | "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
       readonly subtaskId: SubtaskId;
     }
   | {
@@ -475,8 +476,16 @@ const budgetFields = {
   status: oneOf("AVAILABLE", "AVAILABLE_WARNING", "HARD_PAUSE", "ABSOLUTE_CEILING", "UNKNOWN_USAGE"),
   allowed: wireBoolean, totalTokens: nullable(wireCount), warning: wireBoolean,
   extensionApplied: wireBoolean, effectiveLimitTokens: oneOf(120_000, 160_000),
-} satisfies WireFields<AggregateSubtaskUsageBudget>;
+} satisfies WireFields<Omit<AggregateSubtaskUsageBudget, "scope">>;
 const isGovernedBudget: WireCheck = value => {
+  if (isRecord(value) && value.scope === "BIG_TASK") {
+    if (!matchesFields(value, { ...budgetFields, scope: oneOf("BIG_TASK"), effectiveLimitTokens: wireCount }) ||
+      typeof value.effectiveLimitTokens !== "number" || value.effectiveLimitTokens < 1 || value.effectiveLimitTokens > 2_880_000 ||
+      typeof value.totalTokens !== "number" || value.extensionApplied !== false) return false;
+    const allowed = value.totalTokens < value.effectiveLimitTokens, warning = value.totalTokens >= 120_000;
+    return value.allowed === allowed && value.warning === warning &&
+      value.status === (!allowed ? "ABSOLUTE_CEILING" : warning ? "AVAILABLE_WARNING" : "AVAILABLE");
+  }
   if (!matchesFields(value, budgetFields)) return false;
   const policy = DEFAULT_V1_BUDGET_POLICY.subtask;
   if (value.status === "UNKNOWN_USAGE") {
@@ -671,6 +680,14 @@ const validateResponseShape = (
     return false;
   }
   switch (command.name) {
+    case "execution-recovery-review": return BigTaskExecutionRecoveryReviewSchema.safeParse(value).success &&
+      BigTaskExecutionRecoveryReviewSchema.parse(value).request.bigTaskId === command.bigTaskId;
+    case "execution-recover": {
+      const parsed = BigTaskExecutionStatusSchema.safeParse(value);
+      if (!parsed.success || parsed.data.recovery === undefined) return false;
+      const request = Object.fromEntries(Object.entries(parsed.data.recovery).filter(([key]) => key !== "authorizationId"));
+      return JSON.stringify(BigTaskExecutionRecoverySchema.parse(request)) === JSON.stringify(command.recovery);
+    }
     case "execution-review": return isExecutionReview(value, command.bigTaskId);
     case "execution-status":
     case "execution-start":
@@ -728,6 +745,10 @@ export const parseOperatorCommand = (
     try { return { name: "planning-intake", intake: BigTaskPlanningIntakeSchema.parse(readOperatorJson(subtaskId)) }; }
     catch { throw new LocalOperatorError("INVALID_COMMAND"); }
   }
+  if (command === "execution-recover" && subtaskId !== undefined) {
+    try { return { name: command, recovery: BigTaskExecutionRecoverySchema.parse(readOperatorJson(subtaskId)) }; }
+    catch { throw new LocalOperatorError("INVALID_COMMAND"); }
+  }
   if ((command === "execution-approve" || command === "execution-accept") && subtaskId !== undefined) {
     try {
       const value = readOperatorJson(subtaskId);
@@ -735,7 +756,7 @@ export const parseOperatorCommand = (
         : { name: command, acceptance: BigTaskExecutionAcceptanceSchema.parse(value) };
     } catch { throw new LocalOperatorError("INVALID_COMMAND"); }
   }
-  if ((command === "execution-review" || command === "execution-status" || command === "execution-start" || command === "execution-pause") && subtaskId !== undefined) {
+  if ((command === "execution-recovery-review" || command === "execution-review" || command === "execution-status" || command === "execution-start" || command === "execution-pause") && subtaskId !== undefined) {
     if (!schemaMatchesExactly(BigTaskIdSchema, subtaskId)) throw new LocalOperatorError("INVALID_COMMAND");
     return { name: command, bigTaskId: BigTaskIdSchema.parse(subtaskId) };
   }
@@ -770,11 +791,14 @@ const commandRequest = (
   readonly body: Buffer | undefined;
 } => {
   switch (command.name) {
+    case "execution-recovery-review":
     case "execution-review":
     case "execution-status":
     case "execution-start":
     case "execution-pause":
       return { method: "POST", path: `/v0/execution/${command.name.slice(10)}`, body: Buffer.from(JSON.stringify({ bigTaskId: command.bigTaskId }), "utf8") };
+    case "execution-recover":
+      return { method: "POST", path: "/v0/execution/recover", body: Buffer.from(JSON.stringify(command.recovery), "utf8") };
     case "execution-approve":
       return { method: "POST", path: "/v0/execution/approve", body: Buffer.from(JSON.stringify(command.approval), "utf8") };
     case "execution-accept":

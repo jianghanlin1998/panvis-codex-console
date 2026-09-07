@@ -106,8 +106,8 @@ export const governedSchemaManifest: Readonly<Record<string, string>> = Object.f
   "governed_role_authorization_current_state_guard": "6ec66ab46b6a935c69ce7d58208200a9e95e8d5501cfe48b5cf9ef3e4df84a54",
   "governed_role_authorization_immutable_delete": "072cfca99e05fbbd0fb0ef1b3ab58e1766cf1294ec9124331e92e5577b7a63f0",
   "governed_role_authorization_immutable_update": "35e18883c85ab173e5b900722b4d56a8cd6a0d33c1b6734defd45337851b418e",
-  "governed_role_authorizations": "02e136829d8a52ab49f427d81d6d92ad8d0d3db33e41f49d6cdd7a9ee4e42547",
-  "governed_role_authorizations_insert_conflict": "8bffd4bd70c230dd769e462e3c6e0324275d023f77e7abc80213a0a14fbbaf3c",
+  "governed_role_authorizations": "eb61c6fc668dc0100c2e46161f24574dcff6c6ff948e45f9a75716c3e1ade594",
+  "governed_role_authorizations_insert_conflict": "232501c7d262f363e967fe74a36ce1bd2dabf7fe9b746e37bdae1f90037e672f",
   "governed_role_dispatch_index": "894ecaf5f64200791ff561ea32e58c481f87a4b787110eb7da59780ad2612941",
   "governed_role_execution_link_guard": "6b22280cbcd8318f7b1ae9722c7a3843d69d204fc32a6abff5c76a47baec5668",
   "governed_role_execution_link_immutable_delete": "f4f9b367b107d8c832eb2d8ad06f4486f01e251b57ff6d50b9d31870621bfc52",
@@ -122,7 +122,7 @@ export const governedSchemaManifest: Readonly<Record<string, string>> = Object.f
   "governed_role_results": "13710a57f92e2b4b00c5a975aa32d92aa48983d0913a2dfc738522648a112a80",
   "governed_role_results_insert_conflict": "9a5b2fb0d322e6c9478bf6fd0867e1e0749977e33086b157d5bfd0533c30d6dd",
   "governed_role_run_unique": "2370fa5b2fd9dde06f1539b69594835b92d3d61c05608f665885e047009f6ae2",
-  "governed_role_stage_unique": "ec3ae605e1fe5c31b817cd89f947f1f8945b8531866f32556731690ee2f849e7",
+  "governed_role_stage_unique": "66a5d9feedc9a08afcac2ec6df003f8ecab1c2efc290848af4461e9009c936e9",
   "governed_role_thread_unique": "99e6eaf14af68c931d342755f8bf0e702dcc979ddaac9eeec8914787acf3a020",
   "governed_success_provenance_guard": "918fe75aa0f47e5b0b4eb9622d3c0ea4e97a342366a0eeccd96da9da14310308"
 });
