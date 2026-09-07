@@ -5,7 +5,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 
 ## Repository
 - Repo: `jianghanlin1998/panvis-codex-console`
-- Branch: `codex/step9b-live-planning` (accepted feature; not integrated into main)
+- Branch: `codex/step9c-approved-execution` (9B reliability repair; not integrated into main)
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 - Public-repository hygiene guard: enabled
 - Development verification: offline fail-closed preflight; explicit stable pnpm settings; full suite bounded to four workers
@@ -427,3 +427,9 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Write-enabled execution and local-control implementation, hardening, and repair tasks update this file when operational state changes.
 - Independent QA is no-write and does not update it.
 - Keep it compact and replace superseded detail instead of appending history.
+
+## Active approved continuation
+- Fresh reliability QA of 683f63c: FAIL only for CTC-STEP9B-RELIABILITY-001 (approved deadline was not applied while turn/start acknowledgement was pending).
+- Repair: every provider setup wait and turn/start uses the smaller of its ordinary timeout and the remaining approved time; cleanup retains its separate bounded grace. Focused 31-test adapter suite PASS; fresh independent re-QA PASS (23 separate fake-timer probes). Full canonical suite: 155 files / 4,660 tests PASS; public hygiene, lint, typecheck, build, executable local-control E2E and diff check PASS.
+- Step 9C approved: exact human plan confirmation, bounded continuous governed execution, coordinator-owned candidate commits/integration, final delivery confirmation. 9B reliability acceptance gate is now satisfied; implementation is next.
+- AI Update Board remains AI-plan-approved only; no human execution approval, canonical Subtask materialization, target writes, or renewed run limits have been issued.

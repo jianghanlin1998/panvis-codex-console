@@ -2313,6 +2313,13 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   let client: JsonlAppServerClient | undefined;
   let events: TurnEventTracker | undefined;
   let turnStartSent = false;
+  // Bound every provider setup wait by the same approved deadline. No turn id
+  // is required to stop the child when a start acknowledgement never arrives.
+  const withinDeadline = (ordinaryLimit: number): number => {
+    const remaining = planning?.remainingTimeMs();
+    if (remaining === 0) throw new LiveExecutionError("APP_SERVER_TIMEOUT");
+    return Math.min(ordinaryLimit, remaining ?? Infinity);
+  };
 
   try {
     if (planning === undefined) {
@@ -2374,6 +2381,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     );
     events = eventTracker;
 
+    withinDeadline(dependencies.limits.startupTimeoutMs);
     let child: ChildProcessWithoutNullStreams;
     try {
       child = dependencies.spawnAppServer(
@@ -2401,7 +2409,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       eventTracker,
       planning !== undefined,
     );
-    await client.waitForSpawn(dependencies.limits.startupTimeoutMs);
+    await client.waitForSpawn(withinDeadline(dependencies.limits.startupTimeoutMs));
 
     const initializeResult = await client.request(
       1,
@@ -2410,7 +2418,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         clientInfo: CLIENT_INFO,
         capabilities: null,
       },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
     );
     validateInitializeResult(initializeResult);
     client.notify("initialized");
@@ -2419,7 +2427,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       2,
       "account/read",
       { refreshToken: false },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
       {
         onResult: (result) => {
           parseChatGptAccount(result);
@@ -2433,7 +2441,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
 
     const restrictedThreadConfig = planning === undefined ? undefined
       : await readRestrictedThreadConfig(
-        client, executionWorkspace, dependencies.limits.requestTimeoutMs,
+        client, executionWorkspace, withinDeadline(dependencies.limits.requestTimeoutMs),
       );
     const threadResult = await client.request(
       3,
@@ -2447,7 +2455,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         sandbox: "read-only",
         serviceName: CLIENT_INFO.name,
       },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
       {
         onResult: (result) => {
           const authorizedThread = parseThreadStartResult(
@@ -2490,7 +2498,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         sandboxPolicy: { type: "readOnly", networkAccess: false },
         ...(planning === undefined ? {} : { outputSchema: planning.outputSchema }),
       },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
       {
         onResult: (result) => {
           eventTracker.observeTurnResponse(parseTurnStartResult(result));

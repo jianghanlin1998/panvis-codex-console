@@ -41,6 +41,31 @@ describe("real Big Task planning adapter with deterministic JSONL peer", () => {
     } finally { f.close(); }
   });
 
+  it.each(["initialize", "account/read", "config/read", "thread/start", "turn/start"])("enforces the approved deadline while %s acknowledgement is pending", async (method) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T06:00:00.000Z"));
+    const f = makePlanningFixture(() => new Date());
+    try {
+      f.planning.accept({ ...f.intake, budgetException: { approved: true, mode: "MEASURE_ONLY", reason: "Setup deadline regression", expiresAt: "2026-09-07T06:00:05.000Z" } });
+      const provider = planningProviderFixture(() => f.proposal, { silentTurn: true, delayedReply: { method, milliseconds: 10_000 } });
+      const pending = executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, {
+        ...provider.dependencies, limits: { ...provider.dependencies.limits, requestTimeoutMs: 15_000 },
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(f.planning.inspect(f.intake.bigTask.id).phase).toBe("RUNNING");
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(result).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "TIME_LIMIT_REACHED", usageComplete: false });
+      expect(result.runs[0]?.endedAt).toBe("2026-09-07T06:00:05.000Z");
+      expect(result.runs[0]?.providerDiagnostics).toMatchObject({ failureCode: "APP_SERVER_TIMEOUT", appServerChildCleaned: true, disposableWorkspaceCleaned: true });
+      expect(provider.launches).toHaveLength(1);
+      expect(provider.requests.filter(r => r.method === "turn/start")).toHaveLength(method === "turn/start" ? 1 : 0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(f.planning.inspect(f.intake.bigTask.id)).toEqual(result);
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
+    } finally { f.close(); vi.useRealTimers(); }
+  });
+
   it("interrupts an active provider at the exception deadline and retains the exact timeout cause", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-07T06:00:00.000Z"));

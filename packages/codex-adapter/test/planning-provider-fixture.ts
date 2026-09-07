@@ -22,6 +22,7 @@ export function planningProviderFixture(
   options: {
     omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; duplicateThread?: boolean;
     configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean;
+    delayedReply?: { method: string; milliseconds: number };
     streamResponse?: boolean; agentChunks?: readonly string[]; deltaThreadId?: string;
   } = {},
 ) {
@@ -62,7 +63,11 @@ export function planningProviderFixture(
           const message = JSON.parse(chunk.toString("utf8")) as { id?: number; method: string; params: Record<string, unknown> };
           requests.push({ method: message.method, params: message.params });
           queueMicrotask(() => {
-            const reply = (result: unknown) => send({ id: message.id, result });
+            const reply = (result: unknown) => {
+              if (options.delayedReply?.method === message.method) {
+                setTimeout(() => { if (child.exitCode === null) send({ id: message.id, result }); }, options.delayedReply.milliseconds);
+              } else send({ id: message.id, result });
+            };
             if (message.method === "initialize") reply({ userAgent: "fixture", codexHome: "/private/mock-home", platformFamily: "unix", platformOs: "macos" });
             if (message.method === "account/read") reply({ account: options.apiKey ? { type: "apiKey" } : { type: "chatgpt", email: "fixture@example.invalid", planType: "pro" }, requiresOpenaiAuth: true });
             if (message.method === "config/read") reply(options.configReadResult === undefined ? { config: { mcp_servers: {} }, origins: {} } : options.configReadResult);

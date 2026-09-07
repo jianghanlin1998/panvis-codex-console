@@ -425,3 +425,7 @@ fixture update; historical data, rollback and authority assertions remain in pla
 - `packages/storage/test/workflow-control-migration.test.ts`
 - `packages/storage/test/workflow-initialization-migration-hardening.test.ts`
 - `packages/storage/test/workflow-initialization-migration.test.ts`
+
+### Deadline reliability repair (2026-09-07)
+
+The approved measurement expiry bounds all provider setup waits (spawn, initialize, account/config reads, thread/start and turn/start), using the smaller of the ordinary timeout and remaining approved time. The remaining allowance is recomputed between requests. An expired pending start shuts down the child even without a known turn ID. Existing interrupt/shutdown grace remains separately bounded cleanup, not authority for more work. Late replies never reopen the terminal planning record. This closes CTC-STEP9B-RELIABILITY-001; independent acceptance is tracked in CURRENT_STATE.md.
