@@ -196,7 +196,7 @@ const dependencies = (
     exactVersionOutput: TESTED_CODEX_VERSION,
     executable: true,
     readable: true,
-    releaseVersion: "0.148.0-alpha.9",
+    releaseVersion: "0.153.3",
     source: "OWNED_RELEASE",
     target: "aarch64-apple-darwin",
   }),

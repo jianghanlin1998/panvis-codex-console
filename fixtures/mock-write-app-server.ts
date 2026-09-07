@@ -96,7 +96,15 @@ function handleRequest(id: RequestId, method: string, params: JsonRecord): void 
     });
     return;
   }
+  if (method === "config/read") {
+    send({ id, result: { config: { mcp_servers: { "fixture.mcp": { enabled: true } } }, origins: {} } });
+    return;
+  }
   if (method === "thread/start") {
+    if (recordOf(recordOf(recordOf(params.config).mcp_servers)["fixture.mcp"]).enabled !== false) {
+      sendError(id);
+      return;
+    }
     if (!accountRead || !validThreadStart(params)) {
       sendError(id);
       return;

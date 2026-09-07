@@ -106,8 +106,8 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Compiled-context pre-execution budget: 40,000-byte target / 64,000-byte hard cap over UTF-8 serialized Console context; not token-equivalent.
 - Console-Owned Codex Runtime Ownership V0: ACCEPTED
 - Runtime ownership baseline: official standalone exact-release installer
-- Owned candidate: `0.148.0-alpha.9` INSTALLED
-- Owned active runtime: `0.148.0-alpha.9`
+- Owned candidate: `0.153.3` INSTALLED; previous `0.148.0-alpha.9` retained
+- Owned active runtime: `0.153.3`; previous selector `0.148.0-alpha.9` (activated 2026-09-07T04:33:34.938Z)
 - Runtime target: `aarch64-apple-darwin`
 - Ambient PATH/ChatGPT Codex: `codex-cli 0.153.3` (verified 2026-09-07); informational only, not Console execution authority
 - Runtime Ownership Comprehensive Hardening: PASS
@@ -126,7 +126,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - CTC-CLITE-FQA-001: CLOSED
 - CTC-CLITE-FQA-002: CLOSED
 - C-lite ACCEPTED: YES
-- Tested Codex: `codex-cli 0.148.0-alpha.9`
+- Tested Codex: `codex-cli 0.153.3` (2026-09-07 upgrade validation)
 - Single-Subtask Live Execution V0: ACCEPTED
 - Deterministic baseline: PASS
 - Historical real ChatGPT smoke: PASS
@@ -196,7 +196,7 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Worktree release / execution exclusion: PASS
 - Hardlink-free no-follow V1 precondition and final success gate: PASS
 - Exact write temp policy: private TMPDIR allowed / arbitrary `/tmp` denied
-- External write-tool feature-disable startup sentinel: PASS
+- External write-tool startup sentinel: prior initialization-only evidence was incomplete; 2026-09-07 per-task MCP disable repair passes through read/write thread creation and sandbox commands
 - Provider tool lifecycle and filesystem-aware path matrix: PASS
 - CTC-WRITE-HARD-001: CLOSED
 - CTC-WRITE-HARD-002: CLOSED
@@ -393,11 +393,12 @@ Purpose: compact operational index only. Repository and exact-SHA evidence outra
 - Step 9B fresh re-QA round 1: PASS, both original findings CLOSED. Independent probes 23/23 PASS; full suite 155 files /4,597 tests PASS, four workers, 360.34 s. Public hygiene, lint, typecheck, build, executable local-control E2E and diff checks PASS. Candidate unchanged and pushed; no second repair round needed.
 - Step 9 live dogfood: approved Board intake `bt_ai_update_board_step9_real_news_20260907`, planning cap 120K. The initial outer consent blocker was resolved after Hanlin's informed confirmation; the same task invoked one real Planner attempt, ending `HUMAN_REQUIRED / PROVIDER_FAILED` at `2026-09-06T20:54:04.960Z`, with provider thread/run identity and model `gpt-6-astra` recorded. Usage is unknown, not proven zero. No candidate, review or Subtask was generated. Thread-scoped sanitized diagnostics and two credential-free HEAD checks independently identified failed TLS connections from the local execution environment to OpenAI/ChatGPT. No retry, runtime upgrade, TLS bypass or second code repair occurred. Daemon stopped cleanly; AI Update Board baseline and retained UI unchanged. Full automatic Subtask progression and cross-worktree integration remain unimplemented.
 - Connection repair follow-up: explicit `CTC_CODEX_HTTPS_PROXY` now passes a validated local HTTP CONNECT proxy to the owned runtime. Credential-free TLS checks and correctly configured native requests reach OpenAI; model generation remains blocked by HTTP 400 reasoning-parameter rejection. Owned `0.148.0-alpha.9` omits `gpt-6-astra` from its fetched catalog; informational desktop `0.153.3` includes it. No runtime activation or production planning retry. Five diagnostic turns failed with unavailable usage, including three invalid-harness probes; none is a successful model smoke. Focused 91 tests and full 155 files /4,618 tests PASS; public/lint/typecheck/build/local-control E2E/diff checks PASS. [Activation and evidence](docs/BIG_TASK_LIVE_PLANNING_V0.md#connection-repair-follow-up).
+- Owned-runtime upgrade (2026-09-07): Hanlin approved `0.153.3`; official owned candidate installed, exact schema and no-model permission checks PASS. Added task-local MCP disabling for hardened planning/owned-write/governed roles after a synthetic sentinel exposed startup on both old and new releases. User config/model/auth unchanged. One owned Astra / inherited `xhigh` diagnostic PASS, 12,692 tokens, no tools; child/temp cleaned. Production Board planning remains exactly one stopped attempt. Final canonical verification PASS: 155 files /4,638 tests, four workers (345.33 s); public/lint/typecheck/build/local-control E2E/diff PASS. Initial full run had two stale mock-version failures, corrected without weakening assertions. Active selector now `0.153.3`, previous `.9`; daemon stays stopped. This is operational verification, not new independent QA acceptance. [Evidence and rollback](docs/CODEX_RUNTIME_OWNERSHIP_V0.md#2026-09-07-runtime-upgrade).
 - Hanlin's 2026-09-07 workflow decision: approved task scope includes ordinary calls via the established local Codex runtime / existing ChatGPT login to OpenAI. Do not seek duplicate human consent solely for cloud model processing of that task context. Actual tool denials remain binding and must be handled transparently; product/context/budget/execution boundaries are unchanged. [Recorded working agreement](docs/BIG_TASK_LIVE_PLANNING_V0.md#product-direction-recorded-during-implementation).
 - Step 9A real provider/model turns: 0; real dogfood/AI Update Board writes: 0; no deployment or runtime activation. Hanlin manual QA: NOT REQUIRED for 9A; REQUIRED for later live workflow/product acceptance.
 
 ## Next safe task
-**Next safe task:** prepare and approve a bounded owned-runtime compatibility upgrade toward verified desktop version `0.153.3`, preserving the selected Astra model. Use the documented local proxy setting at daemon startup. Before another production planning request, reconcile the original attempt's unknown usage and later-request authority. Preserve the sticky stop and evidence; do not blindly retry or duplicate the intake. Normal approved Codex calls do not need duplicate conversational consent. Full automatic execution and candidate integration still require their bounded implementation slice before end-to-end delivery. Preserve the target main and retained Step 7 implementation. Direct small-task intake and Project/Big Task/Subtask discussion interfaces remain future product direction.
+**Next safe task:** return to the bounded AI Update Board workflow; owned-runtime upgrade and Astra connection verification are complete. Use the documented local proxy setting at daemon startup. Before another production planning request, reconcile the original attempt's unknown usage and later-request authority. Preserve the sticky stop and evidence; do not blindly retry or duplicate the intake. Normal approved Codex calls do not need duplicate conversational consent. Full automatic execution and candidate integration still require their bounded implementation slice before end-to-end delivery. Preserve the target main and retained Step 7 implementation. Direct small-task intake and Project/Big Task/Subtask discussion interfaces remain future product direction.
 
 ## Not operational yet
 - browser Console UI

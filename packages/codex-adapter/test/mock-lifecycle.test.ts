@@ -69,7 +69,7 @@ describe("mock initialization and thread lifecycle", () => {
         modelProvider: "fixture",
         sandbox: { networkAccess: false, type: "readOnly" },
         thread: {
-          cliVersion: "0.148.0-alpha.9",
+          cliVersion: "0.153.3",
           id: "thread-fixture-1",
           sessionId: "thread-fixture-1",
           source: "cli",
@@ -105,7 +105,7 @@ describe("mock initialization and thread lifecycle", () => {
         modelProvider: "fixture",
         sandbox: { networkAccess: false, type: "readOnly" },
         thread: {
-          cliVersion: "0.148.0-alpha.9",
+          cliVersion: "0.153.3",
           id: "thread-fixture-known",
           source: "cli",
         },

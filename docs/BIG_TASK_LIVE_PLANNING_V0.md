@@ -234,11 +234,12 @@ returned an empty environment outside test mode. Those observations cannot
 validate this repair. All five diagnostic turns have unavailable usage, not
 proven zero. Diagnostic generation stopped pending runtime compatibility work.
 
-The active owned `0.148.0-alpha.9` catalog does not include `gpt-6-astra`.
+The then-active owned `0.148.0-alpha.9` catalog does not include `gpt-6-astra`.
 A read-only comparison against the verified desktop `0.153.3` catalog includes
 that model and its `xhigh` setting. This identifies a separate compatibility
 workstream; the desktop executable was not adopted as Console authority.
-An owned-runtime upgrade and its compatibility verification remain pending.
+That connection-repair commit left the owned-runtime upgrade pending; the
+subsequent approved upgrade is recorded below.
 
 Verification: 21 added regression cases; focused 91/91 PASS; full canonical
 155 files /4,618 tests PASS, four workers, 360.89 s. Public hygiene, lint,
@@ -246,6 +247,22 @@ typecheck, build, executable local-control E2E and diff checks PASS. Tests use
 mock providers; live diagnosis is separate. Windows and successful real model
 generation were not verified. The canonical intake still has exactly its
 original one Planner attempt; the daemon is stopped and the Board is unchanged.
+
+### Owned-runtime upgrade follow-up
+
+Hanlin approved `0.153.3`. The owned candidate passed isolated schema and
+permission checks, with one necessary repair: hardened planning, write and
+governed-role tasks disable each configured MCP server through task-local
+config before thread creation. The existing external-feature flags alone did
+not prevent configured server startup on either release. No user config files
+or normal login settings were changed.
+
+The real owned `0.153.3` / Astra / `xhigh` diagnostic completed successfully
+through the existing explicit local proxy: one turn, 12,692 total tokens, no
+tool calls. [Exact evidence and rollback](CODEX_RUNTIME_OWNERSHIP_V0.md#2026-09-07-runtime-upgrade).
+The old canonical Planner attempt remains stopped with unknown historical
+usage. No second intake, production planning retry, target write or automatic
+Subtask runner was introduced.
 
 ### Original implementation verification
 

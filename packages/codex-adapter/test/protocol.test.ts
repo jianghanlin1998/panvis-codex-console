@@ -43,11 +43,11 @@ describe("S0C protocol compatibility", () => {
   });
 
   it("records only the installed Codex version validated by S0C", () => {
-    expect(TESTED_CODEX_VERSION).toBe("codex-cli 0.148.0-alpha.9");
+    expect(TESTED_CODEX_VERSION).toBe("codex-cli 0.153.3");
     expect(S0C_PROTOCOL_COMPATIBILITY).toMatchObject({
-      checkedOn: "2026-08-18",
+      checkedOn: "2026-09-07",
       codexVersion: TESTED_CODEX_VERSION,
-      fixtureVersion: "1.1.0",
+      fixtureVersion: "1.2.0",
     });
   });
 
@@ -62,7 +62,9 @@ describe("S0C protocol compatibility", () => {
   it.each([
     "codex-cli 0.147.0-alpha.6.5",
     "codex-cli 0.148.0-alpha.8",
-    "codex-cli 0.148.0-alpha.9.1",
+    "codex-cli 0.148.0-alpha.9",
+    "codex-cli 0.153.3.1",
+    "codex-cli 0.153.4",
     "codex-cli 0.148.0",
   ])("fails closed for untested version %s", (version) => {
     expect(assessCodexCompatibility(version)).toEqual({

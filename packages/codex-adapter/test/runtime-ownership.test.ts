@@ -37,7 +37,7 @@ import {
 
 const CURRENT_SELECTION = {
   target: "aarch64-apple-darwin",
-  version: "0.148.0-alpha.9",
+  version: "0.153.3",
 } as const satisfies CodexRuntimeSelection;
 const NEXT_SELECTION = {
   target: "aarch64-apple-darwin",
@@ -126,7 +126,7 @@ describe("owned Codex candidate resolution", () => {
         "packages",
         "standalone",
         "releases",
-        "0.148.0-alpha.9-aarch64-apple-darwin",
+        "0.153.3-aarch64-apple-darwin",
         "bin",
         "codex",
       ),
@@ -458,7 +458,7 @@ describe("owned Codex selector parsing", () => {
       "",
       `${JSON.stringify({ active: null, previous: null, schemaVersion: 1 })} trailing`,
       '{"schemaVersion":1,"active":null,"active":null,"previous":null}',
-      '{"schemaVersion":1,"active":{"version":"0.148.0-alpha.9","version":"0.148.0-alpha.9","target":"aarch64-apple-darwin"},"previous":null}',
+      '{"schemaVersion":1,"active":{"version":"0.153.3","version":"0.153.3","target":"aarch64-apple-darwin"},"previous":null}',
       JSON.stringify({
         active: CURRENT_SELECTION,
         previous: CURRENT_SELECTION,

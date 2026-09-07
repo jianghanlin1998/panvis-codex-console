@@ -217,7 +217,7 @@ export class IntegratedOrchestrationFixture {
     const result = await executeGovernedRoleCodexWithDependenciesForTest(this.governed, prepared.authorization.authorizationId, {
       checkCompatibility: () => true,
       resolveRuntime: () => ({ canonicalExecutablePath: "/owned/codex/bin/codex", exactVersionOutput: TESTED_CODEX_VERSION,
-        executable: true, readable: true, releaseVersion: "0.148.0-alpha.9", source: "OWNED_RELEASE", target: "aarch64-apple-darwin" }),
+        executable: true, readable: true, releaseVersion: "0.153.3", source: "OWNED_RELEASE", target: "aarch64-apple-darwin" }),
       resolveOwnedWorktree: () => { throw new Error("Governed authority must resolve its own worktree."); },
       generateChatThreadId: () => { throw new Error("Governed storage must own thread IDs."); },
       generateExecutionRunId: () => { throw new Error("Governed storage must own run IDs."); },

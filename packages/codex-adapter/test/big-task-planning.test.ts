@@ -8,6 +8,58 @@ import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js
 import { planningProviderFixture } from "./planning-provider-fixture.js";
 
 describe("real Big Task planning adapter with deterministic JSONL peer", () => {
+  it("disables every configured MCP server for both fresh roles without forwarding other config", async () => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const provider = planningProviderFixture((packet) => packet.role === "PLANNER" ? f.proposal : {
+        outcome: "APPROVE", planRevision: packet.proposal!.candidate.revision,
+        candidateBinding: packet.proposal!.candidateBinding, revisionRequirements: [], questions: [],
+      }, { configReadResult: { config: {
+        model: "config-private-canary", model_reasoning_effort: "config-private-canary",
+        mcp_servers: Object.fromEntries([
+          ["fixture.with.dots", { enabled: true, command: "config-private-canary" }],
+          ["already-disabled", { enabled: false }], ["__proto__", {}],
+        ]),
+      }, origins: {} } });
+      await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies);
+      const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies);
+      expect(result.phase).toBe("APPROVED");
+      const reads = provider.requests.filter((request) => request.method === "config/read");
+      const starts = provider.requests.filter((request) => request.method === "thread/start");
+      expect(reads).toHaveLength(2);
+      expect(starts).toHaveLength(2);
+      for (const [index, start] of starts.entries()) {
+        expect(reads[index]!.params).toEqual({ cwd: start.params.cwd, includeLayers: false });
+        expect(start.params.config).toEqual({ mcp_servers: Object.fromEntries([
+          ["fixture.with.dots", { enabled: false }], ["already-disabled", { enabled: false }], ["__proto__", { enabled: false }],
+        ]) });
+      }
+      expect(JSON.stringify(provider.requests)).not.toContain("config-private-canary");
+      expect(JSON.stringify(result)).not.toContain("config-private-canary");
+    } finally { f.close(); }
+  });
+
+  it.each([
+    null, {}, { config: null }, { config: { mcp_servers: [] } },
+    { config: { mcp_servers: { fixture: null } } },
+    { config: { mcp_servers: { "": {} } } },
+    { config: { mcp_servers: { ["x".repeat(257)]: {} } } },
+    { config: { mcp_servers: Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`mcp-${i}`, {}])) } },
+  ])("stops malformed or oversized MCP config before creating a thread (%#)", async (configReadResult) => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const provider = planningProviderFixture(() => f.proposal, { configReadResult });
+      const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies);
+      expect(result).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "PROVIDER_FAILED" });
+      expect(provider.requests.filter((request) => request.method === "config/read")).toHaveLength(1);
+      expect(provider.requests.filter((request) => request.method === "thread/start" || request.method === "turn/start")).toHaveLength(0);
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
+      expect(provider.workspaces.every((path) => !existsSync(path))).toBe(true);
+    } finally { f.close(); }
+  });
+
   it("uses the explicit local proxy for both fresh planning roles and preserves their sandbox", async () => {
     const f = makePlanningFixture();
     try {

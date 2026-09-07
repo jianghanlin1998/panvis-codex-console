@@ -1521,6 +1521,9 @@ async function executeGovernedRoleCodexWithDependencies(
     authType = "chatgpt";
     eventTracker.assertChatGptAuthenticated();
 
+    const restrictedThreadConfig = await readRestrictedThreadConfig(
+      client, worktreePath, dependencies.limits.requestTimeoutMs,
+    );
     governed.revalidateRoleCandidate(authorizationId);
     const threadResult = await client.request(
       3,
@@ -1528,6 +1531,7 @@ async function executeGovernedRoleCodexWithDependencies(
       {
         approvalPolicy: "never",
         approvalsReviewer: "user",
+        config: restrictedThreadConfig,
         cwd: worktreePath,
         ephemeral: true,
         sandbox: trustedAuthorization.writeEnabled
@@ -1979,6 +1983,9 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     evidence.authType = "chatgpt";
     eventTracker.assertChatGptAuthenticated();
 
+    const restrictedThreadConfig = await readRestrictedThreadConfig(
+      client, worktreePath, dependencies.limits.requestTimeoutMs,
+    );
     revalidateOwnedWorktree(
       dependencies,
       storage,
@@ -1991,6 +1998,7 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
       {
         approvalPolicy: "never",
         approvalsReviewer: "user",
+        config: restrictedThreadConfig,
         cwd: worktreePath,
         ephemeral: true,
         sandbox: "workspace-write",
@@ -2408,12 +2416,17 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     evidence.authType = "chatgpt";
     eventTracker.assertChatGptAuthenticated();
 
+    const restrictedThreadConfig = planning === undefined ? undefined
+      : await readRestrictedThreadConfig(
+        client, executionWorkspace, dependencies.limits.requestTimeoutMs,
+      );
     const threadResult = await client.request(
       3,
       "thread/start",
       {
         approvalPolicy: "never",
         approvalsReviewer: "user",
+        ...(restrictedThreadConfig === undefined ? {} : { config: restrictedThreadConfig }),
         cwd: executionWorkspace,
         ephemeral: true,
         sandbox: "read-only",
@@ -2644,6 +2657,30 @@ function productionOwnedWorktreeDependencies(): OwnedWorktreeExecutionDependenci
       ExecutionRunIdSchema.parse(`run_${randomBytes(16).toString("hex")}`),
     validateWorktreeFilesystem: validateOwnedWorktreeHardlinkSafety,
   };
+}
+
+async function readRestrictedThreadConfig(
+  client: JsonlAppServerClient,
+  cwd: string,
+  timeoutMs: number,
+): Promise<JsonObject> {
+  const response = requireRecord(await client.request(
+    6, "config/read", { cwd, includeLayers: false }, timeoutMs,
+  ));
+  const config = requireRecord(response.config);
+  const servers = config.mcp_servers === undefined ? {} : requireRecord(config.mcp_servers);
+  const entries = Object.entries(servers);
+  if (entries.length > 128) {
+    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+  }
+  // Empty tables merge with user config; they do not remove existing servers.
+  // Pass only names and disabled flags, never config values or credentials.
+  const disabled = entries.map(([name, server]) => {
+    requireBoundedString(name, 256);
+    requireRecord(server);
+    return [name, { enabled: false }] as const;
+  });
+  return { mcp_servers: Object.fromEntries(disabled) };
 }
 
 function ownedWriteAppServerArguments(): readonly string[] {

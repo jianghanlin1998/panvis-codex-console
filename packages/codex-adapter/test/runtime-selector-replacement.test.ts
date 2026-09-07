@@ -49,7 +49,7 @@ import {
 const SELECTOR_A = {
   active: {
     target: "aarch64-apple-darwin",
-    version: "0.148.0-alpha.9",
+    version: "0.153.3",
   },
   previous: null,
   schemaVersion: 1,

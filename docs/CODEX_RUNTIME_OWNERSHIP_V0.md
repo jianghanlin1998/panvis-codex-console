@@ -53,7 +53,7 @@ or `codex`.
 Run the repository wrapper with an explicit version:
 
 ```sh
-pnpm codex:runtime:install -- 0.148.0-alpha.9
+pnpm codex:runtime:install -- 0.153.3
 ```
 
 Before creating the shared Console root, the wrapper requires the existing
@@ -125,17 +125,17 @@ Activation verifies the exact candidate first, then moves the old `active` to
 not reinstall or use the network.
 
 Activation is only a B-level selector operation. A candidate is not compatible
-merely because installation and `--version` succeed. The future C-lite check
+merely because installation and `--version` succeed. The C-lite check
 must validate the current Console-consumed stable App Server contract, followed
 by explicit human approval, before operational activation. Until then,
 execution remains fail-closed. Future compatibility wording should describe an
 unseen candidate as `UNVALIDATED`, not as proven incompatible; that semantic
 cleanup belongs to C-lite, not this module.
 
-The locally installed `0.148.0-alpha.9` candidate remains inactive after this
-hardening. Runtime Ownership Fresh Independent QA and acceptance are required
-before C-lite may rely on this authority boundary; this module contains no
-automatic activation path or compatibility-approval token.
+Historically, the initial `0.148.0-alpha.9` candidate remained inactive until
+Runtime Ownership and C-lite acceptance. Those baseline milestones are accepted.
+The current selector and upgrade evidence are recorded below; this module still
+contains no automatic activation path or compatibility-approval token.
 
 ## Authentication boundary
 
@@ -145,3 +145,56 @@ configuration and authentication remain separate. This implementation does not
 read, copy, hash, log, or modify normal credentials, does not create a login,
 and does not make a model or provider request. Runtime binaries, `active.json`,
 installer artifacts, machine paths, and secrets remain outside Git.
+
+## 2026-09-07 runtime upgrade
+
+Hanlin approved upgrading the Console-owned runtime to `0.153.3` and rechecking
+interfaces, permissions and the selected Astra model. The official exact-release
+wrapper installed the canonical `aarch64-apple-darwin` candidate; the desktop
+executable was not adopted. The old `0.148.0-alpha.9` release is retained.
+
+The new isolated, non-experimental generators produced 1,010 files (304 JSON
+Schema files). The authoritative aggregate SHA-256 is
+`e8284c5cb8157554a3dd1e035aadbd4325aea501af56887e9c2e12eb1b9b9448`.
+C-lite passed the consumed contract, including the added internal task-config
+read/binding used to disable configured external MCP tools. The public Console
+API and response shapes are unchanged. Production changes are limited to
+`compatibility.ts`, `c-lite-compatibility.ts` and `live-execution.ts`; related
+version fixtures, deterministic tests and canonical state/docs are updated.
+
+An exact-runtime, no-model probe confirmed both thread sandbox representations,
+allowed work-directory/private-temp writes, and denied source, sibling, parent,
+HOME, CODEX_HOME, symlink-escape and read-only writes, plus loopback network
+connections. A synthetic MCP sentinel
+exposed an existing startup gap on both releases; explicit per-task disable
+flags repaired it without editing user configuration. The prior
+`orchestrator.mcp.enabled=false` flag alone did not disable configured servers.
+The [upstream config merger](https://github.com/openai/codex/blob/rust-v0.153.3/codex-rs/config/src/merge.rs)
+also explains why an empty override table does not remove existing entries.
+
+One bounded real diagnostic used the owned candidate, existing ChatGPT login,
+the configured local proxy and inherited `gpt-6-astra` / `xhigh`. It completed
+with the expected JSON response and no tools: 12,692 total tokens (12,677 input,
+15 output). Thread `01a07a16-59ab-78e1-99a8-7e723911360d`, turn
+`01a07a16-5a0f-78e2-ba5a-bbd13286c5fe`. Child and temporary directory were cleaned.
+This was separate from the original stopped AI Update Board planning intake;
+that intake was not retried and its unknown historical usage remains unknown.
+
+Activation completed at `2026-09-07T04:33:34.938Z`: active `0.153.3`, previous
+`0.148.0-alpha.9`. The production resolver read back the exact owned runtime;
+the daemon remains stopped. Final verification passed 155 files /4,638 tests
+with four workers (345.33 s), public hygiene, lint, typecheck, build, local-control
+executable E2E and diff checks. The initial full run found two outdated mock
+version values; corrected fixtures passed focused checks and the full rerun
+without changing assertions. `CURRENT_STATE.md` records the current operation.
+Rollback requires a stopped daemon, the matching pre-upgrade Console code
+(`3832331edaab0243be9c1582fa49c2fa38008647`) and the existing
+`rollbackOwnedCodexRuntime()` selector operation. Swapping only the runtime
+without its matching tested-version pin fails closed. The old pair also restores
+its known Astra incompatibility and configured-MCP startup gap; it is not a
+route for continuing the Board pilot. Retain task records and
+never restore the old database backup as part of runtime rollback.
+
+Only macOS arm64 was exercised; Windows behavior is not claimed. This upgrade
+is implementation/operational verification, not a new Fresh Independent QA
+acceptance of the entire Console or an end-to-end AI Update Board delivery.

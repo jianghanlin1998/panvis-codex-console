@@ -18,7 +18,7 @@ export interface PlanningMockPacket {
 /** In-memory JSONL peer: no provider process, network, real-time waits or shared fixtures. */
 export function planningProviderFixture(
   answer: (packet: PlanningMockPacket, sequence: number) => unknown,
-  options: { omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; duplicateThread?: boolean } = {},
+  options: { omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; duplicateThread?: boolean; configReadResult?: unknown } = {},
 ) {
   const packets: PlanningMockPacket[] = [];
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -26,9 +26,9 @@ export function planningProviderFixture(
   const workspaces: string[] = [];
   const dependencies: Dependencies = {
     resolveRuntime: () => ({
-      canonicalExecutablePath: "/owned/codex/0.148.0-alpha.9-aarch64-apple-darwin/bin/codex",
+      canonicalExecutablePath: "/owned/codex/0.153.3-aarch64-apple-darwin/bin/codex",
       exactVersionOutput: TESTED_CODEX_VERSION, executable: true, readable: true,
-      releaseVersion: "0.148.0-alpha.9", source: "OWNED_RELEASE", target: "aarch64-apple-darwin",
+      releaseVersion: "0.153.3", source: "OWNED_RELEASE", target: "aarch64-apple-darwin",
     }) as ReturnType<Dependencies["resolveRuntime"]>,
     sourceEnvironment: {}, normalHomeDirectory: "/private/mock-home",
     createWorkspace: () => {
@@ -60,6 +60,7 @@ export function planningProviderFixture(
             const reply = (result: unknown) => send({ id: message.id, result });
             if (message.method === "initialize") reply({ userAgent: "fixture", codexHome: "/private/mock-home", platformFamily: "unix", platformOs: "macos" });
             if (message.method === "account/read") reply({ account: options.apiKey ? { type: "apiKey" } : { type: "chatgpt", email: "fixture@example.invalid", planType: "pro" }, requiresOpenaiAuth: true });
+            if (message.method === "config/read") reply(options.configReadResult === undefined ? { config: { mcp_servers: {} }, origins: {} } : options.configReadResult);
             if (message.method === "thread/start") reply({
               thread: { id: threadId, ephemeral: true, cwd: spawnOptions.cwd }, cwd: spawnOptions.cwd,
               model: "fixture-model", approvalPolicy: "never", approvalsReviewer: "user",

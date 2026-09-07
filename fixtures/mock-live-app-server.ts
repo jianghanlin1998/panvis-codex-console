@@ -667,7 +667,7 @@ function fixtureThread(): JsonRecord {
     status: { type: "idle" },
     path: null,
     cwd: process.cwd(),
-    cliVersion: "0.148.0-alpha.9",
+    cliVersion: "0.153.3",
     source: "appServer",
     threadSource: null,
     agentNickname: null,

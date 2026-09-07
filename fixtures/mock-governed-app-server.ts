@@ -83,9 +83,14 @@ lines.on("line", (line) => {
     });
     return;
   }
+  if (message.method === "config/read") {
+    send({ id, result: { config: { mcp_servers: { "fixture.mcp": { enabled: true } } }, origins: {} } });
+    return;
+  }
   if (message.method === "thread/start") {
     if (
       !accountRead ||
+      record(record(record(params.config).mcp_servers)["fixture.mcp"]).enabled !== false ||
       params.cwd !== process.cwd() ||
       params.ephemeral !== true ||
       params.approvalPolicy !== "never" ||

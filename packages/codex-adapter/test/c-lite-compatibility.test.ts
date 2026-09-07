@@ -55,7 +55,7 @@ interface MethodCase {
 }
 
 const METHOD_CASES: readonly MethodCase[] = [
-  ...SUPPORTED_CLIENT_REQUEST_METHODS.map((method) => ({
+  ...[...SUPPORTED_CLIENT_REQUEST_METHODS, "config/read"].map((method) => ({
     method,
     root: "ClientRequest" as const,
   })),
@@ -74,6 +74,7 @@ const METHOD_CASES: readonly MethodCase[] = [
 ];
 
 const REQUIRED_FIELD_CASES = [
+  { fields: ["config"], path: ["definitions", "v2", "ConfigReadResponse"] },
   { fields: ["clientInfo"], path: ["definitions", "InitializeParams"] },
   { fields: ["threadId"], path: ["definitions", "v2", "ThreadResumeParams"] },
   { fields: ["input", "threadId"], path: ["definitions", "v2", "TurnStartParams"] },
@@ -91,11 +92,13 @@ const REQUIRED_FIELD_CASES = [
 ] as const;
 
 const METHOD_PROPERTY_CASES = [
+  { fields: ["cwd", "includeLayers"], path: ["definitions", "v2", "ConfigReadParams"] },
   {
     fields: [
       "approvalPolicy",
       "approvalsReviewer",
       "baseInstructions",
+      "config",
       "cwd",
       "developerInstructions",
       "ephemeral",
@@ -376,6 +379,24 @@ describe("C-lite trusted owned-candidate compatibility", () => {
 });
 
 describe("association-correct semantic validation", () => {
+  it.each([
+    ["ConfigReadParams", "cwd"],
+    ["ConfigReadParams", "includeLayers"],
+    ["ThreadStartParams", "config"],
+  ])("rejects a wrong type for restricted config field %s.%s", (definition, property) => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2", definition!, "properties"])[property!] = { type: "number" };
+    expect(() => validateBundle(bundle)).toThrow("PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
+  it("rejects a config response redirected to an unrelated object", () => {
+    const bundle = buildCompatibilityBundle();
+    schemaRecordAt(bundle, ["definitions", "v2", "ConfigReadResponse", "properties"]).config = {
+      $ref: "#/definitions/v2/Thread",
+    };
+    expect(() => validateBundle(bundle)).toThrow("PROTOCOL_SHAPE_INCOMPATIBLE");
+  });
+
   it("accepts the compact authoritative aggregate", () => {
     expect(validateBundle(buildCompatibilityBundle()).provenanceSha256).toMatch(
       /^[a-f0-9]{64}$/u,
@@ -1153,7 +1174,7 @@ function installCandidate(
 ): string {
   const selection = {
     target: getCodexRuntimeTarget(),
-    version: "0.148.0-alpha.9",
+    version: "0.153.3",
   } as const satisfies CodexRuntimeSelection;
   const executablePath = deriveOwnedCodexExecutablePath(
     selection,
@@ -1301,6 +1322,9 @@ function buildCompatibilityBundle(): MutableSchema {
       ],
     },
     ServerRequestResolvedNotification: objectSchema([], []),
+    Config: objectSchema([], []),
+    ConfigReadParams: { type: "object", properties: { cwd: { type: ["string", "null"] }, includeLayers: { type: "boolean" } } },
+    ConfigReadResponse: referencedObjectSchema("config", "#/definitions/v2/Config"),
     SkillsListParams: objectSchema([], []),
     TextElement: objectSchema([], []),
     Thread: validThreadSchema(),
@@ -1394,6 +1418,7 @@ function buildCompatibilityBundle(): MutableSchema {
   };
 
   const clientRequestParams: Readonly<Record<string, string>> = {
+    "config/read": "#/definitions/v2/ConfigReadParams",
     initialize: "#/definitions/InitializeParams",
     "skills/list": "#/definitions/v2/SkillsListParams",
     "thread/goal/get": "#/definitions/v2/ThreadGoalGetParams",
@@ -1429,7 +1454,7 @@ function buildCompatibilityBundle(): MutableSchema {
         ),
       },
       ClientRequest: {
-        oneOf: SUPPORTED_CLIENT_REQUEST_METHODS.map((method) =>
+        oneOf: [...SUPPORTED_CLIENT_REQUEST_METHODS, "config/read"].map((method) =>
           requestSchema(method, clientRequestParams[method] as string),
         ),
       },
@@ -1520,6 +1545,7 @@ function threadStartParamsSchema(): MutableSchema {
       "approvalPolicy",
       "approvalsReviewer",
       "baseInstructions",
+      "config",
       "cwd",
       "developerInstructions",
       "ephemeral",
@@ -1530,6 +1556,7 @@ function threadStartParamsSchema(): MutableSchema {
     ],
     [],
   );
+  schemaRecord(schema.properties).config = { type: ["object", "null"], additionalProperties: true };
   schemaRecord(schema.properties).sandbox = {
     $ref: "#/definitions/v2/SandboxMode",
   };

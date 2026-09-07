@@ -71,6 +71,7 @@ const DEFAULT_VALIDATION_LIMITS: CompatibilityValidationLimits = {
 };
 
 const REQUIRED_REQUEST_PARAMS: Readonly<Record<string, readonly string[]>> = {
+  "config/read": [],
   initialize: ["clientInfo"],
   "skills/list": [],
   "thread/goal/get": ["threadId"],
@@ -82,10 +83,12 @@ const REQUIRED_REQUEST_PARAMS: Readonly<Record<string, readonly string[]>> = {
 };
 
 const REQUIRED_METHOD_PROPERTIES: Readonly<Record<string, readonly string[]>> = {
+  "config/read": ["cwd", "includeLayers"],
   "thread/start": [
     "approvalPolicy",
     "approvalsReviewer",
     "baseInstructions",
+    "config",
     "cwd",
     "developerInstructions",
     "ephemeral",
@@ -116,7 +119,7 @@ const SUPPORTED_APPROVAL_DECISIONS = [
 const METHOD_ROOTS = [
   {
     definitionPath: ["definitions", "ClientRequest"],
-    methods: SUPPORTED_CLIENT_REQUEST_METHODS,
+    methods: [...SUPPORTED_CLIENT_REQUEST_METHODS, "config/read"],
     requiredEnvelope: ["id", "method", "params"],
   },
   {
@@ -139,6 +142,7 @@ const METHOD_ROOTS = [
 const METHOD_PARAMS_DEFINITIONS: Readonly<
   Record<string, readonly string[]>
 > = {
+  "config/read": ["definitions", "v2", "ConfigReadParams"],
   initialize: ["definitions", "InitializeParams"],
   "item/commandExecution/requestApproval": [
     "definitions",
@@ -198,6 +202,16 @@ const METHOD_PARAMS_DEFINITIONS: Readonly<
 };
 
 const NAMED_OBJECT_CONTRACTS = [
+  {
+    definitionPath: ["definitions", "v2", "Config"],
+    properties: [],
+    required: [],
+  },
+  {
+    definitionPath: ["definitions", "v2", "ConfigReadResponse"],
+    properties: ["config"],
+    required: ["config"],
+  },
   {
     definitionPath: ["definitions", "InitializeResponse"],
     properties: ["codexHome", "platformFamily", "platformOs", "userAgent"],
@@ -1076,6 +1090,25 @@ function validateConsumedProtocolContract(
     }
   }
 
+  for (const [definition, property, type] of [
+    ["ConfigReadParams", "cwd", "string"],
+    ["ConfigReadParams", "includeLayers", "boolean"],
+    ["ThreadStartParams", "config", "object"],
+  ] as const) {
+    const locations = objectPropertyLocations(
+      requireLocation(context, ["definitions", "v2", definition]),
+      property, context, { activePaths: new Set() },
+    );
+    if (!locations.some((location) => schemaTypeAllows(location.node, type))) {
+      throw new CLiteCompatibilityFailure("PROTOCOL_SHAPE_INCOMPATIBLE");
+    }
+  }
+  assertPropertyTargets(
+    context,
+    ["definitions", "v2", "ConfigReadResponse"],
+    "config",
+    ["definitions", "v2", "Config"],
+  );
   assertPropertyTargets(
     context,
     ["definitions", "v2", "ThreadStartResponse"],

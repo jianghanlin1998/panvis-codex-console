@@ -452,7 +452,7 @@ function fileItem(status: "completed" | "declined" | "inProgress"): JsonRecord {
 
 function fixtureThread(id: string): JsonRecord {
   return {
-    cliVersion: "0.148.0-alpha.9",
+    cliVersion: "0.153.3",
     createdAt: FIXED_SECONDS,
     cwd: "/fixture/workspace",
     ephemeral: false,

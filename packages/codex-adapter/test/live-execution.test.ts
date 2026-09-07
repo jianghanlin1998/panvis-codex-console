@@ -95,7 +95,7 @@ const MOCK_LIVE_FIXTURE_PATH = fileURLToPath(
   new URL("../../../fixtures/mock-live-app-server.ts", import.meta.url),
 );
 const FAKE_OWNED_EXECUTABLE =
-  "/owned/codex/0.148.0-alpha.9-aarch64-apple-darwin/bin/codex";
+  "/owned/codex/0.153.3-aarch64-apple-darwin/bin/codex";
 const BASE_LIMITS = Object.freeze({
   startupTimeoutMs: 2_000,
   requestTimeoutMs: 2_000,
@@ -886,7 +886,7 @@ function makeDependencies(
     exactVersionOutput: TESTED_CODEX_VERSION,
     executable: true as const,
     readable: true as const,
-    releaseVersion: "0.148.0-alpha.9",
+    releaseVersion: "0.153.3",
     source: "OWNED_RELEASE" as const,
     target: "aarch64-apple-darwin" as const,
     ...options.runtimeOverride,

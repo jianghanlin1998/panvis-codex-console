@@ -16,7 +16,7 @@ import {
 const evidence = JSON.parse(
   readFileSync(
     fileURLToPath(
-      new URL("./fixtures/codex-0.148.0-alpha.9-compatibility.json", import.meta.url),
+      new URL("./fixtures/codex-0.153.3-compatibility.json", import.meta.url),
     ),
     "utf8",
   ),
@@ -43,23 +43,29 @@ const SUPPORTED_APPROVAL_DECISIONS = [
   "decline",
 ] as const satisfies readonly ApprovalDecision[];
 
-describe("Codex 0.148 stable-surface evidence", () => {
+describe("Codex 0.153.3 stable-surface evidence", () => {
   it("records the exact non-experimental generated schema provenance", () => {
     expect(evidence).toMatchObject({
       codexVersion: TESTED_CODEX_VERSION,
-      generatedOn: "2026-08-18",
+      generatedOn: "2026-09-07",
       generatedWithoutExperimental: true,
-      schemaFileCount: 934,
+      schemaFileCount: 1010,
+      restrictedThreadConfig: {
+        internalRequestMethods: ["config/read"],
+        readProperties: ["cwd", "includeLayers"],
+        responseRequired: ["config", "origins"],
+        threadConfigTypes: ["object", "null"],
+      },
       schemaBundleSha256: {
         "codex_app_server_protocol.schemas.json":
-          "9ebe992f44965fb6b033b90bc12b3283b0ce9b117d20b9120ab94a7534886970",
+          "e8284c5cb8157554a3dd1e035aadbd4325aea501af56887e9c2e12eb1b9b9448",
         "codex_app_server_protocol.v2.schemas.json":
-          "f63c8dd74f724835cd88c1a392cb451f903f46d8f72fec4a257df61d52867891",
+          "d3eace08be5dca386bfd1f1e8df650058b4113f1e10870a284d775d75517576a",
       },
     });
   });
 
-  it("keeps every supported method in its generated 0.148 direction", () => {
+  it("keeps every supported method in its generated 0.153.3 direction", () => {
     expect(evidence.methods).toEqual({
       clientNotifications: SUPPORTED_CLIENT_NOTIFICATION_METHODS,
       clientRequests: SUPPORTED_CLIENT_REQUEST_METHODS,
@@ -111,6 +117,7 @@ describe("Codex 0.148 stable-surface evidence", () => {
         "id",
         "modelProvider",
         "preview",
+        "projectId",
         "sessionId",
         "source",
         "status",

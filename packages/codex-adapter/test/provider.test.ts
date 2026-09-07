@@ -37,7 +37,7 @@ describe("Codex provider descriptor", () => {
       TESTED_CODEX_VERSION,
     );
     expect(CODEX_APP_SERVER_PROVIDER_DESCRIPTOR.runtimeVersion).toBe(
-      "codex-cli 0.148.0-alpha.9",
+      "codex-cli 0.153.3",
     );
   });
 

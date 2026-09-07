@@ -11,7 +11,7 @@ the repository-tested release and current platform target, then calls Runtime
 Ownership's candidate resolver. The resolver's canonical `OWNED_RELEASE` path
 is the only executable authority. C-lite does not use ambient `PATH`, the active
 selector, or a caller-supplied binary. The candidate must report exactly
-`codex-cli 0.148.0-alpha.9`; any other version fails closed and requires
+`codex-cli 0.153.3`; any other version fails closed and requires
 revalidation.
 
 ## Bounded check
@@ -31,7 +31,7 @@ artifacts are parsed in place and removed after success or failure. Failure to
 establish isolation or clean the disposable root makes the result incompatible.
 No generated bundle is checked in or retained as runtime authority.
 
-For the tested `.9` generator, `codex_app_server_protocol.schemas.json` is the
+For the tested `0.153.3` generator, `codex_app_server_protocol.schemas.json` is the
 self-contained authoritative aggregate: it contains the client-request,
 client-notification, server-request, and server-notification roots plus their
 embedded V2 definitions. C-lite validates only the consumed graph anchored at
@@ -47,6 +47,13 @@ Compatibility is semantic and limited to the methods declared in
 the consumed thread, goal, turn, item, delta, usage, completion, and
 request-resolution notifications; command-execution and file-change output
 notifications; and command-execution and file-change approval requests.
+The hardened planning, owned-write and governed-role paths also use an internal
+`config/read` request and `thread/start.config` to disable configured MCP servers
+for that exact task. C-lite binds this request to `ConfigReadParams`, checks its
+`cwd` and `includeLayers` types, the task config object type, and the
+`ConfigReadResponse.config -> Config` relationship. This adds no public Console
+request or configuration-write operation.
+
 Validation also covers the currently consumed required request parameters and
 initialization, thread, turn, text-input, token-usage, approval, write-tool item,
 and sandbox shapes. The write contract specifically requires the stable
@@ -58,7 +65,7 @@ params definition; response, input, usage, tool-item, sandbox, and approval
 checks are bound to their named definitions and relationships. Unrelated
 additive schema surface does not fail C-lite or expand Console support.
 
-The write-tool contract is also bound to the exact generated `.9` file-change graph consumed by Step 5B path safety. Both `ThreadItem`'s `fileChange.changes` array and `FileChangePatchUpdatedNotification.changes` must target `definitions.v2.FileUpdateChange`. That named definition must require string `diff` and `path` fields and target `definitions.v2.PatchChangeKind` through `kind`. The patch-kind union must retain the `add`, `delete`, and `update` variants, and the consumed optional update `move_path` field must remain typed as string-or-null. A shape-compatible decoy, unrelated `path`, redirected array item, missing required `path`, wrong type, or misbound kind fails with the existing sanitized protocol-shape incompatibility category.
+The write-tool contract is also bound to the exact generated `0.153.3` file-change graph consumed by Step 5B path safety. Both `ThreadItem`'s `fileChange.changes` array and `FileChangePatchUpdatedNotification.changes` must target `definitions.v2.FileUpdateChange`. That named definition must require string `diff` and `path` fields and target `definitions.v2.PatchChangeKind` through `kind`. The patch-kind union must retain the `add`, `delete`, and `update` variants, and the consumed optional update `move_path` field must remain typed as string-or-null. A shape-compatible decoy, unrelated `path`, redirected array item, missing required `path`, wrong type, or misbound kind fails with the existing sanitized protocol-shape incompatibility category.
 
 Generated-tree depth, directory entries, regular-file count and bytes, parsed
 JSON depth and container count, consumed-graph operations, reference cycles,
@@ -89,8 +96,10 @@ persistence, orchestration, worktrees, UI, or another provider.
 C-lite proves generated schema and consumed contract compatibility, not the
 runtime's behavioral normalization of a real `thread/start` response. The Step
 7 `writableRoots: []` response exposed that boundary. Fresh exact-runtime
-no-model Re-QA verifies the repaired interpretation; a bounded semantic probe
-for future runtime upgrades remains a separate task.
+no-model Re-QA verified the repaired interpretation. The 2026-09-07 upgrade
+rechecked this normalization and file-write boundaries on `0.153.3`;
+[upgrade evidence](CODEX_RUNTIME_OWNERSHIP_V0.md#2026-09-07-runtime-upgrade)
+records the separate semantic and model checks.
 
 C-lite remains the fail-closed compatibility gate for both the accepted
 read-only execution path and the hardened write-enabled owned-worktree path.
