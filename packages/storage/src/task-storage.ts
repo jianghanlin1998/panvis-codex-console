@@ -1,3 +1,4 @@
+import { assertLivePlanApproved, approvedRepairCycleLimit } from "./big-task-execution.js";
 import { assertGovernedCheckpointWriter, assertGovernedDispatchSource, assertGovernedEvidenceSource, governedStableId } from "./governed-evidence-validation.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -1491,7 +1492,7 @@ interface DurableWorkflowEvidenceAuthority {
   readonly subtaskId: SubtaskId;
   readonly expectedSequence: number;
   readonly observedStage: Exclude<WorkflowStage, "PLAN" | "REVIEW" | "COMPLETE">;
-  readonly observedRepairCyclesUsed: 0 | 1;
+  readonly observedRepairCyclesUsed: 0 | 1 | 2;
   readonly sourceType: DurableWorkflowEvidenceAuthoritySourceType;
   readonly kind: DurableWorkflowEvidenceKind;
   readonly outcome: DurableWorkflowEvidenceOutcome;
@@ -1529,7 +1530,7 @@ const durableWorkflowEvidenceAuthorityFromRow = (
     row.expectedSequence < 1 ||
     !isActiveWorkflowStage(row.observedStage) ||
     (row.observedRepairCyclesUsed !== 0 &&
-      row.observedRepairCyclesUsed !== 1) ||
+      row.observedRepairCyclesUsed !== 1 && row.observedRepairCyclesUsed !== 2) ||
     sourceType === undefined ||
     expected === null ||
     expected.kind !== row.evidenceKind ||
@@ -1648,9 +1649,9 @@ const durableWorkflowTransitionFromRow = (
     row.resultingStage === "PLAN" ||
     row.resultingStage === "REVIEW" ||
     row.resultingStage === "MATERIALIZE" ||
-    (row.priorRepairCyclesUsed !== 0 && row.priorRepairCyclesUsed !== 1) ||
+    (row.priorRepairCyclesUsed !== 0 && row.priorRepairCyclesUsed !== 1 && row.priorRepairCyclesUsed !== 2) ||
     (row.resultingRepairCyclesUsed !== 0 &&
-      row.resultingRepairCyclesUsed !== 1) ||
+      row.resultingRepairCyclesUsed !== 1 && row.resultingRepairCyclesUsed !== 2) ||
     !isCanonicalUtcTimestamp(row.occurredAt)
   ) {
     throw malformedStoredData();
@@ -1703,7 +1704,7 @@ const durableWorkflowHumanRequirementFromRow = (
     row.requestedNextStage !== "PLAN" &&
     row.requestedNextStage !== "REVIEW" &&
     row.requestedNextStage !== "MATERIALIZE" &&
-    (row.repairCyclesUsed === 0 || row.repairCyclesUsed === 1) &&
+    (row.repairCyclesUsed === 0 || row.repairCyclesUsed === 1 || row.repairCyclesUsed === 2) &&
     (row.reason === "REPAIR_REQA_EXHAUSTED" ||
       row.reason === "AUTHORITY_BLOCKED");
   if (
@@ -1734,7 +1735,7 @@ const durableWorkflowHumanRequirementFromRow = (
     sequence: row.sequence,
     currentStage: row.currentStage as WorkflowStage | null,
     requestedNextStage: row.requestedNextStage as WorkflowStage | null,
-    repairCyclesUsed: row.repairCyclesUsed as 0 | 1 | null,
+    repairCyclesUsed: row.repairCyclesUsed as 0 | 1 | 2 | null,
     reason: row.reason as DurableWorkflowHumanRequirement["reason"],
     evidenceReferences: parseStoredWorkflowEvidenceReferences(
       row.evidenceReferences,
@@ -2369,7 +2370,10 @@ export class TaskStorage {
   }
 
   materializeDurablePlan(bigTaskId: BigTaskId): DurableOrchestrationPlanningSnapshot {
-    return this.#operation(() => this.#orchestrationPlanning.materialize(bigTaskId));
+    return this.#operation(() => {
+      assertLivePlanApproved(this, bigTaskId);
+      return this.#orchestrationPlanning.materialize(bigTaskId);
+    });
   }
 
   getDurablePlanningSnapshot(
@@ -2398,6 +2402,7 @@ export class TaskStorage {
     input: BigTaskId,
   ): CanonicalTaskMaterialization {
     const bigTaskId = parseBigTaskId(input);
+    assertLivePlanApproved(this, bigTaskId);
     return this.#operation(() =>
       this.#atomicCanonicalTaskMaterialization(() => {
         if (this.#hasCanonicalTaskMaterialization(bigTaskId)) {
@@ -2889,7 +2894,7 @@ export class TaskStorage {
             facts: resolved.facts,
           },
           repairCyclesUsed: view.repairCyclesUsed,
-        });
+        }, approvedRepairCycleLimit(this, view.bigTaskId));
         if (decision.kind === "BLOCKED") {
           return deepFreeze({ kind: "BLOCKED", decision, view });
         }
@@ -5261,7 +5266,7 @@ export class TaskStorage {
     source: CanonicalTaskMaterialization,
     instance: DurableSubtaskWorkflowInstance,
     currentStage: WorkflowStage,
-    repairCyclesUsed: 0 | 1,
+    repairCyclesUsed: 0 | 1 | 2,
     sequence: number,
     stageEnteredAt: string,
     references: readonly DurableWorkflowTransitionEvidenceReference[],
@@ -5586,7 +5591,7 @@ export class TaskStorage {
         throw malformedStoredData();
       }
       let currentStage: WorkflowStage = instance.initialStage;
-      let repairCyclesUsed: 0 | 1 = instance.initialRepairCyclesUsed;
+      let repairCyclesUsed: 0 | 1 | 2 = instance.initialRepairCyclesUsed;
       let previousOccurredAt = instance.initializedAt;
       const usedEvidenceIds = new Set<string>();
       const evidenceUseCount = new Map<string, number>();
@@ -5639,7 +5644,7 @@ export class TaskStorage {
             facts: resolved.facts,
           },
           repairCyclesUsed,
-        });
+        }, approvedRepairCycleLimit(this, instance.bigTaskId));
         if (
           decision.kind !== "ELIGIBLE" ||
           decision.currentStage !== transition.priorStage ||
@@ -5699,7 +5704,7 @@ export class TaskStorage {
             facts: resolved.facts,
           },
           repairCyclesUsed,
-        });
+        }, approvedRepairCycleLimit(this, instance.bigTaskId));
         if (
           decision.kind !== "HUMAN_REQUIRED" ||
           decision.reason !== scopedRequirement.reason
@@ -6890,7 +6895,17 @@ export const openTaskDatabase = (options: OpenTaskDatabaseOptions): TaskStorage 
 
   const database = drizzle({ client: sqlite });
   try {
-    runMigrations(database, options.migrationsFolder ?? defaultMigrationsFolder);
+    // SQLite table reconstruction requires this outside the migrator transaction.
+    // The forward migration checks foreign_key_check before COMMIT; runtime access
+    // is exposed only after constraints are enabled and checked again.
+    const migrationsBefore = sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE name = '__drizzle_migrations'").get() === undefined
+      ? 0 : Number(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()!.count);
+    sqlite.exec("PRAGMA foreign_keys = OFF");
+    try { runMigrations(database, options.migrationsFolder ?? defaultMigrationsFolder); }
+    finally { sqlite.exec("PRAGMA foreign_keys = ON"); }
+    const migrated = Number(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()!.count) !== migrationsBefore;
+    if (migrated && sqlite.prepare("PRAGMA foreign_key_check").get() !== undefined ||
+      sqlite.prepare("PRAGMA foreign_keys").get()?.foreign_keys !== 1) throw new Error("Migration integrity check failed");
   } catch {
     try {
       sqlite.close();

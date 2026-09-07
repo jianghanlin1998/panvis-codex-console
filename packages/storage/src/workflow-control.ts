@@ -77,7 +77,7 @@ export interface DurableWorkflowEvidence {
   readonly subtaskId: SubtaskId;
   readonly expectedSequence: number;
   readonly observedStage: WorkflowStage;
-  readonly observedRepairCyclesUsed: 0 | 1;
+  readonly observedRepairCyclesUsed: 0 | 1 | 2;
   readonly kind: DurableWorkflowEvidenceKind;
   readonly outcome: DurableWorkflowEvidenceOutcome;
   readonly producer: DurableWorkflowEvidenceProducer;
@@ -127,8 +127,8 @@ export interface DurableWorkflowTransition {
   readonly sequence: number;
   readonly priorStage: WorkflowStage;
   readonly resultingStage: WorkflowStage;
-  readonly priorRepairCyclesUsed: 0 | 1;
-  readonly resultingRepairCyclesUsed: 0 | 1;
+  readonly priorRepairCyclesUsed: 0 | 1 | 2;
+  readonly resultingRepairCyclesUsed: 0 | 1 | 2;
   readonly evidenceReferences: readonly DurableWorkflowTransitionEvidenceReference[];
   readonly occurredAt: string;
 }
@@ -144,7 +144,7 @@ export interface DurableWorkflowHumanRequirement {
   readonly sequence: number | null;
   readonly currentStage: WorkflowStage | null;
   readonly requestedNextStage: WorkflowStage | null;
-  readonly repairCyclesUsed: 0 | 1 | null;
+  readonly repairCyclesUsed: 0 | 1 | 2 | null;
   readonly reason:
     | "REPLAN_REQUIRED"
     | "REPAIR_REQA_EXHAUSTED"
@@ -166,7 +166,7 @@ export interface DurableWorkflowControlView {
   readonly initializedAt: string;
   readonly currentStage: WorkflowStage;
   readonly initialRepairCyclesUsed: 0;
-  readonly repairCyclesUsed: 0 | 1;
+  readonly repairCyclesUsed: 0 | 1 | 2;
   readonly boardStatus: SubtaskStatus;
   readonly deliveryMaturity: SubtaskMaturity;
   readonly transitionCount: number;

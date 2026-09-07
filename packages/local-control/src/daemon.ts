@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import {
   openTaskDatabase,
   LivePlanningStore,
+  BigTaskExecutionStore,
 } from "@codex-task-console/storage";
 import type { TaskStorage } from "@codex-task-console/storage";
 
@@ -241,8 +242,10 @@ const startWithDependencies = async (
     }
     verifyCanonicalDatabaseAuthority(dependencies.paths, databaseAuthority);
     new LivePlanningStore(storage).recoverInterrupted();
+    new BigTaskExecutionStore(storage).recoverInterrupted();
+    const service = dependencies.createService(storage);
     http = createLocalControlHttpServer(
-      dependencies.createService(storage),
+      service,
       dependencies.sessionToken,
     );
     const port = await (dependencies.listenServer ?? listen)(http.server);
@@ -295,6 +298,7 @@ const startWithDependencies = async (
           Promise.all([
             serverClosed,
             ownedHttp.waitForInFlightRequests(),
+            service.stopAndDrain?.() ?? Promise.resolve(),
           ]).then(() => undefined),
           dependencies.shutdownTimeoutMilliseconds,
         );

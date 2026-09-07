@@ -264,7 +264,7 @@ export interface StageTransitionInput {
   readonly currentStage: WorkflowStage;
   readonly requestedNextStage: WorkflowStage;
   readonly evidence: Readonly<StageEvidenceSnapshot>;
-  readonly repairCyclesUsed: 0 | 1;
+  readonly repairCyclesUsed: 0 | 1 | 2;
 }
 
 export type StageBlockReason =
@@ -283,7 +283,7 @@ export type StageTransitionResult =
       readonly nextStage: WorkflowStage;
       readonly requiredEvidence: readonly StageEvidenceCode[];
       readonly missingEvidence: readonly StageEvidenceCode[];
-      readonly repairCyclesUsed: 0 | 1;
+      readonly repairCyclesUsed: 0 | 1 | 2;
     }
   | {
       readonly kind: "BLOCKED";
@@ -292,7 +292,7 @@ export type StageTransitionResult =
       readonly nextStage: WorkflowStage | null;
       readonly requiredEvidence: readonly StageEvidenceCode[];
       readonly missingEvidence: readonly StageEvidenceCode[];
-      readonly repairCyclesUsed: 0 | 1 | null;
+      readonly repairCyclesUsed: 0 | 1 | 2 | null;
     }
   | {
       readonly kind: "HUMAN_REQUIRED";
@@ -301,7 +301,7 @@ export type StageTransitionResult =
       readonly nextStage: null;
       readonly requiredEvidence: readonly StageEvidenceCode[];
       readonly missingEvidence: readonly StageEvidenceCode[];
-      readonly repairCyclesUsed: 0 | 1;
+      readonly repairCyclesUsed: 0 | 1 | 2;
     };
 
 export interface DispatchSubtaskState {

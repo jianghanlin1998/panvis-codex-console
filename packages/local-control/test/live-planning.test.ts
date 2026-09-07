@@ -5,7 +5,7 @@ import { request } from "node:http";
 
 import { describe, expect, it } from "vitest";
 
-import { createWorktreeOwnershipManager } from "@codex-task-console/storage";
+import { BigTaskExecutionStore, createWorktreeOwnershipManager } from "@codex-task-console/storage";
 import { executeBigTaskPlanningCodexForTest } from "../../codex-adapter/src/live-execution.js";
 import { planningProviderFixture } from "../../codex-adapter/test/planning-provider-fixture.js";
 import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js";
@@ -18,6 +18,7 @@ describe("Big Task planning local control", () => {
   it.each([[true, false], [false, false], [true, true], [false, true]])("runs the bounded live planning loop with independent reviews (approval=%s, exception=%s)", async (approve, exception) => {
     const f = makePlanningFixture(() => new Date("2026-09-07T06:00:00.000Z"));
     try {
+      f.proposal.tasks.forEach(task => { task.profile = "HIGH_RISK_FOUNDATION"; });
       const provider = planningProviderFixture((packet) => packet.role === "PLANNER" ? f.proposal : {
         outcome: approve && packet.proposal!.candidate.revision === 3 ? "APPROVE" : "REJECT",
         planRevision: packet.proposal!.candidate.revision, candidateBinding: packet.proposal!.candidateBinding,
@@ -40,7 +41,12 @@ describe("Big Task planning local control", () => {
       expect(provider.launches).toHaveLength(6);
       expect(f.storage.listSubtasksByBigTask(f.intake.bigTask.id)).toEqual([]);
       if (approve) {
-        // Existing accepted authority consumes the generated bundle without manual task seeding.
+        // AI review alone must not materialize an execution plan.
+        expect(() => f.storage.materializeDurablePlan(f.intake.bigTask.id)).toThrow();
+        const execution = new BigTaskExecutionStore(f.storage);
+        const review = execution.review(f.intake.bigTask.id);
+        execution.approve({ bigTaskId: review.bigTaskId, planDigest: review.planDigest, repositoryHeadSha: review.repositoryHeadSha,
+          limits: { durationMilliseconds: 60_000, totalTokenLimit: 120_000, roleCallLimit: 16, repairCycleLimit: 1 } });
         f.storage.materializeDurablePlan(f.intake.bigTask.id);
         f.storage.materializeApprovedCanonicalTasks(f.intake.bigTask.id);
         expect(f.storage.listSubtasksByBigTask(f.intake.bigTask.id)).toHaveLength(2);

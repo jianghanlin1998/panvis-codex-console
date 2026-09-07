@@ -7,7 +7,7 @@ type JsonRecord = Record<string, unknown>;
 const role = process.argv.find((value) => value.startsWith("--role="))?.slice(7);
 const malformed = process.argv.includes("--malformed");
 const scenario = process.argv.find(value => value.startsWith("--scenario="))?.slice(11);
-const writeEnabled = scenario !== "read-only" && (role === "EXECUTE" || role === "HARDEN" || role === "REPAIR");
+const writeEnabled = !process.argv.includes("--readonly-role") && scenario !== "read-only" && (role === "EXECUTE" || role === "HARDEN" || role === "REPAIR");
 const occurrence = process.argv.find(value => value.startsWith("--occurrence="))?.slice(13);
 const identity = `${role ?? "unknown"}${occurrence === undefined ? "" : `-${occurrence}`}`;
 const threadId = `thread-governed-${identity}`;
@@ -203,6 +203,9 @@ lines.on("line", (line) => {
       execFileSync("git", ["add", "--", filename], { env, stdio: "pipe" });
       execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "--message", `Synthetic ${role}`], { env, stdio: "pipe" });
     }
+    if (process.argv.includes("--write-candidate") && writeEnabled) {
+      writeFileSync(`candidate-${occurrence ?? role}.txt`, `${role} deterministic candidate\n`, "utf8");
+    }
     if (scenario === "approval-request") send({id: "approval", method: "item/commandExecution/requestApproval", params: {threadId, turnId}});
     if (scenario === "read-write-tool") send({method: "item/started", params: {threadId, turnId,
       item: {id: "write-tool", type: "fileChange", status: "inProgress", changes: [{path: "AGENTS.md", kind: {type: "update"}, diff: "+changed"}]}}});
@@ -215,9 +218,9 @@ lines.on("line", (line) => {
       summary: process.argv.includes("--canary") ? `${role} completed. ${role}_REASONING_CANARY` : `${role} completed.`,
       findings: [] as ReturnType<typeof finding>[],
     };
-    if (scenario === "two-blockers" || scenario === "remaining-new") {
+    if (scenario === "two-blockers" || scenario === "sixteen-blockers" || scenario === "remaining-new") {
       result.outcome = "BLOCKING_FAIL";
-      result.findings = scenario === "two-blockers" ? [finding("A"), finding("B"), finding("defer", false)] : [finding("A"), finding("NEW")];
+      result.findings = scenario === "sixteen-blockers" ? Array.from({ length: 16 }, (_, index) => finding(`bulk-${index}`)) : scenario === "two-blockers" ? [finding("A"), finding("B"), finding("defer", false)] : [finding("A"), finding("NEW")];
     }
     if (scenario === "wrong-outcome") result.outcome = "ACCEPTED";
     if (scenario === "nonblocking") result.findings = [finding("defer", false)];

@@ -1,4 +1,4 @@
-import { hasUnambiguousJsonStructure } from "@codex-task-console/domain";
+import { BigTaskExecutionAcceptanceSchema, hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
@@ -391,6 +391,23 @@ const routeRequest = async (
 ): Promise<object> => {
   const method = request.method ?? "";
   const url = request.url ?? "";
+  if (["/v0/execution/review", "/v0/execution/approve", "/v0/execution/status", "/v0/execution/start", "/v0/execution/pause", "/v0/execution/accept"].includes(url)) {
+    if (method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
+    requireMutationHeaders(request);
+    const body = await readBoundedBody(request);
+    if (!hasUnambiguousJsonStructure(body)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
+    if (url === "/v0/execution/approve" || url === "/v0/execution/accept") {
+      let value: unknown;
+      try { value = JSON.parse(body); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
+      if (url === "/v0/execution/approve") return requireGovernedMethod(service.approveExecution).call(service, value);
+      const parsed = BigTaskExecutionAcceptanceSchema.safeParse(value);
+      if (!parsed.success) throw new HttpBoundaryError("INVALID_REQUEST", 400);
+      return requireGovernedMethod(service.acceptExecution).call(service, parsed.data.bigTaskId, parsed.data.headSha);
+    }
+    const handler = url === "/v0/execution/review" ? service.reviewExecution : url === "/v0/execution/status" ? service.inspectExecution :
+      url === "/v0/execution/start" ? service.startExecution : service.pauseExecution;
+    return requireGovernedMethod(handler).call(service, parseBigTaskBody(body));
+  }
   if (["/v0/planning/intake", "/v0/planning/status", "/v0/planning/run"].includes(url)) {
     if (method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
     requireMutationHeaders(request);

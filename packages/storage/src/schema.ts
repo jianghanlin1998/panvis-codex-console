@@ -583,7 +583,7 @@ export const durableWorkflowEvidenceAuthoritiesTable = sqliteTable(
     check(
       "durable_workflow_evidence_authorities_repair_check",
       sql`typeof(${table.observedRepairCyclesUsed}) = 'integer'
-        and ${table.observedRepairCyclesUsed} in (0, 1)`,
+        and ${table.observedRepairCyclesUsed} in (0, 1, 2)`,
     ),
     check(
       "durable_workflow_evidence_authorities_source_check",
@@ -702,7 +702,7 @@ export const durableWorkflowEvidenceTable = sqliteTable(
     check(
       "durable_workflow_evidence_repair_check",
       sql`typeof(${table.observedRepairCyclesUsed}) = 'integer'
-        and ${table.observedRepairCyclesUsed} in (0, 1)`,
+        and ${table.observedRepairCyclesUsed} in (0, 1, 2)`,
     ),
     check(
       "durable_workflow_evidence_kind_check",
@@ -810,8 +810,8 @@ export const durableWorkflowTransitionsTable = sqliteTable(
       "durable_workflow_transitions_repair_check",
       sql`typeof(${table.priorRepairCyclesUsed}) = 'integer'
         and typeof(${table.resultingRepairCyclesUsed}) = 'integer'
-        and ${table.priorRepairCyclesUsed} in (0, 1)
-        and ${table.resultingRepairCyclesUsed} in (0, 1)`,
+        and ${table.priorRepairCyclesUsed} in (0, 1, 2)
+        and ${table.resultingRepairCyclesUsed} in (0, 1, 2)`,
     ),
     check(
       "durable_workflow_transitions_evidence_check",
@@ -894,7 +894,7 @@ export const durableWorkflowHumanRequirementsTable = sqliteTable(
           and ${table.currentStage} in ('MATERIALIZE', 'EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA')
           and ${table.requestedNextStage} in ('EXECUTE', 'VERIFY', 'HARDEN', 'FRESH_QA', 'REPAIR', 'FOCUSED_RE_QA', 'COMPLETE')
           and typeof(${table.repairCyclesUsed}) = 'integer'
-          and ${table.repairCyclesUsed} in (0, 1)
+          and ${table.repairCyclesUsed} in (0, 1, 2)
           and ${table.reason} in ('REPAIR_REQA_EXHAUSTED', 'AUTHORITY_BLOCKED'))`,
     ),
     check(
@@ -1521,7 +1521,7 @@ export const governedRoleAuthorizationsTable = sqliteTable(
     ),
     check(
       "governed_role_repair_check",
-      sql`typeof(${table.repairCyclesUsed}) = 'integer' and ${table.repairCyclesUsed} in (0, 1)`,
+      sql`typeof(${table.repairCyclesUsed}) = 'integer' and ${table.repairCyclesUsed} in (0, 1, 2)`,
     ),
     check(
       "governed_role_profile_check",
@@ -2178,3 +2178,13 @@ export const governedProviderTurnStartsTable = sqliteTable("governed_provider_tu
   providerThreadId: text("provider_thread_id").notNull(),
   validatedAt: text("validated_at").notNull(),
 });
+
+export const bigTaskExecutionApprovalsTable = sqliteTable("big_task_execution_approvals", {
+  bigTaskId: text("big_task_id").primaryKey().notNull().references(() => livePlanningIntakesTable.bigTaskId, { onDelete: "restrict" }),
+  payload: text("payload").notNull(),
+});
+export const bigTaskExecutionEventsTable = sqliteTable("big_task_execution_events", {
+  bigTaskId: text("big_task_id").notNull().references(() => livePlanningIntakesTable.bigTaskId, { onDelete: "restrict" }),
+  sequence: integer("sequence").notNull(),
+  payload: text("payload").notNull(),
+}, table => [primaryKey({ columns: [table.bigTaskId, table.sequence] })]);

@@ -71,7 +71,7 @@ interface ParsedStageTransitionInput {
   readonly currentStage: WorkflowStage;
   readonly requestedNextStage: WorkflowStage;
   readonly evidence: Readonly<StageEvidenceFacts>;
-  readonly repairCyclesUsed: 0 | 1;
+  readonly repairCyclesUsed: 0 | 1 | 2;
 }
 
 const parseInput = (input: unknown): Readonly<ParsedStageTransitionInput> | null => {
@@ -86,7 +86,7 @@ const parseInput = (input: unknown): Readonly<ParsedStageTransitionInput> | null
     !Object.hasOwn(input, "repairCyclesUsed") ||
     !isWorkflowStage(input.currentStage) ||
     !isWorkflowStage(input.requestedNextStage) ||
-    (input.repairCyclesUsed !== 0 && input.repairCyclesUsed !== 1)
+    (input.repairCyclesUsed !== 0 && input.repairCyclesUsed !== 1 && input.repairCyclesUsed !== 2)
   ) {
     return null;
   }
@@ -327,7 +327,7 @@ const blocked = (
   nextStage: WorkflowStage | null,
   requiredEvidence: readonly StageEvidenceCode[] = [],
   missingEvidence: readonly StageEvidenceCode[] = [],
-  repairCyclesUsed: 0 | 1 | null = null,
+  repairCyclesUsed: 0 | 1 | 2 | null = null,
 ): StageTransitionResult =>
   Object.freeze({
     kind: "BLOCKED",
@@ -341,9 +341,10 @@ const blocked = (
 
 export const evaluateStageTransition = (
   inputValue: Readonly<StageTransitionInput>,
+  repairCycleLimit: 1 | 2 = 1,
 ): StageTransitionResult => {
   const input = parseInput(inputValue);
-  if (input === null) {
+  if (input === null || (repairCycleLimit !== 1 && repairCycleLimit !== 2) || input.repairCyclesUsed > repairCycleLimit) {
     return blocked("INVALID_INPUT", null, null);
   }
 
@@ -351,7 +352,7 @@ export const evaluateStageTransition = (
     (input.profile !== "HIGH_RISK_FOUNDATION" && input.repairCyclesUsed !== 0) ||
     (input.profile === "HIGH_RISK_FOUNDATION" &&
       (input.currentStage === "REPAIR" || input.currentStage === "FOCUSED_RE_QA") &&
-      input.repairCyclesUsed !== 1) ||
+      input.repairCyclesUsed !== 1 && input.repairCyclesUsed !== 2) ||
     (input.profile === "HIGH_RISK_FOUNDATION" &&
       input.currentStage !== "REPAIR" &&
       input.currentStage !== "FOCUSED_RE_QA" &&
@@ -404,7 +405,7 @@ export const evaluateStageTransition = (
     input.profile === "HIGH_RISK_FOUNDATION" &&
     input.currentStage === "REPAIR"
   ) {
-    if (input.repairCyclesUsed !== 1) {
+    if (input.repairCyclesUsed !== 1 && input.repairCyclesUsed !== 2) {
       return blocked(
         "INVALID_INPUT",
         input.currentStage,
@@ -420,7 +421,7 @@ export const evaluateStageTransition = (
     input.profile === "HIGH_RISK_FOUNDATION" &&
     input.currentStage === "FOCUSED_RE_QA"
   ) {
-    if (input.repairCyclesUsed !== 1) {
+    if (input.repairCyclesUsed !== 1 && input.repairCyclesUsed !== 2) {
       return blocked(
         "INVALID_INPUT",
         input.currentStage,
@@ -451,7 +452,10 @@ export const evaluateStageTransition = (
         input.repairCyclesUsed,
       );
     }
-    if (input.evidence.focusedReQaOutcome === "BLOCKING_FAIL") {
+    if (input.evidence.focusedReQaOutcome === "BLOCKING_FAIL" && input.repairCyclesUsed < repairCycleLimit) {
+      expectedNextStage = "REPAIR";
+      nextRepairCyclesUsed = 2;
+    } else if (input.evidence.focusedReQaOutcome === "BLOCKING_FAIL") {
       return Object.freeze({
         kind: "HUMAN_REQUIRED",
         reason: "REPAIR_REQA_EXHAUSTED",
@@ -459,10 +463,10 @@ export const evaluateStageTransition = (
         nextStage: null,
         requiredEvidence,
         missingEvidence: Object.freeze([]),
-        repairCyclesUsed: 1,
+        repairCyclesUsed: input.repairCyclesUsed,
       });
     }
-    expectedNextStage = "COMPLETE";
+    else expectedNextStage = "COMPLETE";
   } else if (expectedNextStage !== null) {
     requiredEvidence = standardRequirements(input.currentStage, expectedNextStage);
   }

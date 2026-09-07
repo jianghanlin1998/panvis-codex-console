@@ -8,7 +8,7 @@ export function assertGovernedSchemaIntegrity(sqlite: DatabaseSync): void {
   const version = (sqlite.prepare("PRAGMA schema_version").get() as { schema_version: number }).schema_version;
   if (versions.get(sqlite) === version) return;
   const rows = sqlite.prepare(`SELECT type,name,tbl_name,sql FROM sqlite_schema
-    WHERE name GLOB 'governed_*' AND sql IS NOT NULL ORDER BY name`).all();
+    WHERE (name GLOB 'governed_*' OR name GLOB 'big_task_execution_*') AND sql IS NOT NULL ORDER BY name`).all();
   if (rows.length !== Object.keys(governedSchemaManifest).length || rows.some(row =>
     governedSchemaManifest[String(row.name)] !== createHash("sha256").update(JSON.stringify(row)).digest("hex"),
   )) {

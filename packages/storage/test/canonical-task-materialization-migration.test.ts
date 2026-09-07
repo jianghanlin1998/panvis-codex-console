@@ -337,7 +337,7 @@ describe("canonical task materialization migration", () => {
         sqlite = new DatabaseSync(databasePath);
         expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get())
-          .toEqual({ count: predecessorMigrationNames.length + 9 });
+          .toEqual({ count: predecessorMigrationNames.length + 11 });
         expect(() => sqlite.exec(
           "UPDATE canonical_task_materializations SET subtask_count = 9",
         )).toThrow();

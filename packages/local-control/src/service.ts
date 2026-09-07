@@ -16,6 +16,7 @@ import type {
 } from "@codex-task-console/domain";
 import {
   TaskStorageError,
+  BigTaskExecutionStore,
   LivePlanningStore,
   WorktreeOwnershipError,
   createGovernedExecutionStore,
@@ -26,6 +27,7 @@ import type {
   TaskStorage,
   WorktreeOwnershipManager,
   LivePlanningStatus,
+  BigTaskExecutionStatus,
 } from "@codex-task-console/storage";
 
 const MAX_RECENT_THREADS = 8;
@@ -123,6 +125,13 @@ export interface ExecutionOperationResult {
 }
 
 export interface LocalControlService {
+  reviewExecution?(bigTaskId: BigTaskId): Promise<object>;
+  approveExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
+  inspectExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
+  startExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
+  pauseExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
+  acceptExecution?(bigTaskId: BigTaskId, headSha: string): Promise<BigTaskExecutionStatus>;
+  stopAndDrain?(): Promise<void>;
   acceptPlanningIntake?(input: unknown): Promise<LivePlanningStatus>;
   inspectPlanning?(bigTaskId: BigTaskId): Promise<LivePlanningStatus>;
   runPlanning?(bigTaskId: BigTaskId): Promise<LivePlanningStatus>;
@@ -233,6 +242,8 @@ class ProductionLocalControlService implements LocalControlService {
   readonly #storage: TaskStorage;
   readonly #worktrees: WorktreeOwnershipManager;
   readonly #governed: GovernedExecutionStore;
+  readonly #jobs = new Map<BigTaskId, { controller: AbortController; completion: Promise<void> }>();
+  #stopping = false;
   readonly #execute: (
     storage: TaskStorage,
     subtaskId: SubtaskId,
@@ -240,6 +251,7 @@ class ProductionLocalControlService implements LocalControlService {
   readonly #executeGoverned: (
     governed: GovernedExecutionStore,
     authorizationId: string,
+    signal?: AbortSignal,
   ) => Promise<GovernedRoleCodexExecutionResult>;
 
   constructor(
@@ -252,13 +264,15 @@ class ProductionLocalControlService implements LocalControlService {
     executeGoverned: (
       governed: GovernedExecutionStore,
       authorizationId: string,
+      signal?: AbortSignal,
     ) => Promise<GovernedRoleCodexExecutionResult>,
     private readonly executePlanning: (storage: TaskStorage, bigTaskId: BigTaskId) => Promise<LivePlanningStatus> = executeBigTaskPlanningCodex,
+    governedForTest?: GovernedExecutionStore,
   ) {
     this.#storage = storage;
     this.#worktrees = worktrees;
     this.#execute = execute;
-    this.#governed = createGovernedExecutionStore(storage);
+    this.#governed = governedForTest ?? createGovernedExecutionStore(storage);
     this.#executeGoverned = executeGoverned;
   }
 
@@ -386,6 +400,99 @@ class ProductionLocalControlService implements LocalControlService {
     }
   }
 
+  async reviewExecution(bigTaskId: BigTaskId): Promise<object> {
+    try {
+      const review = new BigTaskExecutionStore(this.#storage).review(bigTaskId);
+      return { bigTaskId, planDigest: review.planDigest, repositoryHeadSha: review.repositoryHeadSha,
+        candidate: review.candidate, taskContracts: review.taskContracts, executionIssues: review.executionIssues, confirmation: "HANLIN_EXECUTION_APPROVAL_REQUIRED" };
+    } catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async approveExecution(input: unknown): Promise<BigTaskExecutionStatus> {
+    try { return new BigTaskExecutionStore(this.#storage).approve(input); }
+    catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async inspectExecution(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus> {
+    try { return new BigTaskExecutionStore(this.#storage).inspect(bigTaskId); }
+    catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async startExecution(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus> {
+    try {
+      if (this.#stopping) throw new LocalControlServiceError("OPERATION_CONFLICT", 409);
+      const execution = new BigTaskExecutionStore(this.#storage);
+      if (this.#jobs.has(bigTaskId)) return execution.inspect(bigTaskId);
+      if (this.#jobs.size >= 4) throw new LocalControlServiceError("OPERATION_CONFLICT", 409);
+      const claim = execution.start(bigTaskId);
+      if (!claim.claimed) return claim.status;
+      const controller = new AbortController();
+      const completion = Promise.resolve().then(() => this.#driveExecution(bigTaskId, controller.signal))
+        .catch(() => { this.#stopping = true; })
+        .finally(() => { this.#jobs.delete(bigTaskId); });
+      this.#jobs.set(bigTaskId, { controller, completion });
+      return claim.status;
+    } catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async pauseExecution(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus> {
+    try {
+      const result = new BigTaskExecutionStore(this.#storage).stop(bigTaskId, "USER_PAUSED");
+      this.#jobs.get(bigTaskId)?.controller.abort();
+      return result;
+    } catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async acceptExecution(bigTaskId: BigTaskId, headSha: string): Promise<BigTaskExecutionStatus> {
+    try { return new BigTaskExecutionStore(this.#storage).accept(bigTaskId, headSha); }
+    catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async stopAndDrain(): Promise<void> {
+    this.#stopping = true;
+    const jobs = [...this.#jobs.entries()];
+    let failed = false;
+    for (const [id, job] of jobs) {
+      try { new BigTaskExecutionStore(this.#storage).stop(id, "DAEMON_STOPPING"); }
+      catch { failed = true; }
+      finally { job.controller.abort(); }
+    }
+    await Promise.all(jobs.map(([, job]) => job.completion));
+    if (failed) throw new LocalControlServiceError("LOCAL_OPERATION_FAILED", 500);
+  }
+
+  async #driveExecution(bigTaskId: BigTaskId, signal: AbortSignal): Promise<void> {
+    const execution = new BigTaskExecutionStore(this.#storage);
+    try {
+      const limit = execution.inspect(bigTaskId).limits.roleCallLimit + 2;
+      for (let step = 0; step < limit; step += 1) {
+        const state = execution.inspect(bigTaskId);
+        if (state.phase !== "RUNNING" || signal.aborted) return;
+        if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
+        if (!state.usageComplete) { execution.stop(bigTaskId, "USAGE_UNKNOWN"); return; }
+        if (state.knownTokens >= state.limits.totalTokenLimit) { execution.stop(bigTaskId, "TOKEN_LIMIT_REACHED"); return; }
+        const prepared = this.#governed.prepareNextRole(bigTaskId);
+        if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
+        if (prepared.kind === "BIG_TASK_COMPLETE") { execution.deliver(bigTaskId); return; }
+        if (prepared.kind !== "ROLE_AUTHORIZED") { execution.stop(bigTaskId, "GOVERNED_BLOCKED"); return; }
+        if (state.roleCalls >= state.limits.roleCallLimit) { execution.stop(bigTaskId, "ROLE_LIMIT_REACHED"); return; }
+        const result = await this.#executeGoverned(this.#governed, prepared.authorization.authorizationId, signal);
+        if (!result.success) {
+          const after = execution.inspect(bigTaskId);
+          if (after.phase === "RUNNING") execution.stop(bigTaskId,
+            execution.remainingMilliseconds(bigTaskId) === 0 ? "TIME_LIMIT_REACHED" :
+              !after.usageComplete ? "USAGE_UNKNOWN" : after.knownTokens >= after.limits.totalTokenLimit ? "TOKEN_LIMIT_REACHED" : "GOVERNED_BLOCKED");
+          return;
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      execution.stop(bigTaskId, "ROLE_LIMIT_REACHED");
+    } catch {
+      // Errors remain closed codes; preserve all durable role evidence and never retry uncertain work.
+      execution.stop(bigTaskId, execution.remainingMilliseconds(bigTaskId) === 0 ? "TIME_LIMIT_REACHED" : "LOCAL_OPERATION_FAILED");
+    }
+  }
+
   async inspectGovernedBigTask(bigTaskId: BigTaskId): Promise<object> {
     try {
       return this.#governed.inspectBigTask(bigTaskId);
@@ -477,8 +584,10 @@ export const createLocalControlServiceForTesting = (
   executeGoverned: (
     governed: GovernedExecutionStore,
     authorizationId: string,
+    signal?: AbortSignal,
   ) => Promise<GovernedRoleCodexExecutionResult> = executeGovernedRoleCodex,
   executePlanning: (storage: TaskStorage, bigTaskId: BigTaskId) => Promise<LivePlanningStatus> = executeBigTaskPlanningCodex,
+  governedForTest?: GovernedExecutionStore,
 ): LocalControlService =>
   new ProductionLocalControlService(
     storage,
@@ -486,4 +595,5 @@ export const createLocalControlServiceForTesting = (
     execute,
     executeGoverned,
     executePlanning,
+    governedForTest,
   );

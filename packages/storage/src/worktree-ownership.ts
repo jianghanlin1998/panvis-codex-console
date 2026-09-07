@@ -1,3 +1,5 @@
+import { approvedExecutionBase, executionDeadlineForSubtask } from "./big-task-execution.js";
+import { checkExecutionGitFilters, executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
@@ -301,6 +303,8 @@ const runLocalGit = (
   arguments_: readonly string[],
 ): GitResult => {
   assertPathIdentity(root);
+  const env = localGitEnvironment();
+  checkExecutionGitFilters(["-C", root.path, "-c", "core.fsmonitor=false"], env);
   const result = (() => {
     try {
       return spawnSync(
@@ -322,10 +326,10 @@ const runLocalGit = (
           ...arguments_,
         ],
         {
-          env: localGitEnvironment(),
+          env,
           maxBuffer: GIT_OUTPUT_MAX_BYTES,
           shell: false,
-          timeout: GIT_TIMEOUT_MILLISECONDS,
+          timeout: executionGitTimeout(GIT_TIMEOUT_MILLISECONDS),
           windowsHide: true,
         },
       );
@@ -337,6 +341,7 @@ const runLocalGit = (
     }
   })();
   assertPathIdentity(root);
+  executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
   if (
     result.error !== undefined ||
     result.signal !== null ||
@@ -1416,6 +1421,7 @@ const observeExactOwnedWorktree = (
   requireStartingHead: boolean,
   expectedGeneration: CheckoutGenerationEvidence | null,
   requireStableSourceCheckout = false,
+  expectedSourceHead: string = ownership.startingCommitSha,
 ): RepositoryCommitSha => {
   assertPathIdentity(root);
   assertPathIdentity(source.root);
@@ -1475,7 +1481,7 @@ const observeExactOwnedWorktree = (
     );
     if (
       requireStableSourceCheckout &&
-      (source.head !== ownership.startingCommitSha ||
+      (source.head !== expectedSourceHead ||
         source.headReference !== checkoutIdentity.sourceHeadReference)
     ) {
       throw ownershipError(
@@ -1581,6 +1587,12 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
   }
 
   provisionOwnedWorktreeForSubtask(input: SubtaskId): WorktreeOwnership {
+    const remaining = executionDeadlineForSubtask(this.#storage, input);
+    return remaining === null ? this.#provisionOwnedWorktreeForSubtask(input) :
+      withExecutionGitBoundary(remaining, () => this.#provisionOwnedWorktreeForSubtask(input));
+  }
+
+  #provisionOwnedWorktreeForSubtask(input: SubtaskId): WorktreeOwnership {
     const hierarchy = resolveCanonicalHierarchy(this.#storage, input);
     if (!isProvisioningEligibleStatus(hierarchy.subtask.status)) {
       throw ownershipError(
@@ -1598,6 +1610,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
     const access = getStorageAccess(this.#storage);
     const worktreeRoot = ensurePrivateOwnershipRoot(this.#dependencies.worktreeRoot);
     const source = resolveVerifiedRepository(hierarchy.project.repository.path);
+    const approvedBase = approvedExecutionBase(this.#storage, hierarchy.subtask.id);
     let generatedValue: string;
     try {
       generatedValue = this.#dependencies.idGenerator();
@@ -1628,7 +1641,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       status: "PROVISIONING",
       worktreePath,
       branchName,
-      startingCommitSha: source.head,
+      startingCommitSha: approvedBase ?? source.head,
       releaseHeadSha: null,
       createdAt,
       activatedAt: null,
@@ -1644,6 +1657,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
     }
     const reservation = reservationResult.data;
     this.#dependencies.failureHooks.beforeReservation?.();
+    executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
     const persisted = reserveOwnership(
       access,
       hierarchy,
@@ -1669,12 +1683,14 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
         );
       }
       observeExactOwnedWorktree(source, worktreeRoot, persisted, true, null);
+      executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
       const installedIdentity = installCheckoutIdentityMarker(
         source,
         worktreeRoot,
         persisted,
       );
       this.#dependencies.failureHooks.beforeGenerationEvidencePersist?.();
+      executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
       const durableGeneration = persistCheckoutGenerationEvidence(
         access,
         persisted,
@@ -1689,10 +1705,12 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
         true,
         durableGeneration,
         true,
+        source.head,
       );
       const stableSource = resolveVerifiedRepository(hierarchy.project.repository.path);
       if (
-        stableSource.head !== persisted.startingCommitSha ||
+        stableSource.head !== source.head ||
+        approvedExecutionBase(this.#storage, hierarchy.subtask.id) !== approvedBase ||
         stableSource.headReference !== source.headReference ||
         stableSource.root.path !== source.root.path ||
         !identitiesEqual(stableSource.root.identity, source.root.identity) ||
@@ -1707,6 +1725,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
           "The source repository changed during worktree provisioning.",
         );
       }
+      executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
       return transitionOwnership(
         access,
         persisted.id,
@@ -1830,6 +1849,12 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
   // Internal composition only: the validator is supplied by governed storage,
   // never by the public worktree facade, HTTP input, or a caller boolean/SHA.
   #releaseCompletedGovernedWorktree(input: SubtaskId, validate: () => CompletedCandidate): WorktreeOwnership {
+    const remaining = executionDeadlineForSubtask(this.#storage, input);
+    const release = () => this.#releaseCompletedGovernedWorktreeWithinBoundary(input, validate);
+    return remaining === null ? release() : withExecutionGitBoundary(remaining, release);
+  }
+
+  #releaseCompletedGovernedWorktreeWithinBoundary(input: SubtaskId, validate: () => CompletedCandidate): WorktreeOwnership {
     const access = getStorageAccess(this.#storage);
     const hierarchy = resolveCanonicalHierarchy(this.#storage, input);
     const releasing = withImmediateTransaction(access, () => {
@@ -1842,6 +1867,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
       if (active.currentHeadSha !== proof.candidateSha || !worktreeIsClean(active.ownership.worktreePath)) {
         throw ownershipError("OWNERSHIP_DRIFT", "The completed candidate changed before release.");
       }
+      executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
       return transitionOwnershipInTransaction(access, current!.id, "ACTIVE", "RELEASING",
         this.#dependencies.worktreeRoot, proof.candidateSha);
     });
@@ -1884,6 +1910,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
           return this.#reconcileWorktreeOwnershipInTransaction(hierarchy.subtask.id);
         }
         this.#dependencies.failureHooks.beforeGitRemove?.();
+        executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
         const preRemovalHead = observeExactOwnedWorktree(
           source,
           verifyPrivateOwnershipRoot(this.#dependencies.worktreeRoot),
@@ -1912,6 +1939,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
           );
         }
         this.#dependencies.failureHooks.afterGitRemove?.();
+        executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
         const state = ownedPathState(source, releasing.worktreePath);
         if (state.exists || state.registeredCount !== 0) {
           throw ownershipError(

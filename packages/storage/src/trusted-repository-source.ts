@@ -23,6 +23,7 @@ import type {
 
 import { TaskStorageError } from "./errors.js";
 import { TaskStorage } from "./task-storage.js";
+import { checkExecutionGitFilters, executionGitTimeout } from "./execution-git-boundary.js";
 
 const PACKET_SOURCE_REFERENCE_MAX_LENGTH = 2_048;
 const PACKET_TITLE_MAX_LENGTH = 256;
@@ -267,6 +268,8 @@ const runLocalGit = (
   arguments_: readonly string[],
 ): GitResult => {
   assertRepositoryIdentity(repository.path, repository.identity);
+  const env = localGitEnvironment();
+  checkExecutionGitFilters(["-C", repository.path, "-c", "core.fsmonitor=false"], env);
   const result = (() => {
     try {
       return spawnSync(
@@ -286,10 +289,10 @@ const runLocalGit = (
           ...arguments_,
         ],
         {
-          env: localGitEnvironment(),
+          env,
           maxBuffer: GIT_OUTPUT_MAX_BYTES,
           shell: false,
-          timeout: GIT_TIMEOUT_MILLISECONDS,
+          timeout: executionGitTimeout(GIT_TIMEOUT_MILLISECONDS),
           windowsHide: true,
         },
       );
@@ -298,6 +301,7 @@ const runLocalGit = (
     }
   })();
   assertRepositoryIdentity(repository.path, repository.identity);
+  executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
   if (
     result.error !== undefined ||
     result.signal !== null ||

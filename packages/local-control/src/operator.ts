@@ -1,3 +1,5 @@
+import { BigTaskExecutionApprovalSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema, TaskContractV0Schema } from "@codex-task-console/domain";
+import type { BigTaskExecutionApproval } from "@codex-task-console/domain";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
@@ -60,7 +62,9 @@ import type {
 
 const DEFAULT_OPERATOR_TIMEOUT_MILLISECONDS = 5 * 60_000;
 
+type ExecutionIdCommand = "execution-review" | "execution-status" | "execution-start" | "execution-pause";
 export type OperatorCommandName =
+  | ExecutionIdCommand | "execution-approve" | "execution-accept"
   | "planning-intake" | "planning-status" | "planning-run"
   | "ping"
   | "status"
@@ -73,11 +77,14 @@ export type OperatorCommandName =
   | "governed-budget-extension";
 
 export type OperatorCommand =
+  | { readonly name: ExecutionIdCommand; readonly bigTaskId: BigTaskId }
+  | { readonly name: "execution-approve"; readonly approval: BigTaskExecutionApproval }
+  | { readonly name: "execution-accept"; readonly acceptance: { bigTaskId: BigTaskId; headSha: string } }
   | { readonly name: "planning-intake"; readonly intake: BigTaskPlanningIntake }
   | { readonly name: "planning-status" | "planning-run"; readonly bigTaskId: BigTaskId }
   | { readonly name: "ping" }
   | {
-      readonly name: Exclude<OperatorCommandName, "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
+      readonly name: Exclude<OperatorCommandName, ExecutionIdCommand | "execution-approve" | "execution-accept" | "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
       readonly subtaskId: SubtaskId;
     }
   | {
@@ -112,7 +119,7 @@ export class LocalOperatorError extends Error {
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const readPlanningIntake = (path: string): BigTaskPlanningIntake => {
+const readOperatorJson = (path: string): unknown => {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -122,7 +129,7 @@ const readPlanningIntake = (path: string): BigTaskPlanningIntake => {
     if (bytes.byteLength > 16_384 || !isUtf8(bytes)) throw new Error();
     const text = bytes.toString("utf8");
     if (!hasUnambiguousJsonStructure(text)) throw new Error();
-    return BigTaskPlanningIntakeSchema.parse(JSON.parse(text));
+    return JSON.parse(text) as unknown;
   } catch { throw new LocalOperatorError("INVALID_COMMAND"); }
   finally { if (fd !== undefined) closeSync(fd); }
 };
@@ -494,7 +501,7 @@ const receiptFields = {
 } satisfies WireFields<GovernedDispatchReceipt>;
 const authorizationFields = {
   ...ownerFields, authorizationId: wireText, dispatchReceiptId: wireText, workflowSequence: wireCount,
-  workflowStage: wireRole, repairCyclesUsed: oneOf(0, 1), role: wireRole,
+  workflowStage: wireRole, repairCyclesUsed: oneOf(0, 1, 2), role: wireRole,
   contextProfile: oneOf("STANDARD_SUBTASK_EXECUTION", "FRESH_INDEPENDENT_QA", "FOCUSED_RE_QA"),
   writeEnabled: wireBoolean, worktreeOwnershipId: canonical(WorktreeOwnershipIdSchema),
   candidateSha: canonical(RepositoryCommitShaSchema), authorizedAt: isCanonicalTimestamp,
@@ -506,20 +513,20 @@ const wireEvidenceReference: WireCheck = value => matchesFields(value, {
 const transitionFields = {
   ...ownerFields, operationId: wireText, sequence: wirePositive,
   priorStage: wireStage, resultingStage: wireStage,
-  priorRepairCyclesUsed: oneOf(0, 1), resultingRepairCyclesUsed: oneOf(0, 1),
+  priorRepairCyclesUsed: oneOf(0, 1, 2), resultingRepairCyclesUsed: oneOf(0, 1, 2),
   evidenceReferences: arrayOf(wireEvidenceReference), occurredAt: isCanonicalTimestamp,
 } satisfies WireFields<DurableWorkflowTransition>;
 const humanFields = {
   ...ownerFields, subtaskId: nullable(canonical(SubtaskIdSchema)), operationId: wireText,
   scope: oneOf("BIG_TASK", "SUBTASK"), sequence: nullable(wireCount),
-  currentStage: nullable(wireStage), requestedNextStage: nullable(wireStage), repairCyclesUsed: oneOf(null, 0, 1),
+  currentStage: nullable(wireStage), requestedNextStage: nullable(wireStage), repairCyclesUsed: oneOf(null, 0, 1, 2),
   reason: oneOf("REPLAN_REQUIRED", "REPAIR_REQA_EXHAUSTED", "AUTHORITY_BLOCKED"),
   evidenceReferences: arrayOf(wireEvidenceReference), sourceReference: wireText, createdAt: isCanonicalTimestamp,
 } satisfies WireFields<DurableWorkflowHumanRequirement>;
 const workflowFields = {
   ...ownerFields, profile: wireProfile, writeEnabled: wireBoolean,
   initialStage: oneOf("MATERIALIZE", "EXECUTE"), initializedAt: isCanonicalTimestamp,
-  currentStage: wireStage, initialRepairCyclesUsed: oneOf(0), repairCyclesUsed: oneOf(0, 1),
+  currentStage: wireStage, initialRepairCyclesUsed: oneOf(0), repairCyclesUsed: oneOf(0, 1, 2),
   boardStatus: canonical(SubtaskStatusSchema), deliveryMaturity: canonical(SubtaskMaturitySchema),
   transitionCount: wireCount, transitions: arrayOf(value => matchesFields(value, transitionFields)),
   unresolvedHumanRequired: nullable(value => matchesFields(value, humanFields)),
@@ -626,6 +633,32 @@ const governedAdvanceSucceeded = (value: Readonly<Record<string, unknown>>): boo
       value.execution.reconciliationKind === "TRANSITION_RECORDED" &&
       (value.execution.outcome === "READY" || value.execution.outcome === "PASS")));
 
+const isExecutionReview = (value: Readonly<Record<string, unknown>>, id: BigTaskId): boolean => {
+  if (!hasExactKeys(value, ["bigTaskId", "planDigest", "repositoryHeadSha", "candidate", "taskContracts", "executionIssues", "confirmation"]) ||
+    !Array.isArray(value.executionIssues) || value.executionIssues.length > 24 || value.executionIssues.some(issue =>
+      !isRecord(issue) || !hasExactKeys(issue, ["code", "subtaskId"]) || issue.code !== "DEPENDENCY_PROFILE_CONFLICT" || !schemaMatchesExactly(SubtaskIdSchema, issue.subtaskId)) ||
+    value.bigTaskId !== id || value.confirmation !== "HANLIN_EXECUTION_APPROVAL_REQUIRED" ||
+    typeof value.planDigest !== "string" || !/^[a-f0-9]{64}$/u.test(value.planDigest) ||
+    !RepositoryCommitShaSchema.safeParse(value.repositoryHeadSha).success || !isRecord(value.candidate) || !Array.isArray(value.taskContracts)) return false;
+  const plan = value.candidate;
+  if (!hasExactKeys(plan, ["kind", "projectId", "bigTaskId", "revision", "subtasks", "dependencies"]) || plan.kind !== "PLAN_CANDIDATE" || plan.bigTaskId !== id ||
+    !schemaMatchesExactly(ProjectIdSchema, plan.projectId) || !Number.isSafeInteger(plan.revision) || Number(plan.revision) < 1 ||
+    !Array.isArray(plan.subtasks) || plan.subtasks.length < 1 || plan.subtasks.length > 24 ||
+    !Array.isArray(plan.dependencies) || plan.dependencies.length > 64 || value.taskContracts.length !== plan.subtasks.length) return false;
+  const ids = new Set<string>();
+  for (const [index, task] of plan.subtasks.entries()) {
+    if (!isRecord(task) || !hasExactKeys(task, ["id", "bigTaskId", "profile", "taskContractRef", "writeEnabled"]) || task.bigTaskId !== id ||
+      !schemaMatchesExactly(SubtaskIdSchema, task.id) || !["LOW", "STANDARD", "HIGH_RISK_FOUNDATION"].includes(String(task.profile)) ||
+      typeof task.taskContractRef !== "string" || typeof task.writeEnabled !== "boolean" || ids.has(String(task.id))) return false;
+    ids.add(String(task.id));
+    const parsed = TaskContractV0Schema.safeParse(value.taskContracts[index]);
+    if (!parsed.success || parsed.data.subtaskId !== task.id || parsed.data.bigTaskId !== id || parsed.data.projectId !== plan.projectId || parsed.data.taskContractRef !== task.taskContractRef) return false;
+  }
+  return plan.dependencies.every(edge => isRecord(edge) && hasExactKeys(edge, ["upstreamSubtaskId", "downstreamSubtaskId", "dependencyType", "requiredGate", "reason"]) &&
+    ids.has(String(edge.upstreamSubtaskId)) && ids.has(String(edge.downstreamSubtaskId)) && edge.upstreamSubtaskId !== edge.downstreamSubtaskId &&
+    ["BLOCKING", "INFORMATIONAL"].includes(String(edge.dependencyType)) && ["NONE", "HARDENED", "ACCEPTED"].includes(String(edge.requiredGate)) && wireText(edge.reason));
+};
+
 const validateResponseShape = (
   command: OperatorCommand,
   status: number,
@@ -638,6 +671,14 @@ const validateResponseShape = (
     return false;
   }
   switch (command.name) {
+    case "execution-review": return isExecutionReview(value, command.bigTaskId);
+    case "execution-status":
+    case "execution-start":
+    case "execution-pause": return BigTaskExecutionStatusSchema.safeParse(value).success && value.bigTaskId === command.bigTaskId;
+    case "execution-approve": return BigTaskExecutionStatusSchema.safeParse(value).success && value.bigTaskId === command.approval.bigTaskId &&
+      value.planDigest === command.approval.planDigest && JSON.stringify(BigTaskExecutionStatusSchema.parse(value).limits) === JSON.stringify(command.approval.limits);
+    case "execution-accept": return BigTaskExecutionStatusSchema.safeParse(value).success && value.bigTaskId === command.acceptance.bigTaskId &&
+      value.resultHeadSha === command.acceptance.headSha && value.phase === "ACCEPTED";
     case "planning-intake":
       return isPlanningStatus(value, command.intake.bigTask.id);
     case "planning-status":
@@ -684,7 +725,19 @@ export const parseOperatorCommand = (
     throw new LocalOperatorError("INVALID_COMMAND");
   }
   if (command === "planning-intake" && subtaskId !== undefined) {
-    return { name: "planning-intake", intake: readPlanningIntake(subtaskId) };
+    try { return { name: "planning-intake", intake: BigTaskPlanningIntakeSchema.parse(readOperatorJson(subtaskId)) }; }
+    catch { throw new LocalOperatorError("INVALID_COMMAND"); }
+  }
+  if ((command === "execution-approve" || command === "execution-accept") && subtaskId !== undefined) {
+    try {
+      const value = readOperatorJson(subtaskId);
+      return command === "execution-approve" ? { name: command, approval: BigTaskExecutionApprovalSchema.parse(value) }
+        : { name: command, acceptance: BigTaskExecutionAcceptanceSchema.parse(value) };
+    } catch { throw new LocalOperatorError("INVALID_COMMAND"); }
+  }
+  if ((command === "execution-review" || command === "execution-status" || command === "execution-start" || command === "execution-pause") && subtaskId !== undefined) {
+    if (!schemaMatchesExactly(BigTaskIdSchema, subtaskId)) throw new LocalOperatorError("INVALID_COMMAND");
+    return { name: command, bigTaskId: BigTaskIdSchema.parse(subtaskId) };
   }
   if (command === "ping" && subtaskId === undefined) {
     return Object.freeze({ name: "ping" });
@@ -717,6 +770,15 @@ const commandRequest = (
   readonly body: Buffer | undefined;
 } => {
   switch (command.name) {
+    case "execution-review":
+    case "execution-status":
+    case "execution-start":
+    case "execution-pause":
+      return { method: "POST", path: `/v0/execution/${command.name.slice(10)}`, body: Buffer.from(JSON.stringify({ bigTaskId: command.bigTaskId }), "utf8") };
+    case "execution-approve":
+      return { method: "POST", path: "/v0/execution/approve", body: Buffer.from(JSON.stringify(command.approval), "utf8") };
+    case "execution-accept":
+      return { method: "POST", path: "/v0/execution/accept", body: Buffer.from(JSON.stringify(command.acceptance), "utf8") };
     case "planning-intake":
       return { method: "POST", path: "/v0/planning/intake", body: Buffer.from(JSON.stringify(command.intake), "utf8") };
     case "planning-status":

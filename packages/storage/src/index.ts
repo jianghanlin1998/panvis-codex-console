@@ -157,3 +157,6 @@ export type {
 } from "./execution-input-preflight.js";
 export { LivePlanningStore } from "./live-planning.js";
 export type { LivePlanningStatus, PlanningProviderEvidence } from "./live-planning.js";
+
+export { BigTaskExecutionStore } from "./big-task-execution.js";
+export type { BigTaskExecutionStatus, ExecutionPhase, ExecutionStopReason } from "./big-task-execution.js";

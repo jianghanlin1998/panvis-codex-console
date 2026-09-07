@@ -1782,9 +1782,9 @@ it("upgrades predecessor-format claims without inventing input or gate provenanc
     db.exec("DROP TABLE governed_provider_turn_starts");
     db.exec("DROP TABLE governed_provider_input_observations");
     db.exec("DROP TABLE governed_gate_observations");
-    // Step 9B is also newer than the exact pre-provenance schema reconstructed here.
+    // Steps 9B and 9C are newer than the exact pre-provenance schema reconstructed here.
     // Its empty additive tables and ledger suffix must be removed together.
-    for (const table of ["live_planning_runs", "live_planning_intakes"]) {
+    for (const table of ["big_task_execution_events", "big_task_execution_approvals", "live_planning_runs", "live_planning_intakes"]) {
       expect(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
       db.exec(`DROP TABLE ${table}`);
     }
@@ -1803,22 +1803,21 @@ it("upgrades predecessor-format claims without inventing input or gate provenanc
   }finally{reopened?.close();cleanupScenario(scenario);}
 });
 
-it("keeps a completed Subtask's assessed identity when its sibling candidate changes",()=>{
-  const scenario=createScenario();
-  try{
-    const {bigTaskId,subtaskIds}=seed(scenario,{profiles:["STANDARD","STANDARD"]});
-    const governed=governedFor(scenario,[bigTaskId]);
-    const first=authorized(governed.prepareNextRole(bigTaskId));completeRole(governed,first,"READY");
-    const assessment=authorized(governed.prepareNextRole(bigTaskId));completeRole(governed,assessment,"PASS");
-    const manager=createWorktreeOwnershipManagerForTesting(scenario.storage,{worktreeRoot:scenario.worktreeRoot,idGenerator:()=>`wt_${"e".repeat(32)}`});
-    const sibling=manager.resolveActiveOwnedWorktreeForSubtask(subtaskIds[1]!);
-    git(sibling.ownership.worktreePath,["commit","--allow-empty","-m","sibling candidate"]);
-    const unchanged=governed.persistSuccessfulRoleResult(assessment.authorization.authorizationId,JSON.stringify({schemaVersion:1,outcome:"PASS",summary:"VERIFY completed.",findings:[],promotionCandidate:null}),MODEL,ZERO_USAGE);
-    expect(unchanged.candidateSha).toBe(first.authorization.candidateSha);
-    const next=authorized(governed.prepareNextRole(bigTaskId));
-    expect(next.authorization.subtaskId).toBe(subtaskIds[1]);
-    expect(next.authorization.candidateSha).not.toBe(unchanged.candidateSha);
-  }finally{cleanupScenario(scenario);}
+withPreparedScenario("keeps a completed Subtask's assessed identity when its sibling candidate changes", scenario => {
+  const {bigTaskId,subtaskIds}=seed(scenario,{profiles:["STANDARD","STANDARD"]});
+  const governed=governedFor(scenario,[bigTaskId]);
+  const first=authorized(governed.prepareNextRole(bigTaskId));completeRole(governed,first,"READY");
+  const assessment=authorized(governed.prepareNextRole(bigTaskId));completeRole(governed,assessment,"PASS");
+  const manager=createWorktreeOwnershipManagerForTesting(scenario.storage,{worktreeRoot:scenario.worktreeRoot,idGenerator:()=>`wt_${"e".repeat(32)}`});
+  const sibling=manager.resolveActiveOwnedWorktreeForSubtask(subtaskIds[1]!);
+  return {bigTaskId,subtaskIds,governed,first,assessment,sibling};
+}, ({bigTaskId,subtaskIds,governed,first,assessment,sibling}) => {
+  git(sibling.ownership.worktreePath,["commit","--allow-empty","-m","sibling candidate"]);
+  const unchanged=governed.persistSuccessfulRoleResult(assessment.authorization.authorizationId,JSON.stringify({schemaVersion:1,outcome:"PASS",summary:"VERIFY completed.",findings:[],promotionCandidate:null}),MODEL,ZERO_USAGE);
+  expect(unchanged.candidateSha).toBe(first.authorization.candidateSha);
+  const next=authorized(governed.prepareNextRole(bigTaskId));
+  expect(next.authorization.subtaskId).toBe(subtaskIds[1]);
+  expect(next.authorization.candidateSha).not.toBe(unchanged.candidateSha);
 });
 
 describe.each(["SUBTASK","BIG_TASK","PROJECT"] as const)("Step 8D legitimate %s gate-source substitution", relation=>{

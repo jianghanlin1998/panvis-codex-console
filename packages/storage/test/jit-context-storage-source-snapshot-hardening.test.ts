@@ -59,6 +59,8 @@ const APPLICATION_TABLES = [
   "context_items",
   "context_digests",
   "audit_events",
+          "big_task_execution_approvals",
+          "big_task_execution_events",
 ] as const;
 
 type StandardSnapshot = Extract<
@@ -1598,10 +1600,12 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         .map((row) => (row as { readonly name: string }).name);
       sqliteAfter.close();
       expect(schemaAfter).toBe(schemaBefore);
-      expect(migrationCount.count).toBe(21);
+      expect(migrationCount.count).toBe(23);
       expect(tables).toEqual([
         "__drizzle_migrations",
         "audit_events",
+          "big_task_execution_approvals",
+          "big_task_execution_events",
         "big_tasks",
         "candidate_task_contract_bindings",
         "canonical_task_materializations",

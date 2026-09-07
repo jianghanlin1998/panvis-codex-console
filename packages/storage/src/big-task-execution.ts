@@ -1,0 +1,521 @@
+import { assertGovernedSchemaIntegrity } from "./governed-schema-integrity.js";
+import { executionPlanIssues } from "./execution-plan-readiness.js";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { devNull, tmpdir } from "node:os";
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
+import { join, sep } from "node:path";
+import { BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
+import type { BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
+import { TaskStorageError } from "./errors.js";
+import type { TaskStorage } from "./task-storage.js";
+import { getTaskStorageWorktreeAccess } from "./task-storage-internals.js";
+import { TrustedRepositorySourceReader } from "./trusted-repository-source.js";
+import { executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
+
+export const executionCanonical = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) =>
+  item !== null && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item);
+export const executionDigest = (value: unknown): string => createHash("sha256").update(executionCanonical(value), "utf8").digest("hex");
+function fail(code: "CONFLICT" | "INVALID_INPUT" | "MALFORMED_STORED_DATA" = "CONFLICT"): never {
+  throw new TaskStorageError(code, "The approved Big Task execution boundary is unavailable.");
+}
+const access = (storage: TaskStorage) => {
+  const value = getTaskStorageWorktreeAccess(storage);
+  if (value === null || !value.isOpen()) fail();
+  return value;
+};
+const timestamp = (storage: TaskStorage): string => access(storage).clock().toISOString();
+const idOf = (input: BigTaskId): BigTaskId => {
+  const parsed = BigTaskIdSchema.safeParse(input);
+  if (!parsed.success || parsed.data !== input) fail("INVALID_INPUT");
+  return parsed.data;
+};
+
+/** Fixed Git operations use argument arrays, bounded output, no user hooks or ambient Git configuration. */
+export function executionGit(repository: string, args: readonly string[], input?: Buffer,
+  privateIndex?: string, commitDate?: string, remainingMilliseconds?: () => number): string {
+  const timeout = (): number => {
+    const remaining = Math.min(remainingMilliseconds?.() ?? 15_000, executionGitTimeout(15_000));
+    if (!Number.isFinite(remaining) || remaining <= 0) fail();
+    return Math.max(1, Math.min(15_000, Math.floor(remaining)));
+  };
+  const prefix = ["-C", repository, "-c", `core.hooksPath=${devNull}`, "-c", "core.fsmonitor=false",
+    "-c", "commit.gpgsign=false", "-c", "maintenance.auto=false"];
+  const env = { PATH: process.platform === "win32" ? process.env.PATH : "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+    HOME: devNull, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", LC_ALL: "C",
+    ...(privateIndex === undefined ? {} : { GIT_INDEX_FILE: privateIndex }),
+    ...(commitDate === undefined ? {} : { GIT_AUTHOR_NAME: "Codex Task Console", GIT_AUTHOR_EMAIL: "console@example.invalid",
+      GIT_COMMITTER_NAME: "Codex Task Console", GIT_COMMITTER_EMAIL: "console@example.invalid", GIT_AUTHOR_DATE: commitDate, GIT_COMMITTER_DATE: commitDate }),
+  };
+  // Reading names cannot run a filter or disclose its command/configuration value.
+  // Effective local, included and worktree configuration is covered. Filtered
+  // repositories are unsupported; fail before any content-sensitive Git command.
+  const filters = spawnSync("git", [...prefix, "config", "--name-only", "--get-regexp", "^filter\\."], {
+    encoding: "utf8", env, shell: false, timeout: timeout(), maxBuffer: 16_384, windowsHide: true,
+  });
+  if (filters.status !== 1 || filters.stdout !== "") fail();
+  const result = spawnSync("git", [...prefix, ...args], {
+    encoding: "utf8", input, env, shell: false, timeout: timeout(), maxBuffer: 4 * 1024 * 1024, windowsHide: true,
+  });
+  if (result.status !== 0) fail();
+  timeout();
+  return result.stdout.trimEnd();
+}
+
+interface ApprovalRecord {
+  readonly request: BigTaskExecutionApproval;
+  readonly approvedAt: string;
+  readonly projectBinding: string;
+  readonly repositoryBinding: string;
+  readonly resultRef: string;
+}
+export type ExecutionPhase = "APPROVED" | "RUNNING" | "PAUSED" | "HUMAN_REQUIRED" | "AWAITING_ACCEPTANCE" | "ACCEPTED";
+export type ExecutionStopReason = "USER_PAUSED" | "DAEMON_STOPPING" | "CHECKPOINT_RECOVERED" | "INTERRUPTED" | "TIME_LIMIT_REACHED" | "TOKEN_LIMIT_REACHED" | "ROLE_LIMIT_REACHED" | "USAGE_UNKNOWN" | "GOVERNED_BLOCKED" | "LOCAL_OPERATION_FAILED";
+type IntegrationIntent = { readonly subtaskId: string | null; readonly fromSha: string; readonly toSha: string };
+const integrationWriters = new WeakMap<TaskStorage, (bigTaskId: BigTaskId, intent: IntegrationIntent) => void>();
+type ExecutionEvent =
+  | { readonly kind: "START"; readonly at: string }
+  | { readonly kind: "ROLE"; readonly at: string; readonly authorizationId: string }
+  | ({ readonly kind: "INTEGRATION_PREPARED" | "INTEGRATE"; readonly at: string } & IntegrationIntent)
+  | { readonly kind: "STOP"; readonly at: string; readonly reason: ExecutionStopReason }
+  | { readonly kind: "DELIVER" | "ACCEPT"; readonly at: string; readonly headSha: string };
+export interface BigTaskExecutionStatus {
+  readonly bigTaskId: BigTaskId;
+  readonly planDigest: string;
+  readonly phase: ExecutionPhase;
+  readonly stopReason: ExecutionStopReason | null;
+  readonly startedAt: string | null;
+  readonly expiresAt: string | null;
+  readonly limits: BigTaskExecutionApproval["limits"];
+  readonly roleCalls: number;
+  readonly knownTokens: number;
+  readonly usageComplete: boolean;
+  readonly activeRoleCount: number;
+  readonly unknownCompletedUsage: boolean;
+  readonly resultRef: string;
+  readonly resultHeadSha: string;
+  readonly integratedSubtaskIds: readonly string[];
+  readonly pendingIntegration: IntegrationIntent | null;
+  readonly resultRefCreated: boolean;
+}
+
+/** Applies only to live-planned Big Tasks. Existing accepted standalone task contracts remain compatible. */
+export function isLivePlannedTask(storage: TaskStorage, bigTaskId: BigTaskId): boolean {
+  const sqlite = access(storage).sqlite;
+  return sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'live_planning_intakes'").get() !== undefined &&
+    sqlite.prepare("SELECT 1 FROM live_planning_intakes WHERE big_task_id = ?").get(idOf(bigTaskId)) !== undefined;
+}
+
+export class BigTaskExecutionStore {
+  constructor(readonly storage: TaskStorage) {
+    assertGovernedSchemaIntegrity(access(storage).sqlite);
+    integrationWriters.set(storage, (id, intent) => this.#integrate(id, intent));
+  }
+
+  repairCycleLimit(id: BigTaskId): 1 | 2 { return this.#approval(id).request.limits.repairCycleLimit; }
+
+  assertStandaloneSubtask(subtaskId: SubtaskId): void { assertStandaloneExecution(this.storage, subtaskId); }
+
+  review(bigTaskId: BigTaskId) {
+    idOf(bigTaskId);
+    const hasApproval = access(this.storage).sqlite.prepare("SELECT 1 FROM big_task_execution_approvals WHERE big_task_id = ?").get(bigTaskId) !== undefined;
+    const running = hasApproval && this.inspect(bigTaskId).phase === "RUNNING";
+    return withExecutionGitBoundary(running ? () => this.remainingMilliseconds(bigTaskId) : () => 15_000,
+      () => this.#review(bigTaskId));
+  }
+
+  #review(bigTaskId: BigTaskId) {
+    idOf(bigTaskId);
+    const bundle = this.storage.getApprovedTaskContractAuthority(bigTaskId);
+    const planning = this.storage.getDurablePlanningSnapshot(bigTaskId);
+    const bigTask = this.storage.getBigTaskById(bigTaskId);
+    if (!isLivePlannedTask(this.storage, bigTaskId) || bundle?.taskContractAuthorityReadiness !== "TASK_CONTRACT_AUTHORITY_READY" || planning === null || bigTask === null) fail();
+    const project = this.storage.getProjectById(bigTask.projectId);
+    if (project?.repository.kind !== "PATH") fail();
+    const planDigest = executionDigest({ candidate: planning.reviewState.candidate, candidateBinding: bundle.candidateBinding,
+      taskContracts: bundle.taskContracts, intent: { ...bigTask, status: "IN_PROGRESS" } });
+    const repositoryHeadSha = RepositoryCommitShaSchema.parse(executionGit(project.repository.path, ["rev-parse", "--verify", "HEAD^{commit}"]));
+    const repository = new TrustedRepositorySourceReader(this.storage).readTrustedRepositorySourceSnapshotForBigTask(bigTaskId);
+    return { bigTaskId, planDigest, repositoryHeadSha, candidate: planning.reviewState.candidate,
+      taskContracts: bundle.taskContracts, project, repository, executionIssues: executionPlanIssues(planning.reviewState.candidate) };
+  }
+
+  approve(input: unknown): BigTaskExecutionStatus {
+    const parsed = BigTaskExecutionApprovalSchema.safeParse(input);
+    if (!parsed.success || executionCanonical(input) !== executionCanonical(parsed.data)) fail("INVALID_INPUT");
+    const request = parsed.data;
+    return this.storage.runInTransaction(() => {
+      const existing = access(this.storage).sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id = ?").get(request.bigTaskId);
+      if (existing !== undefined) {
+        if (executionCanonical(this.#approval(request.bigTaskId).request) !== executionCanonical(request)) fail();
+        return this.inspect(request.bigTaskId);
+      }
+      const review = this.review(request.bigTaskId);
+      if (review.executionIssues.length !== 0 ||
+        request.limits.repairCycleLimit === 2 && review.candidate.subtasks.some(task => task.profile !== "HIGH_RISK_FOUNDATION" || !task.writeEnabled) ||
+        review.planDigest !== request.planDigest || review.repositoryHeadSha !== request.repositoryHeadSha ||
+        this.storage.getCanonicalTaskMaterialization(request.bigTaskId) !== null) fail();
+      const value: ApprovalRecord = { request, approvedAt: timestamp(this.storage), projectBinding: executionDigest(review.project),
+        repositoryBinding: executionDigest(review.repository), resultRef: `refs/heads/codex/execution/${executionDigest(request).slice(0, 32)}` };
+      access(this.storage).sqlite.prepare("INSERT INTO big_task_execution_approvals (big_task_id, payload) VALUES (?, ?)")
+        .run(request.bigTaskId, executionCanonical(value));
+      return this.inspect(request.bigTaskId);
+    });
+  }
+
+  inspect(bigTaskId: BigTaskId): BigTaskExecutionStatus {
+    const approval = this.#approval(bigTaskId);
+    let phase: ExecutionPhase = "APPROVED";
+    let stopReason: ExecutionStopReason | null = null;
+    let startedAt: string | null = null;
+    let lastAt = approval.approvedAt;
+    let roleCalls = 0;
+    let head: string = approval.request.repositoryHeadSha;
+    const integrated: string[] = [];
+    let pendingIntegration: IntegrationIntent | null = null;
+    let resultRefCreated = false;
+    const roles = new Set<string>();
+    const rows = access(this.storage).sqlite.prepare("SELECT sequence, payload FROM big_task_execution_events WHERE big_task_id = ? ORDER BY sequence").all(bigTaskId);
+    if (rows.length > 1024) fail("MALFORMED_STORED_DATA");
+    for (const [index, row] of rows.entries()) {
+      let event: ExecutionEvent;
+      try { event = JSON.parse(String(row.payload)) as ExecutionEvent; } catch { fail("MALFORMED_STORED_DATA"); }
+      if (event === null || typeof event !== "object" || Array.isArray(event) || row.sequence !== index + 1 || executionCanonical(event) !== row.payload || typeof event.at !== "string" ||
+        !Number.isFinite(Date.parse(event.at)) || new Date(event.at).toISOString() !== event.at || event.at < lastAt) fail("MALFORMED_STORED_DATA");
+      lastAt = event.at;
+      switch (event.kind) {
+        case "START":
+          if (Object.keys(event).length !== 2 || (phase !== "APPROVED" && phase !== "PAUSED")) fail("MALFORMED_STORED_DATA");
+          startedAt ??= event.at; phase = "RUNNING"; stopReason = null; break;
+        case "ROLE":
+          if (Object.keys(event).length !== 3 || phase !== "RUNNING" || !/^gra_[a-f0-9]{48}$/u.test(event.authorizationId) || roles.has(event.authorizationId)) fail("MALFORMED_STORED_DATA");
+          roles.add(event.authorizationId); roleCalls += 1; break;
+        case "INTEGRATION_PREPARED":
+          if (Object.keys(event).length !== 5 || phase !== "RUNNING" || pendingIntegration !== null || event.fromSha !== head ||
+            (event.subtaskId === null ? resultRefCreated || event.toSha !== head : !resultRefCreated || integrated.includes(event.subtaskId)) ||
+            !RepositoryCommitShaSchema.safeParse(event.toSha).success) fail("MALFORMED_STORED_DATA");
+          pendingIntegration = { subtaskId: event.subtaskId, fromSha: event.fromSha, toSha: event.toSha }; break;
+        case "INTEGRATE":
+          if (Object.keys(event).length !== 5 || phase !== "RUNNING" || pendingIntegration === null ||
+            executionCanonical(pendingIntegration) !== executionCanonical({ subtaskId: event.subtaskId, fromSha: event.fromSha, toSha: event.toSha })) fail("MALFORMED_STORED_DATA");
+          head = event.toSha;
+          if (event.subtaskId === null) resultRefCreated = true; else integrated.push(event.subtaskId);
+          pendingIntegration = null; break;
+        case "STOP":
+          if (Object.keys(event).length !== 3 || phase !== "RUNNING" || !["USER_PAUSED", "DAEMON_STOPPING", "CHECKPOINT_RECOVERED", "INTERRUPTED", "TIME_LIMIT_REACHED", "TOKEN_LIMIT_REACHED", "ROLE_LIMIT_REACHED", "USAGE_UNKNOWN", "GOVERNED_BLOCKED", "LOCAL_OPERATION_FAILED"].includes(event.reason)) fail("MALFORMED_STORED_DATA");
+          stopReason = event.reason; phase = event.reason === "USER_PAUSED" || event.reason === "DAEMON_STOPPING" || event.reason === "CHECKPOINT_RECOVERED" ? "PAUSED" : "HUMAN_REQUIRED"; break;
+        case "DELIVER":
+        case "ACCEPT":
+          if (Object.keys(event).length !== 3 || event.headSha !== head || phase !== (event.kind === "DELIVER" ? "RUNNING" : "AWAITING_ACCEPTANCE")) fail("MALFORMED_STORED_DATA");
+          phase = event.kind === "DELIVER" ? "AWAITING_ACCEPTANCE" : "ACCEPTED"; break;
+        default: fail("MALFORMED_STORED_DATA");
+      }
+    }
+    const linked = access(this.storage).sqlite.prepare(`SELECT link.authorization_id FROM governed_role_execution_links link
+      JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id WHERE auth.big_task_id = ?`).all(bigTaskId);
+    if (linked.length !== roles.size || linked.some(row => !roles.has(String(row.authorization_id)))) fail("MALFORMED_STORED_DATA");
+    const usage = this.#usage(bigTaskId);
+    const status = Object.freeze({ bigTaskId, planDigest: approval.request.planDigest, phase, stopReason, startedAt,
+      expiresAt: startedAt === null ? null : new Date(Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString(),
+      limits: approval.request.limits, roleCalls, ...usage, resultRef: approval.resultRef, resultHeadSha: head,
+      integratedSubtaskIds: Object.freeze(integrated), pendingIntegration, resultRefCreated });
+    if (!BigTaskExecutionStatusSchema.safeParse(status).success) fail("MALFORMED_STORED_DATA");
+    return status;
+  }
+
+  start(bigTaskId: BigTaskId): { claimed: boolean; status: BigTaskExecutionStatus } {
+    return this.storage.runInTransaction(() => {
+      const state = this.inspect(bigTaskId);
+      if (state.phase === "RUNNING" || state.phase === "AWAITING_ACCEPTANCE" || state.phase === "ACCEPTED") return { claimed: false, status: state };
+      if (state.phase !== "APPROVED" && state.phase !== "PAUSED") fail();
+      this.assertCurrent(bigTaskId);
+      if (state.expiresAt !== null && Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage))) fail();
+      if (!this.#safeCheckpoint(bigTaskId) || !state.usageComplete || state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit) fail();
+      this.#append(bigTaskId, { kind: "START", at: timestamp(this.storage) });
+      this.storage.materializeDurablePlan(bigTaskId);
+      return { claimed: true, status: this.inspect(bigTaskId) };
+    });
+  }
+
+  stop(bigTaskId: BigTaskId, reason: ExecutionStopReason): BigTaskExecutionStatus {
+    return this.storage.runInTransaction(() => {
+      if (this.inspect(bigTaskId).phase === "RUNNING") this.#append(bigTaskId, { kind: "STOP", reason, at: timestamp(this.storage) });
+      return this.inspect(bigTaskId);
+    });
+  }
+
+  assertCurrent(bigTaskId: BigTaskId): void {
+    const approval = this.#approval(bigTaskId);
+    const current = this.review(bigTaskId);
+    if (current.planDigest !== approval.request.planDigest || executionDigest(current.project) !== approval.projectBinding ||
+      executionDigest(current.repository) !== approval.repositoryBinding || current.repositoryHeadSha !== approval.request.repositoryHeadSha) fail();
+  }
+
+  remainingMilliseconds(bigTaskId: BigTaskId): number {
+    const state = this.inspect(bigTaskId);
+    if (state.phase !== "RUNNING" || state.expiresAt === null) return 0;
+    return Math.max(0, Date.parse(state.expiresAt) - Date.parse(timestamp(this.storage)));
+  }
+
+  assertRunning(bigTaskId: BigTaskId): BigTaskExecutionStatus {
+    const state = this.inspect(bigTaskId);
+    if (state.phase !== "RUNNING" || this.remainingMilliseconds(bigTaskId) <= 0 || state.unknownCompletedUsage || state.knownTokens >= state.limits.totalTokenLimit) fail();
+    this.assertCurrent(bigTaskId);
+    if (this.remainingMilliseconds(bigTaskId) <= 0) fail();
+    return state;
+  }
+
+  recordRole(bigTaskId: BigTaskId, authorizationId: string): void {
+    const record = (): void => {
+      const state = this.assertRunning(bigTaskId);
+      if (state.roleCalls >= state.limits.roleCallLimit) fail();
+      const row = access(this.storage).sqlite.prepare("SELECT big_task_id FROM governed_role_authorizations WHERE authorization_id = ?").get(authorizationId);
+      if (row?.big_task_id !== bigTaskId) fail();
+      this.#append(bigTaskId, { kind: "ROLE", authorizationId, at: timestamp(this.storage) });
+    };
+    // The governed role reservation already owns the SQLite writer transaction.
+    if (access(this.storage).sqlite.isTransaction) record();
+    else this.storage.runInTransaction(record);
+  }
+
+  deliver(bigTaskId: BigTaskId): BigTaskExecutionStatus {
+    return this.storage.runInTransaction(() => {
+      const state = this.assertRunning(bigTaskId);
+      const task = this.storage.getBigTaskById(bigTaskId);
+      const materialized = this.storage.getCanonicalTaskMaterialization(bigTaskId);
+      if (!state.usageComplete || state.pendingIntegration !== null || task?.status !== "DONE" || materialized === null || state.integratedSubtaskIds.length !== materialized.subtaskCount) fail();
+      this.#append(bigTaskId, { kind: "DELIVER", headSha: state.resultHeadSha, at: timestamp(this.storage) });
+      return this.inspect(bigTaskId);
+    });
+  }
+
+  accept(bigTaskId: BigTaskId, headSha: string): BigTaskExecutionStatus {
+    return this.storage.runInTransaction(() => {
+      const state = this.inspect(bigTaskId);
+      const approval = this.#approval(bigTaskId);
+      const task = this.storage.getBigTaskById(bigTaskId);
+      const project = task === null ? null : this.storage.getProjectById(task.projectId);
+      if (project?.repository.kind !== "PATH" || executionDigest(project) !== approval.projectBinding ||
+        executionGit(project.repository.path, ["rev-parse", "--verify", `${state.resultRef}^{commit}`]) !== headSha ||
+        state.resultHeadSha !== headSha) fail();
+      if (state.phase === "ACCEPTED") return state;
+      if (state.phase !== "AWAITING_ACCEPTANCE") fail();
+      this.#append(bigTaskId, { kind: "ACCEPT", headSha, at: timestamp(this.storage) });
+      return this.inspect(bigTaskId);
+    });
+  }
+
+  recoverInterrupted(): void {
+    const rows = access(this.storage).sqlite.prepare("SELECT big_task_id FROM big_task_execution_approvals").all();
+    for (const row of rows) {
+      const id = BigTaskIdSchema.parse(row.big_task_id);
+      if (this.inspect(id).phase === "RUNNING") this.stop(id, this.#safeCheckpoint(id) ? "CHECKPOINT_RECOVERED" : "INTERRUPTED");
+    }
+  }
+
+  #integrate(bigTaskId: BigTaskId, intent: IntegrationIntent): void {
+    const remaining = (): number => this.remainingMilliseconds(bigTaskId);
+    const git = (path: string, args: readonly string[]): string => executionGit(path, args, undefined, undefined, undefined, remaining);
+    const prepared = this.storage.runInTransaction(() => {
+      const state = this.assertRunning(bigTaskId);
+      if (intent.subtaskId !== null && state.integratedSubtaskIds.includes(intent.subtaskId)) return null;
+      if (intent.subtaskId === null && state.resultRefCreated) return null;
+      const project = this.review(bigTaskId).project;
+      if (project.repository.kind !== "PATH" || intent.fromSha !== state.resultHeadSha) fail();
+      if (intent.subtaskId !== null) {
+        const view = this.storage.getDurableWorkflowControlView(intent.subtaskId as SubtaskId);
+        const proof = access(this.storage).sqlite.prepare(`SELECT h.candidate_sha, a.big_task_id FROM governed_handoffs h
+          JOIN governed_role_results r ON r.result_id = h.role_result_id
+          JOIN governed_role_authorizations a ON a.authorization_id = r.authorization_id WHERE h.subtask_id = ?`).get(intent.subtaskId);
+        if (view?.currentStage !== "COMPLETE" || view.unresolvedHumanRequired !== null || proof?.big_task_id !== bigTaskId || proof.candidate_sha !== intent.toSha) fail();
+        git(project.repository.path, ["merge-base", "--is-ancestor", intent.fromSha, intent.toSha]);
+      }
+      const refLine = git(project.repository.path, ["for-each-ref", "--format=%(refname) %(objectname)", state.resultRef]);
+      if (state.pendingIntegration === null) {
+        if (refLine !== (state.resultRefCreated ? `${state.resultRef} ${state.resultHeadSha}` : "")) fail();
+        this.#append(bigTaskId, { kind: "INTEGRATION_PREPARED", ...intent, at: timestamp(this.storage) });
+      } else if (executionCanonical(state.pendingIntegration) !== executionCanonical(intent)) fail();
+      return { state, path: project.repository.path };
+    });
+    if (prepared === null) return;
+    // Intent is committed before Git. A crash can resume only this exact CAS.
+    const { state, path } = prepared;
+    const current = git(path, ["for-each-ref", "--format=%(refname) %(objectname)", state.resultRef]);
+    if (current !== `${state.resultRef} ${intent.toSha}`) {
+      git(path, ["update-ref", state.resultRef, intent.toSha,
+        state.resultRefCreated ? intent.fromSha : "0".repeat(intent.fromSha.length)]);
+    }
+    if (git(path, ["rev-parse", "--verify", `${state.resultRef}^{commit}`]) !== intent.toSha) fail();
+    this.storage.runInTransaction(() => {
+      const now = this.inspect(bigTaskId);
+      if (now.pendingIntegration === null && (intent.subtaskId === null ? now.resultRefCreated : now.integratedSubtaskIds.includes(intent.subtaskId))) return;
+      if (now.phase !== "RUNNING" || executionCanonical(now.pendingIntegration) !== executionCanonical(intent)) fail();
+      this.#append(bigTaskId, { kind: "INTEGRATE", ...intent, at: timestamp(this.storage) });
+    });
+  }
+
+  #approval(bigTaskId: BigTaskId): ApprovalRecord {
+    const row = access(this.storage).sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id = ?").get(idOf(bigTaskId));
+    if (row === undefined) fail();
+    try {
+      const value = JSON.parse(String(row.payload)) as ApprovalRecord;
+      const request = BigTaskExecutionApprovalSchema.parse(value.request);
+      if (Object.keys(value).length !== 5 || request.bigTaskId !== bigTaskId || executionCanonical(value) !== row.payload ||
+        executionCanonical(request) !== executionCanonical(value.request) || !/^[a-f0-9]{64}$/u.test(value.projectBinding) || !/^[a-f0-9]{64}$/u.test(value.repositoryBinding) ||
+        value.resultRef !== `refs/heads/codex/execution/${executionDigest(request).slice(0, 32)}` || new Date(value.approvedAt).toISOString() !== value.approvedAt) fail("MALFORMED_STORED_DATA");
+      return value;
+    } catch { return fail("MALFORMED_STORED_DATA"); }
+  }
+
+  #safeCheckpoint(bigTaskId: BigTaskId): boolean {
+    return access(this.storage).sqlite.prepare(`SELECT 1 FROM governed_role_execution_links link
+      JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id
+      LEFT JOIN execution_runs run ON run.id = link.execution_run_id
+      WHERE auth.big_task_id = ? AND (run.status IS NULL OR run.status != 'SUCCEEDED') LIMIT 1`).get(bigTaskId) === undefined;
+  }
+
+  #usage(bigTaskId: BigTaskId): { knownTokens: number; usageComplete: boolean; activeRoleCount: number; unknownCompletedUsage: boolean } {
+    const rows = access(this.storage).sqlite.prepare(`SELECT link.execution_run_id FROM governed_role_execution_links link
+      JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id WHERE auth.big_task_id = ?`).all(bigTaskId);
+    let knownTokens = 0;
+    let activeRoleCount = 0;
+    let unknownCompletedUsage = false;
+    for (const row of rows) {
+      const run = this.storage.getExecutionRunById(ExecutionRunIdSchema.parse(row.execution_run_id));
+      if (run === null) fail("MALFORMED_STORED_DATA");
+      knownTokens += run.normalizedUsage?.totalTokens ?? 0;
+      if (["CREATED", "RUNNING"].includes(run.status)) activeRoleCount += 1;
+      else if (run.normalizedUsage?.totalTokens === undefined) unknownCompletedUsage = true;
+    }
+    if (activeRoleCount > 1 || !Number.isSafeInteger(knownTokens)) fail("MALFORMED_STORED_DATA");
+    return { knownTokens, usageComplete: activeRoleCount === 0 && !unknownCompletedUsage, activeRoleCount, unknownCompletedUsage };
+  }
+
+  #append(bigTaskId: BigTaskId, event: ExecutionEvent): void {
+    const sqlite = access(this.storage).sqlite;
+    const row = sqlite.prepare("SELECT count(*) AS count FROM big_task_execution_events WHERE big_task_id = ?").get(bigTaskId)!;
+    sqlite.prepare("INSERT INTO big_task_execution_events (big_task_id, sequence, payload) VALUES (?, ?, ?)").run(bigTaskId, Number(row.count) + 1, executionCanonical(event));
+  }
+}
+
+export function assertLivePlanApproved(storage: TaskStorage, bigTaskId: BigTaskId, running = false): void {
+  if (!isLivePlannedTask(storage, bigTaskId)) return;
+  const execution = new BigTaskExecutionStore(storage);
+  if (running) execution.assertRunning(bigTaskId);
+  else execution.assertCurrent(bigTaskId);
+}
+export function assertStandaloneExecution(storage: TaskStorage, subtaskId: SubtaskId): void {
+  const subtask = storage.getSubtaskById(subtaskId);
+  if (subtask !== null && isLivePlannedTask(storage, subtask.bigTaskId)) fail();
+}
+
+/** Package-private integration entry points: governed completion is re-derived from durable sources. */
+export function ensureExecutionResultRef(storage: TaskStorage, id: BigTaskId): void {
+  if (!isLivePlannedTask(storage, id)) return;
+  const state = new BigTaskExecutionStore(storage).assertRunning(id);
+  integrationWriters.get(storage)!(id, { subtaskId: null, fromSha: state.resultHeadSha, toSha: state.resultHeadSha });
+}
+export function integrateCompletedExecutionCandidate(storage: TaskStorage, id: BigTaskId, subtaskId: SubtaskId, candidateSha: string): void {
+  if (!isLivePlannedTask(storage, id)) return;
+  const state = new BigTaskExecutionStore(storage).assertRunning(id);
+  integrationWriters.get(storage)!(id, { subtaskId, fromSha: state.resultHeadSha, toSha: candidateSha });
+}
+export function approvedExecutionBase(storage: TaskStorage, subtaskId: SubtaskId): string | null {
+  const subtask = storage.getSubtaskById(subtaskId);
+  if (subtask === null || !isLivePlannedTask(storage, subtask.bigTaskId)) return null;
+  const execution = new BigTaskExecutionStore(storage);
+  const state = execution.assertRunning(subtask.bigTaskId);
+  const review = execution.review(subtask.bigTaskId);
+  const project = review.project;
+  if (!review.candidate.subtasks.some(task => task.id === subtaskId)) fail();
+  if (!state.resultRefCreated || state.pendingIntegration !== null || project.repository.kind !== "PATH" ||
+    executionGit(project.repository.path, ["rev-parse", "--verify", `${state.resultRef}^{commit}`]) !== state.resultHeadSha) fail();
+  return state.resultHeadSha;
+}
+
+export function executionDeadlineForSubtask(storage: TaskStorage, subtaskId: SubtaskId, revalidateSource = true): (() => number) | null {
+  const subtask = storage.getSubtaskById(subtaskId);
+  if (subtask === null || !isLivePlannedTask(storage, subtask.bigTaskId)) return null;
+  const execution = new BigTaskExecutionStore(storage);
+  if (revalidateSource) execution.assertRunning(subtask.bigTaskId);
+  // These scopes are synchronous. Freeze the original deadline and latest
+  // durable event, then cheaply invalidate on any intervening execution change.
+  // This retains pause/stop behavior without replaying the whole history before
+  // and after every Git command. Creation/release also revalidate source above.
+  const state = execution.inspect(subtask.bigTaskId);
+  const latest = access(storage).sqlite.prepare("SELECT sequence, payload FROM big_task_execution_events WHERE big_task_id = ? ORDER BY sequence DESC LIMIT 1");
+  const event = latest.get(subtask.bigTaskId);
+  if (event === undefined || state.expiresAt === null) fail();
+  let kind: unknown;
+  try { kind = (JSON.parse(String(event.payload)) as { kind?: unknown }).kind; } catch { fail(); }
+  if (typeof kind !== "string" || !["START", "ROLE", "INTEGRATION_PREPARED", "INTEGRATE"].includes(kind)) fail();
+  const expiresAt = Date.parse(state.expiresAt);
+  const remaining = (): number => {
+    access(storage);
+    const current = latest.get(subtask.bigTaskId);
+    if (current?.sequence !== event.sequence || current?.payload !== event.payload) return 0;
+    return Math.max(0, expiresAt - Date.parse(timestamp(storage)));
+  };
+  if (state.phase !== "RUNNING" || state.unknownCompletedUsage ||
+    state.knownTokens >= state.limits.totalTokenLimit || remaining() <= 0) fail();
+  return remaining;
+}
+
+/** Package-private coordinator commit. No model tool receives Git common-directory write authority. */
+export function commitApprovedExecutionCandidate(storage: TaskStorage, input: {
+  bigTaskId: BigTaskId; authorizationId: string; parentSha: string; authorizedAt: string; ownership: WorktreeOwnership;
+}): void {
+  if (!isLivePlannedTask(storage, input.bigTaskId)) return;
+  const execution = new BigTaskExecutionStore(storage);
+  execution.assertRunning(input.bigTaskId);
+  const path = input.ownership.worktreePath;
+  const remaining = (): number => execution.remainingMilliseconds(input.bigTaskId);
+  const git = (args: readonly string[], body?: Buffer, index?: string, date?: string): string =>
+    executionGit(path, args, body, index, date, remaining);
+  if (git(["rev-parse", "--verify", "HEAD^{commit}"]) !== input.parentSha ||
+    git(["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${input.ownership.branchName}`) fail();
+  if (git(["status", "--porcelain=v2", "--untracked-files=all", "-z"]) === "") return;
+  const temporary = mkdtempSync(join(realpathSync(tmpdir()), "ctc-candidate-index-"));
+  const index = join(temporary, "index");
+  try {
+    git(["read-tree", input.parentSha], undefined, index);
+    const names = git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+    if (names.length > 10_000 || new Set(names).size !== names.length) fail();
+    let bytes = 0;
+    for (const name of names) {
+      if (remaining() <= 0) fail();
+      if (name.startsWith("/") || name.includes("\\") || name.split("/").some(part => ["", ".", "..", ".git"].includes(part))) fail();
+      const absolute = join(path, name);
+      if (!absolute.startsWith(path + sep)) fail();
+      if (!existsSync(absolute)) {
+        git(["update-index", "--force-remove", "--", name], undefined, index); continue;
+      }
+      const stat = lstatSync(absolute);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || realpathSync.native(absolute) !== absolute || (bytes += stat.size) > 64 * 1024 * 1024) fail();
+      const body = readFileSync(absolute);
+      if (body.length !== stat.size) fail();
+      const hash = git(["hash-object", "--no-filters", "-w", "--stdin"], body);
+      git(["update-index", "--add", "--cacheinfo", stat.mode & 0o111 ? "100755" : "100644", hash, name], undefined, index);
+    }
+    const tree = git(["write-tree"], undefined, index);
+    const priorTree = git(["rev-parse", `${input.parentSha}^{tree}`]);
+    if (tree === priorTree) fail();
+    const commit = git(["commit-tree", tree, "-p", input.parentSha],
+      Buffer.from(`Console candidate ${input.authorizationId}\n`, "utf8"), index, input.authorizedAt);
+    RepositoryCommitShaSchema.parse(commit);
+    execution.assertRunning(input.bigTaskId);
+    git(["update-ref", `refs/heads/${input.ownership.branchName}`, commit, input.parentSha]);
+    // Update only this owned index; never reset or rewrite working files.
+    git(["read-tree", commit]);
+    if (git(["status", "--porcelain=v2", "--untracked-files=all", "-z"]) !== "") fail();
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
+}
+
+/** Historical workflow replay uses the immutable approval limit, without requiring a running lease. */
+export function approvedRepairCycleLimit(storage: TaskStorage, id: BigTaskId): 1 | 2 {
+  if (!isLivePlannedTask(storage, id)) return 1;
+  const row = access(storage).sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id = ?").get(id);
+  if (row === undefined) return 1;
+  return new BigTaskExecutionStore(storage).repairCycleLimit(id);
+}

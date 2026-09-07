@@ -36,6 +36,7 @@ import {
 } from "@codex-task-console/domain";
 import {
   LivePlanningStore,
+  BigTaskExecutionStore,
   type LivePlanningStatus,
   createWorktreeOwnershipManager,
   ExecutionInputPreflight,
@@ -470,6 +471,7 @@ type WorktreeAuthorityGate =
   | "POST_TURN_SUCCESS_GATE";
 
 interface OwnedWorktreeExecutionDependencies extends LiveExecutionDependencies {
+  readonly signal?: AbortSignal;
   readonly checkCompatibility: () => boolean;
   readonly resolveOwnedWorktree: (
     storage: TaskStorage,
@@ -1115,6 +1117,13 @@ class JsonlAppServerClient {
     return response;
   }
 
+  cancelPending(): void {
+    const error = new LiveExecutionError("TURN_INTERRUPTED");
+    for (const pending of this.#pending.values()) { clearTimeout(pending.timeout); pending.reject(error); }
+    this.#pending.clear();
+    this.events.fail(error);
+  }
+
   notify(method: string, params: JsonObject = {}): void {
     this.#send({ method, params });
   }
@@ -1217,7 +1226,7 @@ class JsonlAppServerClient {
     const record = requireRecord(message);
     if (typeof record.method === "string") {
       this.diagnostics.notificationsReceived += 1;
-      // Planning text is already bounded by accumulated UTF-8 bytes and exact
+      // Structured role text is already bounded by accumulated UTF-8 bytes and exact
       // thread/turn validation below. Stream chunk size is provider-controlled;
       // a valid answer must not fail just because it arrives in tiny chunks.
       // Empty deltas, unknown events and requests still consume the count cap.
@@ -1347,11 +1356,12 @@ export async function executeSingleSubtaskOwnedWorktreeCodex(
 export async function executeGovernedRoleCodex(
   governed: GovernedExecutionStore,
   authorizationId: string,
+  signal?: AbortSignal,
 ): Promise<GovernedRoleCodexExecutionResult> {
   return executeGovernedRoleCodexWithDependencies(
     governed,
     authorizationId,
-    productionOwnedWorktreeDependencies(),
+    { ...productionOwnedWorktreeDependencies(), ...(signal === undefined ? {} : { signal }) },
   );
 }
 
@@ -1407,6 +1417,13 @@ async function executeGovernedRoleCodexWithDependencies(
   let durableRunState: "NONE" | "CREATED" | "RUNNING" | "TERMINAL" = "NONE";
   let appServerChildCleaned = true;
   let transientRuntimeCleaned = true;
+  const withinDeadline = (ordinaryLimit: number): number => {
+    if (dependencies.signal?.aborted) throw new LiveExecutionError("TURN_INTERRUPTED");
+    const remaining = governed.approvedRoleBounds(authorizationId)?.remainingMilliseconds;
+    if (remaining === 0) throw new LiveExecutionError("APP_SERVER_TIMEOUT");
+    return Math.min(ordinaryLimit, remaining ?? Infinity);
+  };
+  const cancel = (): void => { client?.cancelPending(); };
 
   try {
     if (
@@ -1476,9 +1493,17 @@ async function executeGovernedRoleCodexWithDependencies(
       trustedAuthorization.writeEnabled
         ? { kind: "WORKSPACE_WRITE", worktreePath }
         : { kind: "READ_ONLY" },
+      (usage) => {
+        normalizedUsage = usage;
+        const bounds = governed.approvedRoleBounds(authorizationId);
+        if (bounds !== null && usage.totalTokens !== undefined && usage.totalTokens >= bounds.remainingTokens) {
+          throw new LiveExecutionError("TURN_INTERRUPTED");
+        }
+      },
     );
     events = eventTracker;
 
+    withinDeadline(dependencies.limits.startupTimeoutMs);
     let child: ChildProcessWithoutNullStreams;
     try {
       child = dependencies.spawnAppServer(
@@ -1504,14 +1529,17 @@ async function executeGovernedRoleCodexWithDependencies(
       dependencies.limits,
       diagnostics,
       eventTracker,
+      true,
     );
-    await client.waitForSpawn(dependencies.limits.startupTimeoutMs);
+    dependencies.signal?.addEventListener("abort", cancel, { once: true });
+    if (dependencies.signal?.aborted) cancel();
+    await client.waitForSpawn(withinDeadline(dependencies.limits.startupTimeoutMs));
 
     const initializeResult = await client.request(
       1,
       "initialize",
       { clientInfo: CLIENT_INFO, capabilities: null },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
     );
     validateInitializeResult(initializeResult);
     client.notify("initialized");
@@ -1519,7 +1547,7 @@ async function executeGovernedRoleCodexWithDependencies(
       2,
       "account/read",
       { refreshToken: false },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
       {
         onResult: (result) => {
           parseChatGptAccount(result);
@@ -1532,7 +1560,7 @@ async function executeGovernedRoleCodexWithDependencies(
     eventTracker.assertChatGptAuthenticated();
 
     const restrictedThreadConfig = await readRestrictedThreadConfig(
-      client, worktreePath, dependencies.limits.requestTimeoutMs,
+      client, worktreePath, withinDeadline(dependencies.limits.requestTimeoutMs),
     );
     governed.revalidateRoleCandidate(authorizationId);
     const threadResult = await client.request(
@@ -1549,7 +1577,7 @@ async function executeGovernedRoleCodexWithDependencies(
           : "read-only",
         serviceName: CLIENT_INFO.name,
       },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
       {
         onResult: (result) => {
           const authorizedThread = parseGovernedCandidateThreadStartResult(
@@ -1607,7 +1635,7 @@ async function executeGovernedRoleCodexWithDependencies(
             }
           : { type: "readOnly", networkAccess: false },
       },
-      dependencies.limits.requestTimeoutMs,
+      withinDeadline(dependencies.limits.requestTimeoutMs),
       {
         onResult: (result) => {
           eventTracker.observeTurnResponse(parseTurnStartResult(result));
@@ -1641,7 +1669,7 @@ async function executeGovernedRoleCodexWithDependencies(
 
     const terminal = await eventTracker.waitForTerminal(
       dependencies.limits.turnIdleTimeoutMs,
-      dependencies.limits.turnAbsoluteTimeoutMs,
+      withinDeadline(dependencies.limits.turnAbsoluteTimeoutMs),
     );
     if (client.failure !== null) {
       throw client.failure;
@@ -1681,6 +1709,7 @@ async function executeGovernedRoleCodexWithDependencies(
       }
     }
   } finally {
+    dependencies.signal?.removeEventListener("abort", cancel);
     if (events !== undefined) {
       normalizedUsage ??= events.normalizedUsage;
       terminalTurnStatus ??= events.terminal?.status ?? null;
@@ -1718,7 +1747,7 @@ async function executeGovernedRoleCodexWithDependencies(
     events !== undefined
   ) {
     try {
-      const candidate = governed.revalidateRoleCandidate(authorizationId);
+      const candidate = governed.revalidateRoleCandidate(authorizationId, true);
       validateWorktreeFilesystem(
         dependencies,
         candidate.ownership.worktreePath,
@@ -1841,6 +1870,7 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
     if (!(storage instanceof TaskStorage) || typeof subtaskId !== "string") {
       throw new LiveExecutionError("INVALID_INPUT");
     }
+    new BigTaskExecutionStore(storage).assertStandaloneSubtask(subtaskId);
 
     try {
       preflight = new ExecutionInputPreflight(
