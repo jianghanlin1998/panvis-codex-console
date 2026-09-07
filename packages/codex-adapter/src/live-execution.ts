@@ -2710,6 +2710,17 @@ function buildLiveCodexChildEnvironment(
   ) {
     childEnvironment.CODEX_HOME = codexHome;
   }
+  const httpsProxy = sourceEnvironment.CTC_CODEX_HTTPS_PROXY;
+  if (httpsProxy !== undefined) {
+    // Explicit local CONNECT transport only; keep ambient proxies and credentials out.
+    const match = isBoundedEnvironmentValue(httpsProxy)
+      ? /^http:\/\/(?:127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})$/.exec(httpsProxy)
+      : null;
+    if (match === null || Number(match[1]) > 65_535) {
+      throw new LiveExecutionError("APP_SERVER_START_FAILED");
+    }
+    childEnvironment.HTTPS_PROXY = httpsProxy;
+  }
   return childEnvironment;
 }
 

@@ -202,7 +202,7 @@ failure as a TLS handshake EOF while connecting to `chatgpt.com`. Credential-fre
 HEAD checks from the local execution environment to both `chatgpt.com` and
 `api.openai.com` independently failed the TLS handshake (curl exit 35, no HTTP
 response). No raw provider error, headers, credentials or unrelated logs were
-printed or copied. This is an unresolved connection blocker; no code change,
+printed or copied. At that point this was an unresolved connection blocker; no code change,
 runtime upgrade, TLS-verification bypass or additional model attempt was made.
 The original one-repair fresh-QA PASS remains valid; a second product repair
 round was not consumed by this connection diagnosis.
@@ -214,6 +214,38 @@ new-request authority before a later live attempt, preserving this evidence.
 Full automatic Subtask progression and cross-worktree integration remain
 unimplemented later slices, so planning approval alone is not an end-to-end
 Board delivery claim.
+
+### Connection repair follow-up
+
+Hanlin authorized connection diagnosis and repair on 2026-09-07. The adapter
+now supports an explicit validated local HTTP CONNECT proxy through
+`CTC_CODEX_HTTPS_PROXY`; [startup and rollback](LOCAL_CONTROL_SERVICE_V0.md#daemon-and-session-boundary)
+are process-scoped. No model, provider, TLS trust, runtime activation, system
+network setting, task budget, or stop policy was changed.
+
+Credential-free direct-route HTTPS probes reproduced the TLS failure, while
+the existing local proxy completed certificate verification. Correctly
+configured owned-runtime requests also reached OpenAI and fetched the model
+catalog. Two such diagnostic turns received HTTP 400 reasoning-effort
+rejections, first for a diagnostic `low` override and then for the inherited
+`xhigh` setting. Neither generated a successful response. Three earlier
+diagnostic turns used an invalid harness: the test-only environment helper
+returned an empty environment outside test mode. Those observations cannot
+validate this repair. All five diagnostic turns have unavailable usage, not
+proven zero. Diagnostic generation stopped pending runtime compatibility work.
+
+The active owned `0.148.0-alpha.9` catalog does not include `gpt-6-astra`.
+A read-only comparison against the verified desktop `0.153.3` catalog includes
+that model and its `xhigh` setting. This identifies a separate compatibility
+workstream; the desktop executable was not adopted as Console authority.
+An owned-runtime upgrade and its compatibility verification remain pending.
+
+Verification: 21 added regression cases; focused 91/91 PASS; full canonical
+155 files /4,618 tests PASS, four workers, 360.89 s. Public hygiene, lint,
+typecheck, build, executable local-control E2E and diff checks PASS. Tests use
+mock providers; live diagnosis is separate. Windows and successful real model
+generation were not verified. The canonical intake still has exactly its
+original one Planner attempt; the daemon is stopped and the Board is unchanged.
 
 ### Original implementation verification
 

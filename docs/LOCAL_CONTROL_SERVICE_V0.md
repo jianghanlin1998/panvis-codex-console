@@ -37,6 +37,24 @@ The application, state, and operator directories must be canonical absolute, own
 
 `pnpm ctc:daemon` builds and runs one foreground daemon. It binds exactly `127.0.0.1` on an OS-assigned ephemeral port. There is no remote-host, fixed-port, TLS, container, deployment, daemonization, LaunchAgent, or system-service mode.
 
+When the host needs an existing local HTTP CONNECT proxy to reach OpenAI, set
+`CTC_CODEX_HTTPS_PROXY` on the daemon process. For example, after the normal
+development preflight:
+
+```sh
+CTC_CODEX_HTTPS_PROXY=http://127.0.0.1:10808 pnpm ctc:daemon
+```
+
+The live adapter passes this explicit setting as `HTTPS_PROXY` to its owned
+Codex child for all execution roles. Only literal `127.0.0.1` or `[::1]` with
+an explicit port from 1 to 65535 is accepted; credentials, paths, queries,
+fragments and other schemes or hosts fail before child launch. An unset value
+preserves existing behavior. Ambient proxy and secret variables remain excluded.
+TLS verification, provider identity, ChatGPT authentication, tool network
+permissions and task stop/retry rules are unchanged. No proxy is discovered,
+installed, enabled or reconfigured by Console. Remove the setting to roll back
+the transport selection; a daemon restart is required to change it.
+
 An exclusive owner-private lock prevents two production daemons from becoming authoritative over the canonical state store. The daemon never kills another process and removes lock/session files only after matching the original filesystem identity and daemon instance ID.
 
 Each start creates a 256-bit cryptographically random lowercase hexadecimal session token. The owner-private `operator/current-session.json` descriptor is mode `0600` and contains schema version, daemon instance ID, PID, port, canonical start timestamp, and token. The token is not accepted on a command line, URL, route, or query; it is not logged, returned in HTTP errors, or stored in TaskStorage.

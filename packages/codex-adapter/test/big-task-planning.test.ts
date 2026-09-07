@@ -8,6 +8,49 @@ import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js
 import { planningProviderFixture } from "./planning-provider-fixture.js";
 
 describe("real Big Task planning adapter with deterministic JSONL peer", () => {
+  it("uses the explicit local proxy for both fresh planning roles and preserves their sandbox", async () => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const provider = planningProviderFixture((packet) => packet.role === "PLANNER" ? f.proposal : {
+        outcome: "APPROVE", planRevision: packet.proposal!.candidate.revision,
+        candidateBinding: packet.proposal!.candidateBinding, revisionRequirements: [], questions: [],
+      });
+      const dependencies = { ...provider.dependencies, sourceEnvironment: {
+        CTC_CODEX_HTTPS_PROXY: "http://127.0.0.1:10808",
+        OPENAI_API_KEY: "key-sentinel", ALL_PROXY: "http://unrelated.invalid:8080",
+      } };
+      await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, dependencies);
+      expect((await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, dependencies)).phase).toBe("APPROVED");
+      expect(provider.launches).toHaveLength(2);
+      for (const launch of provider.launches) {
+        expect(launch.options.env?.HTTPS_PROXY).toBe("http://127.0.0.1:10808");
+        expect(launch.options.env?.OPENAI_API_KEY).toBeUndefined();
+        expect(launch.options.env?.ALL_PROXY).toBeUndefined();
+      }
+      const starts = provider.requests.filter((request) => request.method === "thread/start");
+      expect(starts).toHaveLength(2);
+      for (const request of starts) {
+        expect(request.params).toMatchObject({ approvalPolicy: "never", sandbox: "read-only" });
+      }
+    } finally { f.close(); }
+  });
+
+  it("stops an invalid proxy before provider launch without retrying or exposing its value", async () => {
+    const f = makePlanningFixture();
+    try {
+      f.planning.accept(f.intake);
+      const provider = planningProviderFixture(() => f.proposal);
+      const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, {
+        ...provider.dependencies, sourceEnvironment: { CTC_CODEX_HTTPS_PROXY: "http://user:proxy-secret@remote.invalid:8080" },
+      });
+      expect(result).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "PROVIDER_FAILED" });
+      expect(provider.launches).toHaveLength(0);
+      expect(provider.requests).toHaveLength(0);
+      expect(JSON.stringify(result)).not.toContain("proxy-secret");
+    } finally { f.close(); }
+  });
+
   it.each([0, 64])("reviews the full 24-task limit with %i dependencies using a bounded exact digest", async (dependencyCount) => {
     const f = makePlanningFixture();
     try {

@@ -450,6 +450,9 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
         SERVICE_SECRET: "secret-sentinel",
         PROVIDER_AUTH: "auth-sentinel",
         UNRELATED_VALUE: "unrelated-sentinel",
+        HTTPS_PROXY: "http://ambient-proxy.invalid:8080",
+        ALL_PROXY: "socks5://ambient-proxy.invalid:1080",
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
       },
       "/normal/home",
       "/private/tmp/ctc-live-test",
@@ -461,6 +464,42 @@ describe.sequential("Single-Subtask Live Codex App Server Execution V0", () => {
       LANG: "en_US.UTF-8",
       CODEX_HOME: "/normal/codex-home",
     });
+  });
+
+  it.each(["http://127.0.0.1:10808", "http://[::1]:8080"])(
+    "passes an explicit local HTTPS proxy without inheriting ambient credentials: %s",
+    (proxy) => {
+      const environment = buildLiveCodexChildEnvironmentForTest(
+        {
+          CTC_CODEX_HTTPS_PROXY: proxy,
+          HTTPS_PROXY: "http://ambient-proxy.invalid:8080",
+          OPENAI_API_KEY: "key-sentinel",
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        },
+        "/normal/home",
+        "/private/tmp/ctc-live-test",
+      );
+      expect(environment).toEqual({
+        HOME: "/normal/home",
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        TMPDIR: "/private/tmp/ctc-live-test",
+        HTTPS_PROXY: proxy,
+      });
+    },
+  );
+
+  it.each([
+    "", "http://127.0.0.1", "http://127.0.0.1:0", "http://127.0.0.1:65536",
+    "http://127.0.0.1:010808", "http://remote.invalid:8080", "http://localhost:8080",
+    "http://127.0.0.1.remote.invalid:8080", "http://127.1:8080",
+    "http://user:secret@127.0.0.1:10808", "http://127.0.0.1:10808/path",
+    "http://127.0.0.1:10808?token=secret", "http://127.0.0.1:10808#fragment",
+    "https://127.0.0.1:10808", "socks5://127.0.0.1:10808",
+    "http://127.0.0.1:10808\n", "http://127.0.0.1:10808\0",
+  ])("rejects an invalid explicit local proxy without echoing it: %j", (proxy) => {
+    expect(() => buildLiveCodexChildEnvironmentForTest(
+      { CTC_CODEX_HTTPS_PROXY: proxy }, "/normal/home", "/private/tmp/ctc-live-test",
+    )).toThrowError("APP_SERVER_START_FAILED");
   });
 
   it.each([
