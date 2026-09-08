@@ -162,3 +162,5 @@ export { BigTaskExecutionStore } from "./big-task-execution.js";
 export type { BigTaskExecutionStatus, ExecutionPhase, ExecutionStopReason } from "./big-task-execution.js";
 
 export { readExecutionProgress, recordExecutionProgress } from "./execution-progress.js";
+
+export { ConsoleWorkspaceStore } from "./console-workspace.js";

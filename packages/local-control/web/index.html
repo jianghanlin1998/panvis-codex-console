@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Codex Task Console</title>
+  <link rel="stylesheet" href="/ui/app.css">
+  <script type="module" src="/ui/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到工作内容</a>
+  <div id="ctc-direction">
+    <header class="ctc-chrome"><a class="ctc-brand" href="#/home"><span class="ctc-logomark">C</span>Codex Task Console</a><div class="ctc-actions"><span id="connection" class="ctc-label">正在连接本机服务…</span><button class="ctc-button" id="refresh" type="button">刷新</button></div></header>
+    <div class="ctc-shell">
+      <aside class="ctc-sidebar" aria-label="主导航"><nav class="ctc-navgroup" aria-label="工作区"><a class="ctc-nav" href="#/home">▦ 工作台</a><a class="ctc-nav" href="#/decisions">◇ 需要你决定</a><a class="ctc-nav" href="#/results">▣ 成果记录</a></nav><nav class="ctc-navgroup" id="project-nav" aria-label="项目"></nav><div class="ctc-bottom"><a class="ctc-nav" href="#/settings">⚙ 任务偏好</a><div class="ctc-account">本地 · 单人工作区</div></div></aside>
+      <main class="ctc-main" id="main"><section class="ctc-empty"><h1>正在打开工作区</h1><p>读取已保存的项目和任务。</p></section></main>
+    </div>
+    <div id="notice" class="ctc-statusline" role="status" aria-live="polite">任务状态以本机服务保存的记录为准。</div>
+  </div>
+  <dialog id="modal" aria-labelledby="modal-title"><div id="modal-content"></div></dialog>
+</body>
+</html>

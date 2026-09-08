@@ -61,7 +61,15 @@ export class LivePlanningStore {
     this.#access = access;
   }
 
-  accept(input: unknown): LivePlanningStatus {
+  accept(input: unknown): LivePlanningStatus { return this.#accept(input, false); }
+
+  /** Trusted UI coordinator joins its direction-confirmation transaction atomically. */
+  acceptInConsoleDirectionTransaction(input: unknown): LivePlanningStatus {
+    if (!this.#access.sqlite.isTransaction) fail("INVALID_INPUT");
+    return this.#accept(input, true);
+  }
+
+  #accept(input: unknown, inDirectionTransaction: boolean): LivePlanningStatus {
     const parsed = BigTaskPlanningIntakeSchema.safeParse(input);
     if (!parsed.success || canonical(input) !== canonical(parsed.data)
       || Buffer.byteLength(canonical(parsed.data), "utf8") > 24_000) fail("INVALID_INPUT");
@@ -73,7 +81,7 @@ export class LivePlanningStore {
       const remaining = Date.parse(intake.budgetException.expiresAt) - Date.parse(this.#now());
       if (remaining <= 0 || remaining > 3 * 60 * 60_000) fail("INVALID_INPUT");
     }
-    return this.#storage.runInTransaction(() => {
+    const persist = () => {
       if (this.#storage.getBigTaskById(intake.bigTask.id) !== null) fail();
       this.#storage.createBigTask(intake.bigTask);
       const project = this.#storage.getProjectById(intake.bigTask.projectId);
@@ -84,7 +92,8 @@ export class LivePlanningStore {
       this.#access.sqlite.prepare("INSERT INTO live_planning_intakes (big_task_id, payload, created_at) VALUES (?, ?, ?)")
         .run(intake.bigTask.id, payload, this.#now());
       return this.inspect(intake.bigTask.id);
-    });
+    };
+    return inDirectionTransaction ? persist() : this.#storage.runInTransaction(persist);
   }
 
   inspect(input: BigTaskId): LivePlanningStatus {
@@ -154,6 +163,7 @@ export class LivePlanningStore {
             ? " If a complete plan cannot fit, return HUMAN_REQUIRED with a concise scope question instead of truncating or omitting required work."
             : " If a complete review cannot fit, use ESCALATE with a concise question instead of truncating or omitting blocking findings."),
         approvedIntent: source.intake,
+        ...(source.intake.taskSize === "SMALL" ? { taskSizeInstruction: "This is a direct small-task intake. Propose exactly one bounded task and no dependencies. If the goal cannot fit one task, ask a product question rather than silently expanding it." } : {}),
         productAuthority: "The confirmed product direction defines what to build. A tool, feed, vendor or implementation choice is not a substitute for product alignment. Do not silently narrow the audience, coverage, content-selection criteria or meaning of success. Ask a product question when any such decision is unresolved; engineering choices within the confirmed direction need no additional human tool approval. Treat reviewIntensity as the owner's preferred review depth; use the lightest sufficient per-task review and explain material deviations in a product question.",
         project: source.project,
         repository: source.repository,
@@ -225,6 +235,7 @@ export class LivePlanningStore {
               questions = proposal.questions;
             } else {
               const { intake } = this.#intake(input);
+              if (intake.taskSize === "SMALL" && (proposal.tasks.length !== 1 || proposal.dependencies.length !== 0)) fail("INVALID_INPUT");
               const current = this.#storage.getDurablePlanningSnapshot(input);
               const revision = (current?.reviewState.candidate.revision ?? 0) + 1;
               const ids = new Map(proposal.tasks.map((task) => [task.key,

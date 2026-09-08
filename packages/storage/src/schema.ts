@@ -2196,3 +2196,24 @@ export const executionRunProgressTable = sqliteTable("execution_run_progress", {
   executionRunId: text("execution_run_id").primaryKey().references(() => executionRunsTable.id, { onUpdate: "restrict", onDelete: "restrict" }),
   payload: text("payload").notNull(),
 });
+
+/** Browser conversation records carry no execution or approval authority. */
+export const consoleDraftsTable = sqliteTable("console_drafts", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projectsTable.id),
+  payload: text("payload").notNull(),
+}, table => [check("console_draft_json", sql`json_valid(${table.payload})`)]);
+
+export const consoleDiscussionTurnsTable = sqliteTable("console_discussion_turns", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projectsTable.id),
+  scopeKey: text("scope_key").notNull(),
+  sequence: integer("sequence").notNull(),
+  status: text("status").notNull(),
+  payload: text("payload").notNull(),
+}, table => [
+  uniqueIndex("console_turn_scope_sequence").on(table.scopeKey, table.sequence),
+  uniqueIndex("console_one_running_turn").on(table.scopeKey).where(sql`${table.status} = 'RUNNING'`),
+  check("console_turn_status", sql`${table.status} in ('RUNNING', 'SUCCEEDED', 'FAILED', 'INTERRUPTED')`),
+  check("console_turn_json", sql`json_valid(${table.payload})`),
+]);

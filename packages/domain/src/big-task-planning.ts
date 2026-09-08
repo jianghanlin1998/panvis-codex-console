@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ContextItemSchema } from "./context.js";
 import { BigTaskSchema } from "./tasks.js";
 import { isWellFormedUnicode } from "./well-formed-unicode.js";
 import { NormalizedUsageSchema, ProviderModelReferenceSchema, ProviderRunReferenceSchema, ProviderThreadReferenceSchema } from "./execution.js";
@@ -54,9 +55,12 @@ export const BigTaskPlanningIntakeSchema = z.object({
   bigTask: BigTaskSchema.extend({ status: z.literal("IN_PROGRESS") }).strict(),
   approved: z.literal(true),
   productDecisions: texts,
+  // Frozen human conclusions for this intake; later discussions do not change its authority.
+  confirmedContextItems: z.array(ContextItemSchema).max(200).optional(),
   // Optional when reading historical intakes; new intake requires a human-confirmed brief.
   productDirection: ProductDirectionSchema.optional(),
   reviewIntensity: z.enum(["LIGHT", "STANDARD", "THOROUGH"]).optional(),
+  taskSize: z.literal("SMALL").optional(),
   planningTokenLimit: z.number().int().min(1).max(120_000),
   budgetException: PlanningBudgetExceptionSchema.optional(),
 }).strict();

@@ -7,6 +7,7 @@ export default tseslint.config(
     ignores: ["**/dist/**", "**/node_modules/**", "coverage/**"],
   },
   eslint.configs.recommended,
+  { files: ["packages/local-control/web/**/*.js"], languageOptions: { globals: globals.browser } },
   ...tseslint.configs.recommended,
   {
     files: ["**/*.ts"],

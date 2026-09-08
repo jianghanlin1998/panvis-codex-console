@@ -22,7 +22,7 @@ Long-running AI coding work becomes difficult to manage when task boundaries, de
 The repository separates two concerns:
 
 - **Control plane:** projects, task hierarchy, maturity and dependency gates, context boundaries, approvals, acceptance evidence, and provider-neutral execution contracts.
-- **Execution plane:** the future live Codex App Server integration that will execute approved work. The repository currently models and tests this boundary but does not yet provide live orchestration.
+- **Execution plane:** Console-owned local Codex App Server runs approved planning, implementation and review work, with durable progress, bounded repair, isolated Git workspaces and integrated delivery evidence. Model inference uses the authenticated provider; the control service and task database run locally.
 
 V1 is intentionally local-first and single-user. Codex Task Console is independent from the Panvis product codebase.
 
@@ -37,20 +37,38 @@ V1 is intentionally local-first and single-user. Codex Task Console is independe
 
 ## Status
 
-Codex Task Console is under active development and remains foundation-heavy. The domain, persistence, context-isolation, acceptance, and execution-boundary contracts are extensively tested, but this is not yet a complete daily-use Console. A browser UI and live Codex App Server orchestration are not implemented.
+The complete local browser workspace is implemented: project, big-task and subtask discussions; direct small-task intake; product-direction confirmation; reviewed plans; execution controls; decisions; context; and delivery previews. Step 10 engineering verification is complete; Hanlin's personal product test remains pending. Earlier Board delivery is closed without product acceptance, and its content redesign remains deferred.
+
+## Open the Console
+
+From this repository, after the development preflight:
+
+```sh
+pnpm ctc:ui
+```
+
+This builds the Console, starts or reuses its local service and opens the browser with a one-use local sign-in ticket. Keep the owning terminal running; Ctrl+C stops the service safely. Opening the workspace does not start a model task. The browser does not receive the CLI bearer token.
+
+Start with a project and a big or small task. Discuss and confirm the product direction, inspect the generated plan, then approve implementation. Ordinary engineering proceeds within that agreement; changes to direction, exceptions and final product acceptance remain explicit human decisions. Check depth is adjustable for each new task.
+
+See [Step 10 workflow, verification and limits](docs/STEP_10_CONSOLE_UI.md) before personal testing.
 
 ## Development
 
 Prerequisites: Node.js 24 or newer and pnpm 11.
 
 ```sh
-pnpm install --frozen-lockfile
+source scripts/dev-environment-preflight.sh
 pnpm public:check
 pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:local-control:e2e
+git diff --check
 ```
+
+The preflight checks the installed workspace offline and fails without installing or refreshing dependencies. Initial dependency setup is a separate operation. Tests use deterministic fixtures and mocked providers; executable and preview tests require local loopback listeners.
 
 To verify the installed Codex protocol generators without starting App Server, provide an explicit temporary or ignored output path:
 

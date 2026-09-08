@@ -102,6 +102,7 @@ export {
   OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
   executeGovernedRoleCodex,
   executeBigTaskPlanningCodex,
+  executeConsoleDiscussionCodex,
   executeSingleSubtaskOwnedWorktreeCodex,
   executeSingleSubtaskLiveCodex,
 } from "./live-execution.js";

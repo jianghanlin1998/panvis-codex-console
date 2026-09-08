@@ -18,7 +18,8 @@
     "public:check": "./scripts/check-public-repo-hygiene.sh",
     "test": "vitest run --maxWorkers=4",
     "test:local-control:e2e": "node packages/local-control/test/executable-e2e.mjs",
-    "typecheck": "tsc --noEmit --pretty false"
+    "typecheck": "tsc --noEmit --pretty false",
+    "ctc:ui": "pnpm build && node packages/local-control/dist/ui-cli.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",

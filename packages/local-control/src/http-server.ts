@@ -1,4 +1,7 @@
 import { summarizeGovernedStatus, summarizeGovernedHistory } from "./governed-summary.js";
+import { BrowserSessions } from "./browser-session.js";
+import { serveBrowserAsset } from "./browser-assets.js";
+import { parseConsoleEnvelope } from "./console-application.js";
 import { BIG_TASK_PLANNING_LIMITS, BigTaskExecutionAcceptanceSchema, hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -162,7 +165,7 @@ const requireBoundary = (
   }
 };
 
-const readBoundedBody = async (request: IncomingMessage): Promise<string> => {
+const readBoundedBody = async (request: IncomingMessage, maximum = LOCAL_CONTROL_BODY_LIMIT_BYTES): Promise<string> => {
   const declaredLength = request.headers["content-length"];
   if (
     typeof declaredLength !== "string" ||
@@ -171,7 +174,7 @@ const readBoundedBody = async (request: IncomingMessage): Promise<string> => {
     throw new HttpBoundaryError("INVALID_REQUEST", 400);
   }
   const expectedBytes = Number(declaredLength);
-  if (expectedBytes > LOCAL_CONTROL_BODY_LIMIT_BYTES) {
+  if (expectedBytes > maximum) {
     throw new HttpBoundaryError("REQUEST_TOO_LARGE", 413);
   }
   const chunks: Buffer[] = [];
@@ -179,7 +182,7 @@ const readBoundedBody = async (request: IncomingMessage): Promise<string> => {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.byteLength;
-    if (bytes > LOCAL_CONTROL_BODY_LIMIT_BYTES) {
+    if (bytes > maximum) {
       request.resume();
       throw new HttpBoundaryError("REQUEST_TOO_LARGE", 413);
     }
@@ -551,8 +554,10 @@ const routeRequest = async (
 export const createLocalControlHttpServer = (
   service: LocalControlService,
   sessionToken: string,
+  suppliedBrowserSessions?: BrowserSessions,
 ): LocalControlHttpServer => {
   let authority = "";
+  const browserSessions = suppliedBrowserSessions ?? new BrowserSessions();
   let acceptingNewWork = true;
   let inFlight = 0;
   const idleWaiters = new Set<() => void>();
@@ -592,7 +597,43 @@ export const createLocalControlHttpServer = (
             throw new HttpBoundaryError("DAEMON_NOT_READY", 503);
           }
           rejectAmbiguousHeaders(request);
+          if (request.headers.host !== authority || (request.headers.origin !== undefined && request.headers.origin !== `http://${authority}`)) {
+            throw new HttpBoundaryError("REQUEST_BOUNDARY_FAILED", 403);
+          }
+          if (request.method === "GET" && serveBrowserAsset(url, response)) return;
+          if (url === "/ui/session" || url === "/ui/api") {
+            if (request.method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
+            requireMutationHeaders(request);
+            if (request.headers.origin !== `http://${authority}` || (request.headers["sec-fetch-site"] !== undefined && request.headers["sec-fetch-site"] !== "same-origin")) {
+              throw new HttpBoundaryError("REQUEST_BOUNDARY_FAILED", 403);
+            }
+            if (url === "/ui/api" && !browserSessions.accepts(request.headers.cookie)) throw new HttpBoundaryError("SESSION_AUTH_FAILED", 401);
+            const body = await readBoundedBody(request, 128 * 1024);
+            if (!hasUnambiguousJsonStructure(body)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
+            let value: unknown;
+            try { value = JSON.parse(body); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
+            if (url === "/ui/session") {
+              if (value === null || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1 || !("code" in value)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
+              const cookie = browserSessions.exchange(value.code, request.headers.cookie);
+              if (!cookie) throw new HttpBoundaryError("SESSION_AUTH_FAILED", 401);
+              response.setHeader("set-cookie", cookie);
+              writeJson(response, 200, { ok: true });
+              return;
+            }
+            let envelope: ReturnType<typeof parseConsoleEnvelope>;
+            try { envelope = parseConsoleEnvelope(value); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
+            const result = await requireGovernedMethod(service.consoleRequest).call(service, envelope.action, envelope.input);
+            writeJson(response, 200, result, 1024 * 1024);
+            return;
+          }
           requireBoundary(request, authority, sessionToken);
+          if (url === "/v0/browser/launch") {
+            if (request.method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
+            requireMutationHeaders(request);
+            if ((await readBoundedBody(request)) !== "{}") throw new HttpBoundaryError("INVALID_REQUEST", 400);
+            writeJson(response, 200, { code: browserSessions.issue() });
+            return;
+          }
           writeJson(response, 200, await routeRequest(request, service), localControlResponseLimitBytes(url));
         } catch (error) {
           if (response.headersSent) {

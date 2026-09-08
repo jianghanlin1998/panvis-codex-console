@@ -1,3 +1,4 @@
+import { ConsoleApplication } from "./console-application.js";
 import {
   executeGovernedRoleCodex,
   executeBigTaskPlanningCodex,
@@ -127,6 +128,7 @@ export interface ExecutionOperationResult {
 }
 
 export interface LocalControlService {
+  consoleRequest?(action: string, input: unknown): Promise<object>;
   reviewExecution?(bigTaskId: BigTaskId): Promise<object>;
   reviewExecutionRecovery?(bigTaskId: BigTaskId): Promise<object>;
   recoverExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
@@ -157,6 +159,7 @@ const sanitizeStorageError = (error: unknown): LocalControlServiceError => {
   if (error instanceof LocalControlServiceError) {
     return error;
   }
+  if (error instanceof Error && error.name === "ZodError") return new LocalControlServiceError("INVALID_REQUEST", 400);
   if (error instanceof TaskStorageError) {
     switch (error.code) {
       case "INVALID_INPUT":
@@ -246,6 +249,7 @@ const summarizeExecution = (
   });
 
 class ProductionLocalControlService implements LocalControlService {
+  readonly #console: ConsoleApplication;
   readonly #planningActive = new Set<BigTaskId>();
   readonly #storage: TaskStorage;
   readonly #worktrees: WorktreeOwnershipManager;
@@ -278,10 +282,15 @@ class ProductionLocalControlService implements LocalControlService {
     governedForTest?: GovernedExecutionStore,
   ) {
     this.#storage = storage;
+    this.#console = new ConsoleApplication(storage, this);
     this.#worktrees = worktrees;
     this.#execute = execute;
     this.#governed = governedForTest ?? createGovernedExecutionStore(storage);
     this.#executeGoverned = executeGoverned;
+  }
+
+  async consoleRequest(action: string, input: unknown): Promise<object> {
+    try { return await this.#console.request(action, input); } catch (error) { return Promise.reject(sanitizeStorageError(error)); }
   }
 
   async acceptPlanningIntake(input: unknown): Promise<LivePlanningStatus> {
@@ -490,6 +499,7 @@ class ProductionLocalControlService implements LocalControlService {
       finally { job.controller.abort(); }
     }
     await Promise.all(jobs.map(([, job]) => job.completion));
+    await this.#console.stop();
     if (failed) throw new LocalControlServiceError("LOCAL_OPERATION_FAILED", 500);
   }
 

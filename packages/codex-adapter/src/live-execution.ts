@@ -2687,6 +2687,15 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   });
 }
 
+/** A discussion uses the existing tool-free read-only transport; it cannot start task execution. */
+export async function executeConsoleDiscussionCodex(
+  storage: TaskStorage, text: string, outputSchema: JsonValue, remainingTimeMs: () => number,
+): Promise<LiveCodexExecutionResult> {
+  return executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", productionDependencies(), {
+    text, outputSchema, tokenLimit: 40_000, remainingTimeMs, observe: () => undefined,
+  });
+}
+
 function productionDependencies(): LiveExecutionDependencies {
   return {
     resolveRuntime: resolveActiveOwnedCodexRuntime,

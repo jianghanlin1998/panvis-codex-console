@@ -6,6 +6,7 @@ import {
   openTaskDatabase,
   LivePlanningStore,
   BigTaskExecutionStore,
+  ConsoleWorkspaceStore,
 } from "@codex-task-console/storage";
 import type { TaskStorage } from "@codex-task-console/storage";
 
@@ -243,6 +244,7 @@ const startWithDependencies = async (
     verifyCanonicalDatabaseAuthority(dependencies.paths, databaseAuthority);
     new LivePlanningStore(storage).recoverInterrupted();
     new BigTaskExecutionStore(storage).recoverInterrupted();
+    new ConsoleWorkspaceStore(storage).recoverInterrupted();
     const service = dependencies.createService(storage);
     http = createLocalControlHttpServer(
       service,

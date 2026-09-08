@@ -140,6 +140,35 @@ export class BigTaskExecutionStore {
 
   repairCycleLimit(id: BigTaskId): 1 | 2 { return this.#approval(id).request.limits.repairCycleLimit; }
 
+  /** Read only the result bound to this approval, never a caller-selected path/ref. */
+  readDelivery(bigTaskId: BigTaskId) {
+    const state = this.inspect(bigTaskId);
+    const approval = this.#approval(bigTaskId);
+    const task = this.storage.getBigTaskById(bigTaskId);
+    const project = task === null ? null : this.storage.getProjectById(task.projectId);
+    if (!state.resultRefCreated || project?.repository.kind !== "PATH" || executionDigest(project) !== approval.projectBinding) fail();
+    const repository = project.repository.path;
+    if (executionGit(repository, ["rev-parse", "--verify", `${state.resultRef}^{commit}`]) !== state.resultHeadSha) fail();
+    const args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color"];
+    const stat = executionGit(repository, [...args, "--stat=100,60,200", approval.request.repositoryHeadSha, state.resultHeadSha, "--"]);
+    let diff = ""; let diffUnavailable = false;
+    try { diff = executionGit(repository, [...args, "--unified=3", approval.request.repositoryHeadSha, state.resultHeadSha, "--"]); }
+    catch { diffUnavailable = true; } // A bounded diff failure must not hide the delivered version or acceptance controls.
+    const maximum = 120_000;
+    return { headSha: state.resultHeadSha, baseSha: approval.request.repositoryHeadSha, resultRef: state.resultRef,
+      stat: stat.slice(0, maximum), diff: diff.slice(0, maximum), truncated: diff.length > maximum || stat.length > maximum, diffUnavailable };
+  }
+
+  resolveDeliveredRepository(bigTaskId: BigTaskId) {
+    const state = this.inspect(bigTaskId);
+    const approval = this.#approval(bigTaskId);
+    const task = this.storage.getBigTaskById(bigTaskId);
+    const project = task === null ? null : this.storage.getProjectById(task.projectId);
+    if (!state.resultRefCreated || project?.repository.kind !== "PATH" || executionDigest(project) !== approval.projectBinding ||
+      executionGit(project.repository.path, ["rev-parse", "--verify", `${state.resultRef}^{commit}`]) !== state.resultHeadSha) fail();
+    return { repository: project.repository.path, headSha: state.resultHeadSha };
+  }
+
   assertStandaloneSubtask(subtaskId: SubtaskId): void { assertStandaloneExecution(this.storage, subtaskId); }
 
   review(bigTaskId: BigTaskId) {

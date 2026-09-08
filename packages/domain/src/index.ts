@@ -364,3 +364,5 @@ export { BigTaskControlFailureSchema } from "./big-task-execution.js";
 
 export { ExecutionProgressSchema, ExecutionUsageBreakdownSchema } from "./execution-progress.js";
 export type { ExecutionProgress, ExecutionUsageBreakdown } from "./execution-progress.js";
+
+export * from "./console-workspace.js";
