@@ -211,6 +211,14 @@ lines.on("line", (line) => {
     if (scenario === "approval-request") send({id: "approval", method: "item/commandExecution/requestApproval", params: {threadId, turnId}});
     if (scenario === "read-write-tool") send({method: "item/started", params: {threadId, turnId,
       item: {id: "write-tool", type: "fileChange", status: "inProgress", changes: [{path: "AGENTS.md", kind: {type: "update"}, diff: "+changed"}]}}});
+    if (scenario === "read-command" || scenario === "read-command-wrong-cwd" || scenario === "read-command-orphan-output" || scenario === "read-command-replayed") {
+      const command = { id: "read-tool", type: "commandExecution", command: "cat AGENTS.md", cwd: scenario === "read-command-wrong-cwd" ? "/unrelated" : process.cwd(),
+        commandActions: [{type: "read", command: "cat AGENTS.md", name: "AGENTS.md", path: "AGENTS.md"}] };
+      if (scenario !== "read-command-orphan-output") send({method: "item/started", params: {threadId,turnId,item:{...command,status:"inProgress"}}});
+      send({method: "item/commandExecution/outputDelta",params:{threadId,turnId,itemId:"read-tool",delta:readFileSync("AGENTS.md","utf8")}});
+      send({method: "item/completed",params:{threadId,turnId,item:{...command,status:"completed",exitCode:0}}});
+      if (scenario === "read-command-replayed") send({method: "item/completed",params:{threadId,turnId,item:{...command,status:"completed",exitCode:0}}});
+    }
     const finding = (id: string, blocking = true) => ({findingId: id, blocking,
       violatedInvariant: `Invariant ${id}.`, affectedContract: "contract/governed-adapter", reproduction: `Retest ${id}.`});
     const result = {

@@ -395,14 +395,15 @@ const routeRequest = async (
 ): Promise<object> => {
   const method = request.method ?? "";
   const url = request.url ?? "";
-  if (["/v0/execution/renew-window", "/v0/execution/recovery-review", "/v0/execution/recover", "/v0/execution/review", "/v0/execution/approve", "/v0/execution/status", "/v0/execution/start", "/v0/execution/pause", "/v0/execution/accept"].includes(url)) {
+  if (["/v0/execution/qa-recovery-review", "/v0/execution/recover-qa", "/v0/execution/renew-window", "/v0/execution/recovery-review", "/v0/execution/recover", "/v0/execution/review", "/v0/execution/approve", "/v0/execution/status", "/v0/execution/start", "/v0/execution/pause", "/v0/execution/accept"].includes(url)) {
     if (method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
     requireMutationHeaders(request);
     const body = await readBoundedBody(request);
     if (!hasUnambiguousJsonStructure(body)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
-    if (url === "/v0/execution/renew-window" || url === "/v0/execution/recover" || url === "/v0/execution/approve" || url === "/v0/execution/accept") {
+    if (url === "/v0/execution/recover-qa" || url === "/v0/execution/renew-window" || url === "/v0/execution/recover" || url === "/v0/execution/approve" || url === "/v0/execution/accept") {
       let value: unknown;
       try { value = JSON.parse(body); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
+      if (url === "/v0/execution/recover-qa") return requireGovernedMethod(service.recoverQaExecution).call(service, value);
       if (url === "/v0/execution/renew-window") return requireGovernedMethod(service.renewExecutionWindow).call(service, value);
       if (url === "/v0/execution/recover") return requireGovernedMethod(service.recoverExecution).call(service, value);
       if (url === "/v0/execution/approve") return requireGovernedMethod(service.approveExecution).call(service, value);
@@ -410,7 +411,7 @@ const routeRequest = async (
       if (!parsed.success) throw new HttpBoundaryError("INVALID_REQUEST", 400);
       return requireGovernedMethod(service.acceptExecution).call(service, parsed.data.bigTaskId, parsed.data.headSha);
     }
-    const handler = url === "/v0/execution/recovery-review" ? service.reviewExecutionRecovery : url === "/v0/execution/review" ? service.reviewExecution : url === "/v0/execution/status" ? service.inspectExecution :
+    const handler = url === "/v0/execution/qa-recovery-review" ? service.reviewQaExecutionRecovery : url === "/v0/execution/recovery-review" ? service.reviewExecutionRecovery : url === "/v0/execution/review" ? service.reviewExecution : url === "/v0/execution/status" ? service.inspectExecution :
       url === "/v0/execution/start" ? service.startExecution : service.pauseExecution;
     return requireGovernedMethod(handler).call(service, parseBigTaskBody(body));
   }

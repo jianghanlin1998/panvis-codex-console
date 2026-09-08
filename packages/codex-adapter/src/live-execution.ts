@@ -537,6 +537,7 @@ interface WriteToolItemState {
 
 type TurnEventPolicy =
   | Readonly<{ readonly kind: "READ_ONLY" }>
+  | Readonly<{ readonly kind: "READ_ONLY_WORKTREE"; readonly worktreePath: string }>
   | Readonly<{
       readonly kind: "WORKSPACE_WRITE";
       readonly worktreePath: string;
@@ -659,7 +660,7 @@ class TurnEventTracker {
         const item = requireRecord(record.item);
         const itemType = requireBoundedString(item.type, 64);
         if (itemType === "commandExecution" || itemType === "fileChange") {
-          if (this.eventPolicy.kind === "READ_ONLY") {
+          if (this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && itemType === "fileChange") {
             this.diagnostics.toolActionsObserved += 1;
             throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
           }
@@ -712,7 +713,7 @@ class TurnEventTracker {
           requireBoundedString(record.turnId, 512),
         );
         const itemId = requireBoundedString(record.itemId, 512);
-        if (this.eventPolicy.kind === "READ_ONLY") {
+        if (this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && method !== "item/commandExecution/outputDelta") {
           this.diagnostics.toolActionsObserved += 1;
           throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
         }
@@ -1493,7 +1494,7 @@ async function executeGovernedRoleCodexWithDependencies(
       dependencies.limits.maxAgentResponseBytes,
       trustedAuthorization.writeEnabled
         ? { kind: "WORKSPACE_WRITE", worktreePath }
-        : { kind: "READ_ONLY" },
+        : { kind: "READ_ONLY_WORKTREE", worktreePath },
       (usage) => {
         normalizedUsage = usage;
         const bounds = governed.approvedRoleBounds(authorizationId);

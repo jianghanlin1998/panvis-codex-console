@@ -1,12 +1,13 @@
 import { assertGovernedSchemaIntegrity } from "./governed-schema-integrity.js";
+import { BigTaskControlFailureSchema, type BigTaskControlFailure } from "@codex-task-console/domain";
 import { executionPlanIssues } from "./execution-plan-readiness.js";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { devNull, tmpdir } from "node:os";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
-import type { BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
+import { BigTaskQaRecoverySchema, BigTaskRoleFailureSchema, executionUsageSettled, hasUnacknowledgedExecutionUsage, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
+import type { BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
 import { TaskStorageError } from "./errors.js";
 import type { TaskStorage } from "./task-storage.js";
 import { getTaskStorageWorktreeAccess } from "./task-storage-internals.js";
@@ -78,6 +79,9 @@ type ExecutionEvent =
   | { readonly kind: "START"; readonly at: string }
   | { readonly kind: "RECOVERY"; readonly at: string; readonly request: BigTaskExecutionRecovery; readonly authorizationId: string }
   | { readonly kind: "WINDOW_RENEWED"; readonly at: string; readonly request: BigTaskExecutionWindowRenewal }
+  | { readonly kind: "QA_RECOVERY"; readonly at: string; readonly request: BigTaskQaRecovery; readonly authorizationId: string }
+  | { readonly kind: "ROLE_FAILURE"; readonly at: string; readonly failure: BigTaskRoleFailure }
+  | { readonly kind: "CONTROL_FAILURE"; readonly at: string; readonly failure: BigTaskControlFailure }
   | { readonly kind: "ROLE"; readonly at: string; readonly authorizationId: string }
   | ({ readonly kind: "INTEGRATION_PREPARED" | "INTEGRATE"; readonly at: string } & IntegrationIntent)
   | { readonly kind: "STOP"; readonly at: string; readonly reason: ExecutionStopReason }
@@ -97,6 +101,10 @@ export interface BigTaskExecutionStatus {
   readonly unknownCompletedUsage: boolean;
   readonly recovery?: BigTaskExecutionRecovery & { readonly authorizationId: string };
   readonly windowRenewal?: Pick<BigTaskExecutionWindowRenewal, "previousExpiresAt" | "durationMilliseconds"> & { readonly renewedAt: string };
+  readonly qaRecovery?: BigTaskQaRecovery & { readonly authorizationId: string; readonly authorizedAt: string };
+  readonly unacknowledgedUnknownUsage?: boolean;
+  readonly lastRoleFailure?: BigTaskRoleFailure & { readonly at: string };
+  readonly lastControlFailure?: BigTaskControlFailure & { readonly at: string };
   readonly resultRef: string;
   readonly resultHeadSha: string;
   readonly integratedSubtaskIds: readonly string[];
@@ -182,6 +190,10 @@ export class BigTaskExecutionStore {
     const roles = new Set<string>();
     let recovery: BigTaskExecutionStatus["recovery"];
     let windowRenewal: BigTaskExecutionStatus["windowRenewal"];
+    let qaRecovery: BigTaskExecutionStatus["qaRecovery"];
+    let lastRoleFailure: BigTaskExecutionStatus["lastRoleFailure"];
+    let lastControlFailure: BigTaskExecutionStatus["lastControlFailure"];
+    const failedRoles = new Set<string>();
     const rows = access(this.storage).sqlite.prepare("SELECT sequence, payload FROM big_task_execution_events WHERE big_task_id = ? ORDER BY sequence").all(bigTaskId);
     if (rows.length > 1024) fail("MALFORMED_STORED_DATA");
     for (const [index, row] of rows.entries()) {
@@ -225,6 +237,45 @@ export class BigTaskExecutionStore {
           windowRenewal = { previousExpiresAt: request.data.previousExpiresAt, durationMilliseconds: request.data.durationMilliseconds, renewedAt: event.at };
           break;
         }
+        case "QA_RECOVERY": {
+          const request = BigTaskQaRecoverySchema.safeParse(event.request);
+          if (Object.keys(event).length !== 4 || !request.success || qaRecovery !== undefined || recovery === undefined || startedAt === null ||
+            phase !== "HUMAN_REQUIRED" || stopReason !== "USAGE_UNKNOWN" || pendingIntegration !== null ||
+            request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
+            request.data.repositoryHeadSha !== approval.request.repositoryHeadSha || !roles.has(request.data.failedAuthorizationId) ||
+            event.authorizationId !== recoveryAuthorizationId(request.data.failedAuthorizationId) ||
+            request.data.previousExpiresAt !== new Date(windowRenewal === undefined ? Date.parse(startedAt) + approval.request.limits.durationMilliseconds
+              : Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds).toISOString() ||
+            executionCanonical(request.data) !== executionCanonical(event.request)) fail("MALFORMED_STORED_DATA");
+          const old = this.#qaFailureAuthority(request.data);
+          const next = access(this.storage).sqlite.prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id=?").get(event.authorizationId);
+          if (next === undefined || next.recovery_attempt !== 1 || next.authorized_at !== event.at ||
+            Object.keys(next).some(key => !["authorization_id", "authorized_at", "recovery_attempt"].includes(key) && next[key] !== old[key])) fail("MALFORMED_STORED_DATA");
+          let priorKnown = 0, priorUnknown = 0;
+          for (const id of roles) {
+            const row = access(this.storage).sqlite.prepare("SELECT execution_run_id FROM governed_role_execution_links WHERE authorization_id=?").get(id);
+            const run = row === undefined ? null : this.storage.getExecutionRunById(ExecutionRunIdSchema.parse(row.execution_run_id));
+            if (run === null || !["SUCCEEDED", "FAILED", "INTERRUPTED"].includes(run.status)) fail("MALFORMED_STORED_DATA");
+            if (run.normalizedUsage?.totalTokens === undefined) priorUnknown += 1; else priorKnown += run.normalizedUsage.totalTokens;
+          }
+          if (priorUnknown !== 1 || priorKnown !== request.data.acknowledgedKnownTokens || priorKnown >= request.data.knownTokenLimit) fail("MALFORMED_STORED_DATA");
+          qaRecovery = { ...request.data, authorizationId: event.authorizationId, authorizedAt: event.at };
+          phase = "PAUSED"; stopReason = "CHECKPOINT_RECOVERED"; break;
+        }
+        case "CONTROL_FAILURE": {
+          const parsed = BigTaskControlFailureSchema.safeParse(event.failure);
+          if (Object.keys(event).length !== 3 || !parsed.success || phase !== "RUNNING" ||
+            executionCanonical(parsed.data) !== executionCanonical(event.failure)) fail("MALFORMED_STORED_DATA");
+          lastControlFailure = { ...parsed.data, at: event.at }; break;
+        }
+        case "ROLE_FAILURE": {
+          const parsed = BigTaskRoleFailureSchema.safeParse(event.failure);
+          if (Object.keys(event).length !== 3 || !parsed.success || failedRoles.has(parsed.data.authorizationId) ||
+            !["RUNNING", "PAUSED", "HUMAN_REQUIRED"].includes(phase) || executionCanonical(parsed.data) !== executionCanonical(event.failure)) fail("MALFORMED_STORED_DATA");
+          if (access(this.storage).sqlite.prepare("SELECT big_task_id FROM governed_role_authorizations WHERE authorization_id=?").get(parsed.data.authorizationId)?.big_task_id !== bigTaskId) fail("MALFORMED_STORED_DATA");
+          failedRoles.add(parsed.data.authorizationId);
+          lastRoleFailure = { ...parsed.data, at: event.at }; break;
+        }
         case "ROLE":
           if (Object.keys(event).length !== 3 || phase !== "RUNNING" || !/^gra_[a-f0-9]{48}$/u.test(event.authorizationId) || roles.has(event.authorizationId)) fail("MALFORMED_STORED_DATA");
           roles.add(event.authorizationId); roleCalls += 1; break;
@@ -252,11 +303,14 @@ export class BigTaskExecutionStore {
     const linked = access(this.storage).sqlite.prepare(`SELECT link.authorization_id FROM governed_role_execution_links link
       JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id WHERE auth.big_task_id = ?`).all(bigTaskId);
     if (linked.length !== roles.size || linked.some(row => !roles.has(String(row.authorization_id)))) fail("MALFORMED_STORED_DATA");
-    const usage = this.#usage(bigTaskId);
+    const usage = this.#usage(bigTaskId, qaRecovery?.failedExecutionRunId);
     const status = Object.freeze({ bigTaskId, planDigest: approval.request.planDigest, phase, stopReason, startedAt,
-      expiresAt: startedAt === null ? null : new Date(windowRenewal === undefined ? Date.parse(startedAt) + approval.request.limits.durationMilliseconds
+      expiresAt: startedAt === null ? null : new Date(qaRecovery !== undefined ? Date.parse(qaRecovery.authorizedAt) + qaRecovery.durationMilliseconds : windowRenewal === undefined ? Date.parse(startedAt) + approval.request.limits.durationMilliseconds
         : Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds).toISOString(),
-      limits: approval.request.limits, roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }),
+      limits: qaRecovery === undefined ? approval.request.limits : { ...approval.request.limits, totalTokenLimit: qaRecovery.knownTokenLimit },
+      roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }), ...(qaRecovery === undefined ? {} : { qaRecovery }),
+      ...(lastRoleFailure === undefined ? {} : { lastRoleFailure }),
+      ...(lastControlFailure === undefined ? {} : { lastControlFailure }),
       ...(windowRenewal === undefined ? {} : { windowRenewal }), resultRef: approval.resultRef, resultHeadSha: head,
       integratedSubtaskIds: Object.freeze(integrated), pendingIntegration, resultRefCreated });
     if (!BigTaskExecutionStatusSchema.safeParse(status).success) fail("MALFORMED_STORED_DATA");
@@ -325,6 +379,74 @@ export class BigTaskExecutionStore {
     });
   }
 
+  #qaFailureAuthority(request: BigTaskQaRecovery) {
+    const old = access(this.storage).sqlite.prepare(`SELECT a.*, l.execution_run_id FROM governed_role_authorizations a
+      JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id WHERE a.authorization_id=?`).get(request.failedAuthorizationId);
+    const run = this.storage.getExecutionRunById(request.failedExecutionRunId);
+    if (old === undefined || old.big_task_id !== request.bigTaskId || old.role !== "FRESH_QA" || old.write_enabled !== 0 || old.recovery_attempt !== 0 ||
+      old.repair_cycles_used !== 0 || old.execution_run_id !== request.failedExecutionRunId || old.candidate_sha !== request.candidateSha ||
+      run === null || !["FAILED", "INTERRUPTED"].includes(run.status) || run.normalizedUsage?.totalTokens !== undefined ||
+      access(this.storage).sqlite.prepare("SELECT 1 FROM governed_role_results WHERE authorization_id=?").get(request.failedAuthorizationId)) fail();
+    return old;
+  }
+
+  /** Explicitly acknowledges one unknown failed QA; its original usage remains unknown forever. */
+  recoverQa(input: unknown): BigTaskExecutionStatus {
+    const request = BigTaskQaRecoverySchema.parse(input);
+    if (executionCanonical(request) !== executionCanonical(input)) fail("INVALID_INPUT");
+    const record = () => {
+      const state = this.inspect(request.bigTaskId);
+      if (state.qaRecovery !== undefined) {
+        const original = Object.fromEntries(Object.entries(state.qaRecovery).filter(([key]) => !["authorizationId", "authorizedAt"].includes(key)));
+        if (executionCanonical(original) !== executionCanonical(request)) fail();
+        return state;
+      }
+      if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "USAGE_UNKNOWN" || state.recovery === undefined ||
+        state.activeRoleCount !== 0 || !state.unknownCompletedUsage || state.pendingIntegration !== null || state.expiresAt !== request.previousExpiresAt ||
+        state.knownTokens !== request.acknowledgedKnownTokens || state.knownTokens >= request.knownTokenLimit || state.roleCalls >= state.limits.roleCallLimit ||
+        state.planDigest !== request.planDigest || request.repositoryHeadSha !== this.#approval(request.bigTaskId).request.repositoryHeadSha) fail();
+      this.assertCurrent(request.bigTaskId);
+      const old = this.#qaFailureAuthority(request);
+      const view = this.storage.getDurableWorkflowControlView(old.subtask_id as SubtaskId);
+      if (view?.currentStage !== "FRESH_QA" || view.deliveryMaturity !== "HARDENED" || view.transitionCount + 1 !== old.workflow_sequence || view.unresolvedHumanRequired !== null) fail();
+      const at = timestamp(this.storage), authorizationId = recoveryAuthorizationId(request.failedAuthorizationId);
+      access(this.storage).sqlite.prepare(`INSERT INTO governed_role_authorizations
+        (authorization_id, dispatch_receipt_id, project_id, big_task_id, plan_revision, candidate_binding, subtask_id, workflow_sequence,
+         workflow_stage, repair_cycles_used, role, context_profile, write_enabled, worktree_ownership_id, candidate_sha, authorized_at, recovery_attempt)
+        SELECT ?, dispatch_receipt_id, project_id, big_task_id, plan_revision, candidate_binding, subtask_id, workflow_sequence,
+          workflow_stage, repair_cycles_used, role, context_profile, write_enabled, worktree_ownership_id, candidate_sha, ?, 1
+        FROM governed_role_authorizations WHERE authorization_id=?`).run(authorizationId, at, request.failedAuthorizationId);
+      this.#append(request.bigTaskId, { kind: "QA_RECOVERY", at, request, authorizationId });
+      return this.inspect(request.bigTaskId);
+    };
+    return access(this.storage).sqlite.isTransaction ? record() : this.storage.runInTransaction(record);
+  }
+
+  recordControlFailure(bigTaskId: BigTaskId, input: unknown): BigTaskExecutionStatus {
+    const failure = BigTaskControlFailureSchema.parse(input);
+    if (executionCanonical(input) !== executionCanonical(failure)) fail("INVALID_INPUT");
+    return this.storage.runInTransaction(() => {
+      if (this.inspect(bigTaskId).phase !== "RUNNING") fail();
+      this.#append(bigTaskId, { kind: "CONTROL_FAILURE", at: timestamp(this.storage), failure });
+      return this.inspect(bigTaskId);
+    });
+  }
+
+  recordRoleFailure(bigTaskId: BigTaskId, input: unknown): BigTaskExecutionStatus {
+    const failure = BigTaskRoleFailureSchema.parse(input);
+    if (executionCanonical(input) !== executionCanonical(failure)) fail("INVALID_INPUT");
+    return this.storage.runInTransaction(() => {
+      const state = this.inspect(bigTaskId);
+      if (state.lastRoleFailure?.authorizationId === failure.authorizationId) {
+        const original = Object.fromEntries(Object.entries(state.lastRoleFailure).filter(([key]) => key !== "at"));
+        if (executionCanonical(original) !== executionCanonical(failure)) fail();
+        return state;
+      }
+      this.#append(bigTaskId, { kind: "ROLE_FAILURE", at: timestamp(this.storage), failure });
+      return this.inspect(bigTaskId);
+    });
+  }
+
   start(bigTaskId: BigTaskId): { claimed: boolean; status: BigTaskExecutionStatus } {
     return this.storage.runInTransaction(() => {
       const state = this.inspect(bigTaskId);
@@ -332,7 +454,7 @@ export class BigTaskExecutionStore {
       if (state.phase !== "APPROVED" && state.phase !== "PAUSED") fail();
       this.assertCurrent(bigTaskId);
       if (state.expiresAt !== null && Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage))) fail();
-      if (!this.#safeCheckpoint(bigTaskId) || !state.usageComplete || state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit) fail();
+      if (!this.#safeCheckpoint(bigTaskId) || !executionUsageSettled(state) || state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit) fail();
       this.#append(bigTaskId, { kind: "START", at: timestamp(this.storage) });
       this.storage.materializeDurablePlan(bigTaskId);
       return { claimed: true, status: this.inspect(bigTaskId) };
@@ -361,7 +483,7 @@ export class BigTaskExecutionStore {
 
   assertRunning(bigTaskId: BigTaskId): BigTaskExecutionStatus {
     const state = this.inspect(bigTaskId);
-    if (state.phase !== "RUNNING" || this.remainingMilliseconds(bigTaskId) <= 0 || state.unknownCompletedUsage || state.knownTokens >= state.limits.totalTokenLimit) fail();
+    if (state.phase !== "RUNNING" || this.remainingMilliseconds(bigTaskId) <= 0 || hasUnacknowledgedExecutionUsage(state) || state.knownTokens >= state.limits.totalTokenLimit) fail();
     this.assertCurrent(bigTaskId);
     if (this.remainingMilliseconds(bigTaskId) <= 0) fail();
     return state;
@@ -385,7 +507,7 @@ export class BigTaskExecutionStore {
       const state = this.assertRunning(bigTaskId);
       const task = this.storage.getBigTaskById(bigTaskId);
       const materialized = this.storage.getCanonicalTaskMaterialization(bigTaskId);
-      if (!state.usageComplete || state.pendingIntegration !== null || task?.status !== "DONE" || materialized === null || state.integratedSubtaskIds.length !== materialized.subtaskCount) fail();
+      if (!executionUsageSettled(state) || state.pendingIntegration !== null || task?.status !== "DONE" || materialized === null || state.integratedSubtaskIds.length !== materialized.subtaskCount) fail();
       this.#append(bigTaskId, { kind: "DELIVER", headSha: state.resultHeadSha, at: timestamp(this.storage) });
       return this.inspect(bigTaskId);
     });
@@ -470,28 +592,30 @@ export class BigTaskExecutionStore {
   }
 
   #safeCheckpoint(bigTaskId: BigTaskId): boolean {
-    const recovery = this.inspect(bigTaskId).recovery;
+    const { recovery, qaRecovery } = this.inspect(bigTaskId);
     return access(this.storage).sqlite.prepare(`SELECT 1 FROM governed_role_execution_links link
       JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id
       LEFT JOIN execution_runs run ON run.id = link.execution_run_id
-      WHERE auth.big_task_id = ? AND auth.authorization_id != ? AND (run.status IS NULL OR run.status != 'SUCCEEDED') LIMIT 1`).get(bigTaskId, recovery?.failedAuthorizationId ?? '') === undefined;
+      WHERE auth.big_task_id = ? AND auth.authorization_id NOT IN (?,?) AND (run.status IS NULL OR run.status != 'SUCCEEDED') LIMIT 1`).get(bigTaskId, recovery?.failedAuthorizationId ?? '', qaRecovery?.failedAuthorizationId ?? '') === undefined;
   }
 
-  #usage(bigTaskId: BigTaskId): { knownTokens: number; usageComplete: boolean; activeRoleCount: number; unknownCompletedUsage: boolean } {
+  #usage(bigTaskId: BigTaskId, acknowledgedRunId?: string): { knownTokens: number; usageComplete: boolean; activeRoleCount: number; unknownCompletedUsage: boolean; unacknowledgedUnknownUsage?: boolean } {
     const rows = access(this.storage).sqlite.prepare(`SELECT link.execution_run_id FROM governed_role_execution_links link
       JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id WHERE auth.big_task_id = ?`).all(bigTaskId);
     let knownTokens = 0;
     let activeRoleCount = 0;
     let unknownCompletedUsage = false;
+    let unacknowledgedUnknownUsage = false;
     for (const row of rows) {
       const run = this.storage.getExecutionRunById(ExecutionRunIdSchema.parse(row.execution_run_id));
       if (run === null) fail("MALFORMED_STORED_DATA");
       knownTokens += run.normalizedUsage?.totalTokens ?? 0;
       if (["CREATED", "RUNNING"].includes(run.status)) activeRoleCount += 1;
-      else if (run.normalizedUsage?.totalTokens === undefined) unknownCompletedUsage = true;
+      else if (run.normalizedUsage?.totalTokens === undefined) { unknownCompletedUsage = true; if (run.id !== acknowledgedRunId) unacknowledgedUnknownUsage = true; }
     }
     if (activeRoleCount > 1 || !Number.isSafeInteger(knownTokens)) fail("MALFORMED_STORED_DATA");
-    return { knownTokens, usageComplete: activeRoleCount === 0 && !unknownCompletedUsage, activeRoleCount, unknownCompletedUsage };
+    return { knownTokens, usageComplete: activeRoleCount === 0 && !unknownCompletedUsage, activeRoleCount, unknownCompletedUsage,
+      ...(acknowledgedRunId === undefined ? {} : { unacknowledgedUnknownUsage }) };
   }
 
   #append(bigTaskId: BigTaskId, event: ExecutionEvent): void {
@@ -559,7 +683,7 @@ export function executionDeadlineForSubtask(storage: TaskStorage, subtaskId: Sub
     if (current?.sequence !== event.sequence || current?.payload !== event.payload) return 0;
     return Math.max(0, expiresAt - Date.parse(timestamp(storage)));
   };
-  if (state.phase !== "RUNNING" || state.unknownCompletedUsage ||
+  if (state.phase !== "RUNNING" || hasUnacknowledgedExecutionUsage(state) ||
     state.knownTokens >= state.limits.totalTokenLimit || remaining() <= 0) fail();
   return remaining;
 }

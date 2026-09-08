@@ -1,10 +1,11 @@
-import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId } from "./big-task-execution.js";
+import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId, executionGit } from "./big-task-execution.js";
 import { checkExecutionGitFilters, executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import {
   BigTaskExecutionRecoverySchema,
+  BigTaskQaRecoverySchema, hasUnacknowledgedExecutionUsage,
   ChatThreadIdSchema,
   NormalizedUsageSchema,
   DEFAULT_V1_BUDGET_POLICY,
@@ -117,6 +118,7 @@ export interface AggregateSubtaskUsageBudget {
   readonly extensionApplied: boolean;
   readonly effectiveLimitTokens: number;
   readonly scope?: "BIG_TASK";
+  readonly subtaskKnownTokens?: number;
 }
 
 export interface GovernedDispatchReceipt {
@@ -1103,6 +1105,37 @@ export class GovernedExecutionStore {
     });
   }
 
+  reviewQaExecutionRecovery(bigTaskId: BigTaskId) {
+    const execution = new BigTaskExecutionStore(this.#storage), state = execution.inspect(bigTaskId);
+    if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "USAGE_UNKNOWN" || state.recovery === undefined || state.qaRecovery !== undefined ||
+      state.activeRoleCount !== 0 || !state.unknownCompletedUsage || state.expiresAt === null || state.pendingIntegration !== null ||
+      state.knownTokens >= 2_000_000 || state.roleCalls >= state.limits.roleCallLimit) throw conflict("QA recovery is unavailable.");
+    execution.assertCurrent(bigTaskId); this.#validateBigTaskAuthority(bigTaskId);
+    const rows = this.#access().sqlite.prepare(`SELECT a.authorization_id,l.execution_run_id FROM governed_role_authorizations a
+      JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id JOIN execution_runs r ON r.id=l.execution_run_id
+      WHERE a.big_task_id=? AND r.status IN ('FAILED','INTERRUPTED') AND r.total_tokens IS NULL`).all(bigTaskId);
+    if (rows.length !== 1) throw conflict("One unknown failed QA is required.");
+    const authorization = this.getRoleAuthorization(String(rows[0]!.authorization_id))!;
+    this.#assertRoleAuthorizationCurrent(authorization);
+    const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
+    if (authorization.role !== "FRESH_QA" || authorization.writeEnabled || authorization.repairCyclesUsed !== 0 || this.#getRoleResult(authorization.authorizationId) !== null ||
+      worktree.ownership.id !== authorization.worktreeOwnershipId || worktree.currentHeadSha !== authorization.candidateSha ||
+      executionGit(worktree.ownership.worktreePath, ["status", "--porcelain=v2", "--untracked-files=all", "-z"]) !== "") throw conflict("QA candidate changed.");
+    return { request: BigTaskQaRecoverySchema.parse({ bigTaskId, planDigest: state.planDigest, repositoryHeadSha: execution.review(bigTaskId).repositoryHeadSha,
+      failedAuthorizationId: authorization.authorizationId, failedExecutionRunId: rows[0]!.execution_run_id, candidateSha: authorization.candidateSha,
+      previousExpiresAt: state.expiresAt, acknowledgedKnownTokens: state.knownTokens, acknowledgeUnknownUsage: true, knownTokenLimit: 2_000_000, durationMilliseconds: 10_800_000 }) };
+  }
+
+  recoverQaExecution(input: unknown) {
+    const request = BigTaskQaRecoverySchema.parse(input);
+    return this.#storage.runInTransaction(() => {
+      const execution = new BigTaskExecutionStore(this.#storage);
+      if (execution.inspect(request.bigTaskId).qaRecovery !== undefined) return execution.recoverQa(input);
+      if (JSON.stringify(this.reviewQaExecutionRecovery(request.bigTaskId).request) !== JSON.stringify(request)) throw conflict("QA recovery review changed.");
+      return execution.recoverQa(input);
+    });
+  }
+
   approvedRoleModel(authorizationId: string) {
     const authorization = this.getRoleAuthorization(authorizationId);
     if (authorization === null) throw malformed();
@@ -1506,7 +1539,7 @@ export class GovernedExecutionStore {
     const subtaskBudget = this.#deriveAggregateBudget(authorization.subtaskId, true,
       link === undefined ? undefined : String(link.execution_run_id));
     return { remainingMilliseconds: execution.remainingMilliseconds(id),
-      remainingTokens: state.unknownCompletedUsage ? 0 : state.recovery !== undefined ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
+      remainingTokens: hasUnacknowledgedExecutionUsage(state) ? 0 : state.recovery !== undefined ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
         subtaskBudget.effectiveLimitTokens - (subtaskBudget.totalTokens ?? subtaskBudget.effectiveLimitTokens)) };
   }
 
@@ -1519,7 +1552,10 @@ export class GovernedExecutionStore {
     const row = this.#access().sqlite
       .prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id = ?")
       .get(authorizationId) as RoleAuthorizationRow | undefined;
-    if (row?.recovery_attempt === 1 && new BigTaskExecutionStore(this.#storage).inspect(row.big_task_id as BigTaskId).recovery?.authorizationId !== row.authorization_id) throw malformed();
+    if (row?.recovery_attempt === 1) {
+      const state = new BigTaskExecutionStore(this.#storage).inspect(row.big_task_id as BigTaskId);
+      if (![state.recovery?.authorizationId, state.qaRecovery?.authorizationId].includes(row.authorization_id)) throw malformed();
+    }
     return row === undefined ? null : parseRoleAuthorizationRow(row);
   }
 
@@ -2790,6 +2826,12 @@ export class GovernedExecutionStore {
     includeExtension: boolean,
     currentMeteredRunId?: string,
   ): AggregateSubtaskUsageBudget {
+    const task = this.#storage.getSubtaskById(subtaskId);
+    const executionState = task !== null && isLivePlannedTask(this.#storage, task.bigTaskId) ? new BigTaskExecutionStore(this.#storage).inspect(task.bigTaskId) : null;
+    if (executionState?.recovery !== undefined && hasUnacknowledgedExecutionUsage(executionState)) {
+      return freeze({ status: "UNKNOWN_USAGE", allowed: false, totalTokens: null, warning: false,
+        extensionApplied: false, effectiveLimitTokens: 120_000 });
+    }
     const rows = this.#access().sqlite
       .prepare(
         `SELECT er.id, er.status, er.started_at, er.usage_present, er.total_tokens
@@ -2808,6 +2850,7 @@ export class GovernedExecutionStore {
     for (const row of rows) {
       this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(row.id));
       if (row.id === currentMeteredRunId && row.status === "RUNNING") continue;
+      if (row.id === executionState?.qaRecovery?.failedExecutionRunId) continue; // Still reported as unknown in execution status.
       if (
         (row.status === "RUNNING" || row.started_at !== null) &&
         (row.usage_present !== 1 ||
@@ -2831,13 +2874,12 @@ export class GovernedExecutionStore {
         total += row.total_tokens;
       }
     }
-    const task = this.#storage.getSubtaskById(subtaskId);
-    if (task !== null && isLivePlannedTask(this.#storage, task.bigTaskId)) {
-      const state = new BigTaskExecutionStore(this.#storage).inspect(task.bigTaskId);
+    if (executionState !== null) {
+      const state = executionState;
       if (state.recovery !== undefined) {
-        const allowed = total < state.limits.totalTokenLimit;
+        const allowed = !hasUnacknowledgedExecutionUsage(state) && state.knownTokens < state.limits.totalTokenLimit;
         return freeze({ scope: "BIG_TASK" as const, status: !allowed ? "ABSOLUTE_CEILING" : total >= 120_000 ? "AVAILABLE_WARNING" : "AVAILABLE",
-          allowed, totalTokens: total, warning: total >= 120_000, extensionApplied: false, effectiveLimitTokens: state.limits.totalTokenLimit });
+          allowed, totalTokens: state.knownTokens, subtaskKnownTokens: total, warning: total >= 120_000, extensionApplied: false, effectiveLimitTokens: state.limits.totalTokenLimit });
       }
     }
     const extension = includeExtension ? this.#getBudgetExtension(subtaskId) : null;
@@ -2907,7 +2949,9 @@ export class GovernedExecutionStore {
       candidateSha: authorization.candidateSha,
       worktreeOwnershipId: authorization.worktreeOwnershipId,
       writeEnabled: authorization.writeEnabled,
-      ...(this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt === 1 ? { recovery: "Continue from the preserved partial implementation. The prior run failed; its files are unaccepted. Inspect and complete this same task, run all required tests, and return a fresh structured result. Do not redo preserved work unnecessarily or claim prior QA passed." } : {}),
+      ...(this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt === 1 ? { recovery: authorization.role === "FRESH_QA"
+        ? "Perform fresh independent QA of this exact candidate against its contract. The previous call produced no verdict. Inspect the repository and run the required checks using the read-only sandbox; return your own structured result."
+        : "Continue from the preserved partial implementation. The prior run failed; its files are unaccepted. Inspect and complete this same task, run all required tests, and return a fresh structured result. Do not redo preserved work unnecessarily or claim prior QA passed." } : {}),
       instruction: isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)
         ? roleInstruction(authorization.role).replace("Leave a clean committed candidate.",
           "Leave the exact bounded file changes for the Console coordinator to commit. Do not run Git writes, push, deploy, or change other checkouts.") +
@@ -3577,7 +3621,10 @@ export class GovernedExecutionStore {
       .all(bigTaskId) as unknown as readonly RoleAuthorizationRow[];
     for (const row of rows) {
       const authorization = parseRoleAuthorizationRow(row);
-      if (row.recovery_attempt === 1 && new BigTaskExecutionStore(this.#storage).inspect(bigTaskId).recovery?.authorizationId !== authorization.authorizationId) throw malformed();
+      if (row.recovery_attempt === 1) {
+        const state = new BigTaskExecutionStore(this.#storage).inspect(bigTaskId);
+        if (![state.recovery?.authorizationId, state.qaRecovery?.authorizationId].includes(authorization.authorizationId)) throw malformed();
+      }
       const view = this.#requiredWorkflowView(authorization.subtaskId);
       const prior = view.transitions[authorization.workflowSequence - 2];
       const expectedStage = authorization.workflowSequence === 1 ? view.initialStage : prior?.resultingStage;

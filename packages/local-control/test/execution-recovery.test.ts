@@ -48,7 +48,7 @@ it("reviews, binds and resumes Sol through the authenticated operator to integra
       windowRenewal: { previousExpiresAt: original.expiresAt, durationMilliseconds: 10_800_000 } });
     expect((await call(["execution-renew-window", renewalFile])).body).toEqual(renewed.body);
     expect((await call(["governed-status", f.approval.bigTaskId])).body.budgets).toContainEqual({
-      scope: "BIG_TASK", status: "AVAILABLE_WARNING", allowed: true, totalTokens: 143674, warning: true, extensionApplied: false, effectiveLimitTokens: 480000 });
+      scope: "BIG_TASK", status: "AVAILABLE_WARNING", allowed: true, totalTokens: 143674, subtaskKnownTokens: 143674, warning: true, extensionApplied: false, effectiveLimitTokens: 480000 });
     const done = new Promise<Awaited<ReturnType<NonNullable<typeof service.inspectExecution>>>>((resolve, reject) => {
       report = () => setImmediate(() => setImmediate(() => {
         if (!observing) return;

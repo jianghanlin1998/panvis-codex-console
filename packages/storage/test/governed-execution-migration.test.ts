@@ -171,7 +171,7 @@ describe("Operational Governed Execution V0 migration", () => {
       }
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 24 });
+      ).toEqual({ count: 25 });
       sqlite.close();
 
       storage = openTaskDatabase({ databasePath, clock: fixedClock });

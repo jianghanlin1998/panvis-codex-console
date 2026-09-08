@@ -400,6 +400,19 @@ describe("Step 8D governed provider hardening", () => {
     } finally { cleanup(fixture); }
   }, 20_000);
 
+  it.each(["read-command", "read-command-wrong-cwd", "read-command-orphan-output", "read-command-replayed"])("validates sandboxed read-only command lifecycles (%s)", async scenario => {
+    const fixture = createFixture();
+    try {
+      const execute = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      expect((await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed, execute.authorization.authorizationId, dependencies("EXECUTE"))).success).toBe(true);
+      const verify = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed, verify.authorization.authorizationId, dependencies("VERIFY", false, scenario));
+      expect(result.success).toBe(scenario === "read-command");
+      if (scenario === "read-command") expect(result).toMatchObject({ threadPolicy: { sandbox: "readOnly", networkAccess: false, writableRootCount: 0 }, diagnostics: { toolActionsObserved: 1 } });
+      else expect(result).toMatchObject({ failureCode: "APP_SERVER_PROTOCOL_ERROR", roleResult: null });
+    } finally { cleanup(fixture); }
+  });
+
   it("rejects a write-tool lifecycle in a read-only VERIFY turn", async () => {
     const fixture = createFixture();
     try {

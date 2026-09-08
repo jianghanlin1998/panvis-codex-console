@@ -1,4 +1,4 @@
-import { BigTaskExecutionApprovalSchema, BigTaskExecutionRecoverySchema } from "@codex-task-console/domain";
+import { BigTaskExecutionApprovalSchema, BigTaskExecutionRecoverySchema, BigTaskQaRecoverySchema } from "@codex-task-console/domain";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { AggregateSubtaskUsageBudget } from "./governed-execution.js";
@@ -140,12 +140,25 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
         const events = sqlite.prepare("SELECT payload FROM big_task_execution_events WHERE big_task_id=? ORDER BY sequence").all(owner.bigTaskId);
         try {
           const approval = BigTaskExecutionApprovalSchema.parse(JSON.parse(String(approvalRow?.payload)).request);
-          const recoveries = events.map(row => JSON.parse(String(row.payload)) as {kind: string; request?: unknown}).filter(event => event.kind === "RECOVERY");
+          const parsedEvents = events.map(row => JSON.parse(String(row.payload)) as {kind: string; request?: unknown});
+          const recoveries = parsedEvents.filter(event => event.kind === "RECOVERY");
           if (recoveries.length !== 1) malformed();
           const recovery = BigTaskExecutionRecoverySchema.parse(recoveries[0]!.request);
           if (recovery.bigTaskId !== owner.bigTaskId || recovery.planDigest !== approval.planDigest || recovery.repositoryHeadSha !== approval.repositoryHeadSha ||
-            extensionAuthorityId !== null || budget.extensionApplied || budget.warning !== (budget.totalTokens !== null && budget.totalTokens >= 120_000)) malformed();
+            extensionAuthorityId !== null || budget.extensionApplied) malformed();
+          const warningTokens = budget.subtaskKnownTokens ?? budget.totalTokens;
+          if (!Number.isSafeInteger(warningTokens) || warningTokens === null || warningTokens < 0 ||
+            warningTokens > (budget.totalTokens ?? -1) || budget.warning !== (warningTokens >= 120_000)) malformed();
           approvedAggregateLimit = approval.limits.totalTokenLimit;
+          // Historical observations retain their original ceiling. A raised
+          // ceiling must be backed by the immutable, exact-task QA recovery.
+          if (budget.effectiveLimitTokens !== approvedAggregateLimit) {
+            const qaEvents = parsedEvents.filter(event => event.kind === "QA_RECOVERY");
+            if (qaEvents.length !== 1) malformed();
+            const qa = BigTaskQaRecoverySchema.parse(qaEvents[0]!.request);
+            if (qa.bigTaskId !== owner.bigTaskId || qa.planDigest !== approval.planDigest || qa.repositoryHeadSha !== approval.repositoryHeadSha) malformed();
+            approvedAggregateLimit = qa.knownTokenLimit;
+          }
         } catch { malformed(); }
       }
 

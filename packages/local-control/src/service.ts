@@ -3,6 +3,7 @@ import {
   executeBigTaskPlanningCodex,
   executeSingleSubtaskOwnedWorktreeCodex,
 } from "@codex-task-console/codex-adapter";
+import { BigTaskControlFailureSchema, executionUsageSettled, type BigTaskControlFailure } from "@codex-task-console/domain";
 import type {
   GovernedRoleCodexExecutionResult,
   OwnedWorktreeCodexExecutionResult,
@@ -128,6 +129,8 @@ export interface LocalControlService {
   reviewExecution?(bigTaskId: BigTaskId): Promise<object>;
   reviewExecutionRecovery?(bigTaskId: BigTaskId): Promise<object>;
   recoverExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
+  reviewQaExecutionRecovery?(bigTaskId: BigTaskId): Promise<object>;
+  recoverQaExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
   renewExecutionWindow?(input: unknown): Promise<BigTaskExecutionStatus>;
   approveExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
   inspectExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
@@ -419,6 +422,14 @@ class ProductionLocalControlService implements LocalControlService {
     try { return this.#governed.recoverExecution(input); } catch (error) { throw sanitizeStorageError(error); }
   }
 
+  async reviewQaExecutionRecovery(bigTaskId: BigTaskId): Promise<object> {
+    try { return this.#governed.reviewQaExecutionRecovery(bigTaskId); } catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async recoverQaExecution(input: unknown): Promise<BigTaskExecutionStatus> {
+    try { return this.#governed.recoverQaExecution(input); } catch (error) { throw sanitizeStorageError(error); }
+  }
+
   async approveExecution(input: unknown): Promise<BigTaskExecutionStatus> {
     try { return new BigTaskExecutionStore(this.#storage).approve(input); }
     catch (error) { throw sanitizeStorageError(error); }
@@ -479,32 +490,46 @@ class ProductionLocalControlService implements LocalControlService {
 
   async #driveExecution(bigTaskId: BigTaskId, signal: AbortSignal): Promise<void> {
     const execution = new BigTaskExecutionStore(this.#storage);
+    let phase: BigTaskControlFailure["phase"] = "CHECK_LIMITS";
     try {
       const limit = execution.inspect(bigTaskId).limits.roleCallLimit + 2;
       for (let step = 0; step < limit; step += 1) {
+        phase = "CHECK_LIMITS";
         const state = execution.inspect(bigTaskId);
         if (state.phase !== "RUNNING" || signal.aborted) return;
         if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
-        if (!state.usageComplete) { execution.stop(bigTaskId, "USAGE_UNKNOWN"); return; }
+        if (!executionUsageSettled(state)) { execution.stop(bigTaskId, "USAGE_UNKNOWN"); return; }
         if (state.knownTokens >= state.limits.totalTokenLimit) { execution.stop(bigTaskId, "TOKEN_LIMIT_REACHED"); return; }
+        phase = "PREPARE_ROLE";
         const prepared = this.#governed.prepareNextRole(bigTaskId);
         if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
-        if (prepared.kind === "BIG_TASK_COMPLETE") { execution.deliver(bigTaskId); return; }
+        if (prepared.kind === "BIG_TASK_COMPLETE") { phase = "DELIVER"; execution.deliver(bigTaskId); return; }
         if (prepared.kind !== "ROLE_AUTHORIZED") { execution.stop(bigTaskId, "GOVERNED_BLOCKED"); return; }
         if (state.roleCalls >= state.limits.roleCallLimit) { execution.stop(bigTaskId, "ROLE_LIMIT_REACHED"); return; }
+        phase = "EXECUTE_ROLE";
         const result = await this.#executeGoverned(this.#governed, prepared.authorization.authorizationId, signal);
         if (!result.success) {
+          phase = "PERSIST_ROLE_FAILURE";
+          execution.recordRoleFailure(bigTaskId, { authorizationId: prepared.authorization.authorizationId, failureCode: result.failureCode,
+            phase: result.terminalTurnStatus === "completed" ? "RESULT" : result.diagnostics.turnStartRequests === 0 ? "BEFORE_TURN" : "TURN",
+            diagnostics: result.diagnostics, appServerChildCleaned: result.appServerChildCleaned, transientRuntimeCleaned: result.transientRuntimeCleaned });
+          phase = "STOP";
           const after = execution.inspect(bigTaskId);
           if (after.phase === "RUNNING") execution.stop(bigTaskId,
             execution.remainingMilliseconds(bigTaskId) === 0 ? "TIME_LIMIT_REACHED" :
-              !after.usageComplete ? "USAGE_UNKNOWN" : after.knownTokens >= after.limits.totalTokenLimit ? "TOKEN_LIMIT_REACHED" : "GOVERNED_BLOCKED");
+              !executionUsageSettled(after) ? "USAGE_UNKNOWN" : after.knownTokens >= after.limits.totalTokenLimit ? "TOKEN_LIMIT_REACHED" : "GOVERNED_BLOCKED");
           return;
         }
         await new Promise<void>(resolve => setImmediate(resolve));
       }
       execution.stop(bigTaskId, "ROLE_LIMIT_REACHED");
-    } catch {
-      // Errors remain closed codes; preserve all durable role evidence and never retry uncertain work.
+    } catch (error) {
+      const code = error instanceof TaskStorageError || error instanceof WorktreeOwnershipError ? error.code : "UNCLASSIFIED";
+      const parsed = BigTaskControlFailureSchema.safeParse({ phase, failureCode: code });
+      // Persist bounded codes only, never exception text or provider output.
+      if (execution.inspect(bigTaskId).phase === "RUNNING") {
+        execution.recordControlFailure(bigTaskId, parsed.success ? parsed.data : { phase, failureCode: "UNCLASSIFIED" });
+      }
       execution.stop(bigTaskId, execution.remainingMilliseconds(bigTaskId) === 0 ? "TIME_LIMIT_REACHED" : "LOCAL_OPERATION_FAILED");
     }
   }

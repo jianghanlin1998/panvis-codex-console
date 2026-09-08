@@ -31,6 +31,10 @@ export class GovernedExecutionStore {
 
   recoverExecution(input: unknown) { return getGovernedProviderBridge(this).recoverExecution(input); }
 
+  reviewQaExecutionRecovery(bigTaskId: BigTaskId) { return getGovernedProviderBridge(this).reviewQaExecutionRecovery(bigTaskId); }
+
+  recoverQaExecution(input: unknown) { return getGovernedProviderBridge(this).recoverQaExecution(input); }
+
   inspectBigTask(bigTaskId: BigTaskId) {
     return getGovernedProviderBridge(this).inspectBigTask(bigTaskId);
   }
