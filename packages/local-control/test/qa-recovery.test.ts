@@ -39,9 +39,11 @@ it.each([true, false])("records safe local failure stage without exception text 
   } finally { await service.stopAndDrain!(); f.close(); }
 });
 
-it.each([false, true])("recovers one unknown QA through the operator without erasing history (later unknown=%s)", async laterUnknown => {
+it.each([false, true, "format"] as const)("recovers one unknown QA through the operator without erasing history (later failure=%s)", async mode => {
+  const laterUnknown = mode === true, laterFormat = mode === "format";
   let instant = Date.parse("2026-09-07T00:00:00.000Z");
   const f = makeExecutionFixture(() => new Date(instant++), (role, n) => role === "EXECUTE" && n === 1 ? "budget-exceeded"
+    : role === "EXECUTE" && n === 3 && laterFormat ? "wrong-fields"
     : role === "FRESH_QA" ? n === 1 || laterUnknown && n === 3 ? "missing-usage" : "read-command" : undefined);
   f.approval.limits.totalTokenLimit = 480_000;
   const forbidden = async (): Promise<never> => { throw new Error("No other provider path"); };
@@ -104,25 +106,43 @@ it.each([false, true])("recovers one unknown QA through the operator without era
     expect(Date.parse(state.expiresAt!) - Date.parse(state.qaRecovery!.authorizedAt)).toBe(10_800_000);
     expect((await call(["execution-recover-qa", file])).body).toEqual(recovered.body);
     const nextDone = completed(); expect((await call(["execution-start", f.approval.bigTaskId])).body.phase).toBe("RUNNING"); report();
-    const result = await nextDone;
-    expect(result, JSON.stringify({ result, outcomes: f.outcomes, decisions: f.decisions })).toMatchObject({ phase: laterUnknown ? "HUMAN_REQUIRED" : "AWAITING_ACCEPTANCE", roleCalls: 8, usageComplete: false,
+    let result = await nextDone;
+    if (laterFormat) {
+      expect(result).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "GOVERNED_BLOCKED", roleCalls: 6,
+        lastRoleFailure: { phase: "RESULT", failureCode: "STRUCTURED_RESULT_INVALID" } });
+      const reviewed = await call(["execution-recovery-review", f.approval.bigTaskId]);
+      expect(reviewed.succeeded).toBe(true);
+      const retryFile = join(f.root, "retained-implementation.json");
+      writeFileSync(retryFile, JSON.stringify(reviewed.body.request), "utf8");
+      const retry = await call(["execution-recover", retryFile]);
+      expect(retry.succeeded).toBe(true);
+      const resumed = BigTaskExecutionStatusSchema.parse(retry.body);
+      expect(resumed).toMatchObject({ phase: "PAUSED", expiresAt: state.expiresAt, knownTokens: 143746,
+        recovery: state.recovery, qaRecovery: state.qaRecovery, limits: state.limits });
+      expect(resumed.additionalRecoveries).toHaveLength(1);
+      expect((await call(["execution-recover", retryFile])).body).toEqual(retry.body);
+      const finished = completed(); expect((await call(["execution-start", f.approval.bigTaskId])).succeeded).toBe(true); report();
+      result = await finished;
+    }
+    const expectedCalls = laterFormat ? 9 : 8;
+    expect(result, JSON.stringify({ result, outcomes: f.outcomes, decisions: f.decisions })).toMatchObject({ phase: laterUnknown ? "HUMAN_REQUIRED" : "AWAITING_ACCEPTANCE", roleCalls: expectedCalls, usageComplete: false,
       unknownCompletedUsage: true, unacknowledgedUnknownUsage: laterUnknown, expiresAt: state.expiresAt });
     expect(result.integratedSubtaskIds).toHaveLength(laterUnknown ? 1 : 2);
     const budgets = await call(["governed-status", f.approval.bigTaskId]);
     expect(budgets.succeeded).toBe(true);
     if (!laterUnknown) {
       expect(budgets.body.budgets).toContainEqual({ scope: "BIG_TASK", status: "AVAILABLE", allowed: true,
-        totalTokens: 143782, subtaskKnownTokens: 54, warning: false, extensionApplied: false, effectiveLimitTokens: 2_000_000 });
+        totalTokens: laterFormat ? 143800 : 143782, subtaskKnownTokens: laterFormat ? 72 : 54, warning: false, extensionApplied: false, effectiveLimitTokens: 2_000_000 });
     }
     expect(f.storage.getExecutionRunById(request.failedExecutionRunId)).toEqual(oldRun);
-    expect(new Set(f.starts).size).toBe(8);
+    expect(new Set(f.starts).size).toBe(expectedCalls);
     expect((await call(["execution-recover-qa", file])).succeeded).toBe(true);
     if (laterUnknown) {
       expect(result.stopReason).toBe("USAGE_UNKNOWN");
       expect((await call(["execution-qa-recovery-review", f.approval.bigTaskId])).succeeded).toBe(false);
       expect((await call(["execution-start", f.approval.bigTaskId])).succeeded).toBe(false);
     }
-    expect(f.starts).toHaveLength(8);
+    expect(f.starts).toHaveLength(expectedCalls);
     expect(f.git(["rev-parse", "HEAD"]).toString().trim()).toBe(f.approval.repositoryHeadSha);
     await service.stopAndDrain!(); f.reopen();
     expect(new BigTaskExecutionStore(f.storage).inspect(f.approval.bigTaskId)).toEqual(result);

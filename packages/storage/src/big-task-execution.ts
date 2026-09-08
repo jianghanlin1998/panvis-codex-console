@@ -100,6 +100,7 @@ export interface BigTaskExecutionStatus {
   readonly activeRoleCount: number;
   readonly unknownCompletedUsage: boolean;
   readonly recovery?: BigTaskExecutionRecovery & { readonly authorizationId: string };
+  readonly additionalRecoveries?: readonly NonNullable<BigTaskExecutionStatus["recovery"]>[];
   readonly windowRenewal?: Pick<BigTaskExecutionWindowRenewal, "previousExpiresAt" | "durationMilliseconds"> & { readonly renewedAt: string };
   readonly qaRecovery?: BigTaskQaRecovery & { readonly authorizationId: string; readonly authorizedAt: string };
   readonly unacknowledgedUnknownUsage?: boolean;
@@ -111,6 +112,9 @@ export interface BigTaskExecutionStatus {
   readonly pendingIntegration: IntegrationIntent | null;
   readonly resultRefCreated: boolean;
 }
+
+export const executionRecoveries = (state: Pick<BigTaskExecutionStatus, "recovery" | "additionalRecoveries">): readonly NonNullable<BigTaskExecutionStatus["recovery"]>[] =>
+  state.recovery === undefined ? [] : [state.recovery, ...(state.additionalRecoveries ?? [])];
 
 /** Applies only to live-planned Big Tasks. Existing accepted standalone task contracts remain compatible. */
 export function isLivePlannedTask(storage: TaskStorage, bigTaskId: BigTaskId): boolean {
@@ -189,6 +193,7 @@ export class BigTaskExecutionStore {
     let resultRefCreated = false;
     const roles = new Set<string>();
     let recovery: BigTaskExecutionStatus["recovery"];
+    const additionalRecoveries: NonNullable<BigTaskExecutionStatus["recovery"]>[] = [];
     let windowRenewal: BigTaskExecutionStatus["windowRenewal"];
     let qaRecovery: BigTaskExecutionStatus["qaRecovery"];
     let lastRoleFailure: BigTaskExecutionStatus["lastRoleFailure"];
@@ -208,9 +213,12 @@ export class BigTaskExecutionStore {
           startedAt ??= event.at; phase = "RUNNING"; stopReason = null; break;
         case "RECOVERY": {
           const request = BigTaskExecutionRecoverySchema.safeParse(event.request);
-          if (Object.keys(event).length !== 4 || !request.success || recovery !== undefined || phase !== "HUMAN_REQUIRED" ||
+          if (Object.keys(event).length !== 4 || !request.success || additionalRecoveries.length >= 23 ||
+            [recovery, ...additionalRecoveries].some(r => r?.failedAuthorizationId === request.data.failedAuthorizationId) || phase !== "HUMAN_REQUIRED" ||
             stopReason !== "GOVERNED_BLOCKED" || startedAt === null || pendingIntegration !== null ||
-            event.at >= new Date(Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString() ||
+            event.at >= new Date(qaRecovery !== undefined ? Date.parse(qaRecovery.authorizedAt) + qaRecovery.durationMilliseconds :
+              windowRenewal !== undefined ? Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds :
+              Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString() ||
             request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
             request.data.repositoryHeadSha !== approval.request.repositoryHeadSha || !roles.has(request.data.failedAuthorizationId) ||
             executionCanonical(request.data) !== executionCanonical(event.request) ||
@@ -224,7 +232,8 @@ export class BigTaskExecutionStore {
             failed.normalizedUsage?.totalTokens === undefined || next.recovery_attempt !== 1 || next.authorized_at !== event.at ||
             Object.keys(next).some(key => !["authorization_id", "authorized_at", "recovery_attempt"].includes(key) && next[key] !== old[key]) ||
             access(this.storage).sqlite.prepare("SELECT 1 FROM governed_role_results WHERE authorization_id=?").get(request.data.failedAuthorizationId)) fail("MALFORMED_STORED_DATA");
-          recovery = { ...request.data, authorizationId: event.authorizationId };
+          const recorded = { ...request.data, authorizationId: event.authorizationId };
+          if (recovery === undefined) recovery = recorded; else additionalRecoveries.push(recorded);
           phase = "PAUSED"; stopReason = "CHECKPOINT_RECOVERED"; break;
         }
         case "WINDOW_RENEWED": {
@@ -311,6 +320,7 @@ export class BigTaskExecutionStore {
       roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }), ...(qaRecovery === undefined ? {} : { qaRecovery }),
       ...(lastRoleFailure === undefined ? {} : { lastRoleFailure }),
       ...(lastControlFailure === undefined ? {} : { lastControlFailure }),
+      ...(additionalRecoveries.length === 0 ? {} : { additionalRecoveries }),
       ...(windowRenewal === undefined ? {} : { windowRenewal }), resultRef: approval.resultRef, resultHeadSha: head,
       integratedSubtaskIds: Object.freeze(integrated), pendingIntegration, resultRefCreated });
     if (!BigTaskExecutionStatusSchema.safeParse(status).success) fail("MALFORMED_STORED_DATA");
@@ -323,12 +333,13 @@ export class BigTaskExecutionStore {
     if (executionCanonical(request) !== executionCanonical(input)) fail("INVALID_INPUT");
     const record = (): BigTaskExecutionStatus => {
       const state = this.inspect(request.bigTaskId);
-      if (state.recovery !== undefined) {
-        const original = BigTaskExecutionRecoverySchema.parse(Object.fromEntries(Object.entries(state.recovery).filter(([key]) => key !== "authorizationId")));
+      const prior = executionRecoveries(state).find(r => r.failedAuthorizationId === request.failedAuthorizationId);
+      if (prior !== undefined) {
+        const original = BigTaskExecutionRecoverySchema.parse(Object.fromEntries(Object.entries(prior).filter(([key]) => key !== "authorizationId")));
         if (executionCanonical(original) !== executionCanonical(request)) fail();
         return state;
       }
-      if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" || !state.usageComplete ||
+      if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" || !executionUsageSettled(state) ||
         state.expiresAt === null || Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage)) || state.pendingIntegration !== null ||
         state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit ||
         request.planDigest !== state.planDigest || request.repositoryHeadSha !== this.#approval(request.bigTaskId).request.repositoryHeadSha) fail();
@@ -592,11 +603,12 @@ export class BigTaskExecutionStore {
   }
 
   #safeCheckpoint(bigTaskId: BigTaskId): boolean {
-    const { recovery, qaRecovery } = this.inspect(bigTaskId);
-    return access(this.storage).sqlite.prepare(`SELECT 1 FROM governed_role_execution_links link
+    const state = this.inspect(bigTaskId);
+    const recovered = new Set([...executionRecoveries(state).map(r => r.failedAuthorizationId), state.qaRecovery?.failedAuthorizationId]);
+    return access(this.storage).sqlite.prepare(`SELECT auth.authorization_id FROM governed_role_execution_links link
       JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id
       LEFT JOIN execution_runs run ON run.id = link.execution_run_id
-      WHERE auth.big_task_id = ? AND auth.authorization_id NOT IN (?,?) AND (run.status IS NULL OR run.status != 'SUCCEEDED') LIMIT 1`).get(bigTaskId, recovery?.failedAuthorizationId ?? '', qaRecovery?.failedAuthorizationId ?? '') === undefined;
+      WHERE auth.big_task_id = ? AND (run.status IS NULL OR run.status != 'SUCCEEDED')`).all(bigTaskId).every(row => recovered.has(String(row.authorization_id)));
   }
 
   #usage(bigTaskId: BigTaskId, acknowledgedRunId?: string): { knownTokens: number; usageComplete: boolean; activeRoleCount: number; unknownCompletedUsage: boolean; unacknowledgedUnknownUsage?: boolean } {

@@ -103,6 +103,7 @@ export const BigTaskExecutionStatusSchema = z.object({
   startedAt: timestamp.nullable(), expiresAt: timestamp.nullable(), limits: BigTaskExecutionLimitsSchema,
   roleCalls: z.number().int().nonnegative().max(192), knownTokens: z.number().int().nonnegative(), usageComplete: z.boolean(), activeRoleCount: z.number().int().min(0).max(1), unknownCompletedUsage: z.boolean(),
   recovery: recovery.optional(),
+  additionalRecoveries: z.array(recovery).min(1).max(23).optional(),
   windowRenewal: windowRenewal.optional(),
   qaRecovery: qaRecovery.optional(), unacknowledgedUnknownUsage: z.boolean().optional(),
   lastRoleFailure: BigTaskRoleFailureSchema.extend({ at: timestamp }).strict().optional(),
@@ -110,6 +111,8 @@ export const BigTaskExecutionStatusSchema = z.object({
   resultRef: z.string().regex(/^refs\/heads\/codex\/execution\/[a-f0-9]{32}$/u), resultHeadSha: RepositoryCommitShaSchema,
   integratedSubtaskIds: z.array(SubtaskIdSchema).max(24), pendingIntegration: integration.nullable(), resultRefCreated: z.boolean(),
 }).strict().refine(v => v.roleCalls <= v.limits.roleCallLimit && v.usageComplete === (v.activeRoleCount === 0 && !v.unknownCompletedUsage) && new Set(v.integratedSubtaskIds).size === v.integratedSubtaskIds.length &&
+  (v.additionalRecoveries === undefined || v.recovery !== undefined &&
+    new Set([v.recovery, ...v.additionalRecoveries].map(r => r.failedAuthorizationId)).size === v.additionalRecoveries.length + 1) &&
   (v.qaRecovery === undefined ? v.unacknowledgedUnknownUsage === undefined : v.recovery !== undefined && v.unknownCompletedUsage &&
     v.unacknowledgedUnknownUsage !== undefined && v.limits.totalTokenLimit === v.qaRecovery.knownTokenLimit) &&
   (v.phase === "APPROVED" ? v.startedAt === null && v.expiresAt === null && v.roleCalls === 0 && v.windowRenewal === undefined && v.qaRecovery === undefined :

@@ -1,11 +1,11 @@
-import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId, executionGit } from "./big-task-execution.js";
+import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId, executionGit, executionRecoveries } from "./big-task-execution.js";
 import { checkExecutionGitFilters, executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import {
   BigTaskExecutionRecoverySchema,
-  BigTaskQaRecoverySchema, hasUnacknowledgedExecutionUsage,
+  BigTaskQaRecoverySchema, hasUnacknowledgedExecutionUsage, executionUsageSettled,
   ChatThreadIdSchema,
   NormalizedUsageSchema,
   DEFAULT_V1_BUDGET_POLICY,
@@ -1073,13 +1073,14 @@ export class GovernedExecutionStore {
     const execution = new BigTaskExecutionStore(this.#storage);
     const state = execution.inspect(bigTaskId);
     execution.assertCurrent(bigTaskId);
-    if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" || state.recovery !== undefined ||
-      !state.usageComplete || state.expiresAt === null || Date.parse(state.expiresAt) <= this.#access().clock().getTime() ||
+    if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" ||
+      !executionUsageSettled(state) || state.expiresAt === null || Date.parse(state.expiresAt) <= this.#access().clock().getTime() ||
       state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit || state.pendingIntegration !== null) throw conflict("Recovery is unavailable.");
     this.#validateBigTaskAuthority(bigTaskId);
+    const recovered = new Set([...executionRecoveries(state).map(r => r.failedAuthorizationId), state.qaRecovery?.failedAuthorizationId]);
     const rows = this.#access().sqlite.prepare(`SELECT a.authorization_id, l.execution_run_id FROM governed_role_authorizations a
       JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id JOIN execution_runs r ON r.id=l.execution_run_id
-      WHERE a.big_task_id=? AND r.status!='SUCCEEDED'`).all(bigTaskId);
+      WHERE a.big_task_id=? AND r.status!='SUCCEEDED'`).all(bigTaskId).filter(row => !recovered.has(String(row.authorization_id)));
     if (rows.length !== 1) throw conflict("One known failed implementation is required.");
     const authorization = this.getRoleAuthorization(String(rows[0]!.authorization_id))!;
     const run = this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(rows[0]!.execution_run_id));
@@ -1099,7 +1100,7 @@ export class GovernedExecutionStore {
     const request = BigTaskExecutionRecoverySchema.parse(input);
     return this.#storage.runInTransaction(() => {
       const execution = new BigTaskExecutionStore(this.#storage);
-      if (execution.inspect(request.bigTaskId).recovery !== undefined) return execution.recover(input);
+      if (executionRecoveries(execution.inspect(request.bigTaskId)).some(r => r.failedAuthorizationId === request.failedAuthorizationId)) return execution.recover(input);
       if (JSON.stringify(this.reviewExecutionRecovery(request.bigTaskId).request) !== JSON.stringify(request)) throw conflict("Recovery review changed.");
       return execution.recover(input);
     });
@@ -1147,7 +1148,7 @@ export class GovernedExecutionStore {
   #candidateReadyForRole(authorization: GovernedRoleAuthorization, worktree: ResolvedActiveOwnedWorktree): boolean {
     if (!isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)) return candidateIsClean(this.#storage, worktree.ownership);
     const execution = new BigTaskExecutionStore(this.#storage);
-    const recovery = execution.inspect(authorization.bigTaskId as BigTaskId).recovery;
+    const recovery = executionRecoveries(execution.inspect(authorization.bigTaskId as BigTaskId)).find(r => r.authorizationId === authorization.authorizationId);
     return recovery?.authorizationId === authorization.authorizationId
       ? recovery.candidateDigest === executionCandidateDigest(worktree.ownership, () => execution.remainingMilliseconds(authorization.bigTaskId as BigTaskId))
       : candidateIsClean(this.#storage, worktree.ownership);
@@ -1554,7 +1555,7 @@ export class GovernedExecutionStore {
       .get(authorizationId) as RoleAuthorizationRow | undefined;
     if (row?.recovery_attempt === 1) {
       const state = new BigTaskExecutionStore(this.#storage).inspect(row.big_task_id as BigTaskId);
-      if (![state.recovery?.authorizationId, state.qaRecovery?.authorizationId].includes(row.authorization_id)) throw malformed();
+      if (![...executionRecoveries(state).map(r => r.authorizationId), state.qaRecovery?.authorizationId].includes(row.authorization_id)) throw malformed();
     }
     return row === undefined ? null : parseRoleAuthorizationRow(row);
   }
@@ -3623,7 +3624,7 @@ export class GovernedExecutionStore {
       const authorization = parseRoleAuthorizationRow(row);
       if (row.recovery_attempt === 1) {
         const state = new BigTaskExecutionStore(this.#storage).inspect(bigTaskId);
-        if (![state.recovery?.authorizationId, state.qaRecovery?.authorizationId].includes(authorization.authorizationId)) throw malformed();
+        if (![...executionRecoveries(state).map(r => r.authorizationId), state.qaRecovery?.authorizationId].includes(authorization.authorizationId)) throw malformed();
       }
       const view = this.#requiredWorkflowView(authorization.subtaskId);
       const prior = view.transitions[authorization.workflowSequence - 2];

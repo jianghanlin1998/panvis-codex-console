@@ -361,6 +361,20 @@ describe("governed Codex role execution", () => {
 });
 
 describe("Step 8D governed provider hardening", () => {
+  it.each(["phased-completed", "phased-stream", "phased-missing-final", "phased-two-finals", "legacy-progress"])("uses the authoritative final answer independently of commentary (%s)", async scenario => {
+    const fixture = createFixture();
+    try {
+      const prepared = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,
+        prepared.authorization.authorizationId, dependencies("EXECUTE", false, scenario));
+      const valid = scenario === "phased-completed" || scenario === "phased-stream" || scenario === "legacy-progress";
+      expect(result.success).toBe(valid);
+      if (valid) expect(result.roleResult).toMatchObject({ outcome: "READY", summary: "EXECUTE completed." });
+      else expect(result.roleResult).toBeNull();
+      expect(result.appServerChildCleaned).toBe(true);
+      expect(result.transientRuntimeCleaned).toBe(true);
+    } finally { cleanup(fixture); }
+  });
   it.each([
     "malformed-initialization", "wrong-cwd", "wrong-sandbox", "approval-request",
     "duplicate-item", "wrong-thread", "wrong-turn", "post-terminal", "duplicate-key",

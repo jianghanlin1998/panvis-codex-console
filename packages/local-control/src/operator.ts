@@ -703,7 +703,9 @@ const validateResponseShape = (
     case "execution-recover": {
       const parsed = BigTaskExecutionStatusSchema.safeParse(value);
       if (!parsed.success || parsed.data.recovery === undefined) return false;
-      const request = Object.fromEntries(Object.entries(parsed.data.recovery).filter(([key]) => key !== "authorizationId"));
+      const recorded = [parsed.data.recovery, ...(parsed.data.additionalRecoveries ?? [])].find(r => r.failedAuthorizationId === command.recovery.failedAuthorizationId);
+      if (recorded === undefined) return false;
+      const request = Object.fromEntries(Object.entries(recorded).filter(([key]) => key !== "authorizationId"));
       return JSON.stringify(BigTaskExecutionRecoverySchema.parse(request)) === JSON.stringify(command.recovery);
     }
     case "execution-review": return isExecutionReview(value, command.bigTaskId);

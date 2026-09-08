@@ -239,6 +239,11 @@ lines.on("line", (line) => {
     if (scenario === "wrong-fields") resultText = resultText.replace('"schemaVersion":1', '"unexpected":true,"schemaVersion":1');
     if (scenario === "oversized") resultText = "x".repeat(17 * 1024);
     if (scenario === "malformed-unicode") resultText = resultText.replace(`${role} completed.`, "\\ud800");
+    if (scenario?.startsWith("phased-") || scenario === "legacy-progress") {
+      send({method: "item/completed", params: {threadId, turnId,
+        item: {id: "progress", type: "agentMessage", ...(scenario === "legacy-progress" ? {} : {phase: "commentary"}), text: "Implementation is in progress."}}});
+      if (scenario === "phased-stream") send({method: "item/agentMessage/delta", params: {threadId, turnId, itemId: "governed-agent-message", delta: "incomplete streamed fragment"}});
+    }
     send({
       method: "item/completed",
       params: {
@@ -247,11 +252,14 @@ lines.on("line", (line) => {
         item: {
           id: "governed-agent-message",
           type: "agentMessage",
+          ...(scenario?.startsWith("phased-") ? { phase: scenario === "phased-missing-final" ? "commentary" : "final_answer" } : {}),
           status: "completed",
           text: malformed ? "not-json" : resultText,
         },
       },
     });
+    if (scenario === "phased-two-finals") send({method: "item/completed", params: {threadId, turnId,
+      item: {id: "second-final", type: "agentMessage", phase: "final_answer", text: resultText}}});
     if (scenario === "duplicate-item") send({method: "item/completed", params: {threadId, turnId,
       item: {id: "governed-agent-message", type: "agentMessage", status: "completed", text: resultText}}});
     send({

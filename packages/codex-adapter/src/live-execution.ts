@@ -548,7 +548,12 @@ class TurnEventTracker {
   turnId: string | null = null;
   terminal: TerminalEvent | null = null;
   normalizedUsage: NormalizedUsage | null = null;
-  responseText = "";
+  #responseText = "";
+  #finalAnswerText: string | null = null;
+  #lastCompletedAgentText: string | null = null;
+  readonly #completedAgentIds = new Set<string>();
+  #sawMessagePhase = false;
+  get responseText(): string { return this.#finalAnswerText ?? this.#lastCompletedAgentText ?? this.#responseText; }
   #chatGptAuthenticated = false;
   readonly #deltaItemIds = new Set<string>();
   readonly #writeToolItems = new Map<string, WriteToolItemState>();
@@ -695,6 +700,23 @@ class TurnEventTracker {
         }
         if (method === "item/completed" && itemType === "agentMessage") {
           const itemId = requireBoundedString(item.id, 512);
+          if (this.#completedAgentIds.has(itemId)) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+          this.#completedAgentIds.add(itemId);
+          const completedText = requireString(item.text);
+          if (Buffer.byteLength(completedText, "utf8") > this.maxAgentResponseBytes) throw new LiveExecutionError("AGENT_RESPONSE_LIMIT_EXCEEDED");
+          // Older producers omit phase; their last completed message remains
+          // separate from prior progress messages and is authoritative too.
+          this.#lastCompletedAgentText = completedText;
+          if (item.phase !== undefined && item.phase !== null) {
+            if (item.phase !== "commentary" && item.phase !== "final_answer") throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+            this.#sawMessagePhase = true;
+            if (item.phase === "final_answer") {
+              if (this.#finalAnswerText !== null) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+              // Completed items are authoritative; progress and streaming
+              // fragments are not the final structured deliverable.
+              this.#finalAnswerText = completedText;
+            }
+          }
           if (!this.#deltaItemIds.has(itemId)) {
             this.#appendAgentText(requireString(item.text));
           }
@@ -766,6 +788,7 @@ class TurnEventTracker {
           this.threadId === null ||
           this.turnId === null ||
           this.terminal !== null ||
+          (this.#sawMessagePhase && this.#finalAnswerText === null) ||
           [...this.#writeToolItems.values()].some(
             (item) => item.state !== "COMPLETED",
           )
@@ -985,11 +1008,11 @@ class TurnEventTracker {
   }
 
   #appendAgentText(text: string): void {
-    const combined = this.responseText + text;
+    const combined = this.#responseText + text;
     if (Buffer.byteLength(combined, "utf8") > this.maxAgentResponseBytes) {
       throw new LiveExecutionError("AGENT_RESPONSE_LIMIT_EXCEEDED");
     }
-    this.responseText = combined;
+    this.#responseText = combined;
   }
 }
 

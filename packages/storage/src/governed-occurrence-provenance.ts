@@ -142,7 +142,11 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
           const approval = BigTaskExecutionApprovalSchema.parse(JSON.parse(String(approvalRow?.payload)).request);
           const parsedEvents = events.map(row => JSON.parse(String(row.payload)) as {kind: string; request?: unknown});
           const recoveries = parsedEvents.filter(event => event.kind === "RECOVERY");
-          if (recoveries.length !== 1) malformed();
+          if (recoveries.length < 1 || recoveries.length > 24) malformed();
+          for (const event of recoveries) {
+            const value = BigTaskExecutionRecoverySchema.parse(event.request);
+            if (value.bigTaskId !== owner.bigTaskId || value.planDigest !== approval.planDigest || value.repositoryHeadSha !== approval.repositoryHeadSha) malformed();
+          }
           const recovery = BigTaskExecutionRecoverySchema.parse(recoveries[0]!.request);
           if (recovery.bigTaskId !== owner.bigTaskId || recovery.planDigest !== approval.planDigest || recovery.repositoryHeadSha !== approval.repositoryHeadSha ||
             extensionAuthorityId !== null || budget.extensionApplied) malformed();
