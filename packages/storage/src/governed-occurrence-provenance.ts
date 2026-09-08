@@ -135,6 +135,7 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
     case "budget": {
       const {budget, extensionAuthorityId, subtaskId} = observation.value;
       let approvedAggregateLimit: number | undefined;
+      let warningOnly = false;
       if (budget.scope === "BIG_TASK") {
         const approvalRow = sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id=?").get(owner.bigTaskId);
         const events = sqlite.prepare("SELECT payload FROM big_task_execution_events WHERE big_task_id=? ORDER BY sequence").all(owner.bigTaskId);
@@ -150,9 +151,13 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
           const recovery = BigTaskExecutionRecoverySchema.parse(recoveries[0]!.request);
           if (recovery.bigTaskId !== owner.bigTaskId || recovery.planDigest !== approval.planDigest || recovery.repositoryHeadSha !== approval.repositoryHeadSha ||
             extensionAuthorityId !== null || budget.extensionApplied) malformed();
+          if (budget.totalBudgetMode !== undefined) {
+            if (budget.totalBudgetMode !== "WARNING_ONLY" || !recoveries.some(event => BigTaskExecutionRecoverySchema.parse(event.request).totalBudgetMode === "WARNING_ONLY")) malformed();
+            warningOnly = true;
+          }
           const warningTokens = budget.subtaskKnownTokens ?? budget.totalTokens;
           if (!Number.isSafeInteger(warningTokens) || warningTokens === null || warningTokens < 0 ||
-            warningTokens > (budget.totalTokens ?? -1) || budget.warning !== (warningTokens >= 120_000)) malformed();
+            warningTokens > (budget.totalTokens ?? -1) || budget.warning !== (warningTokens >= 120_000 || warningOnly && (budget.totalTokens ?? 0) >= budget.effectiveLimitTokens)) malformed();
           approvedAggregateLimit = approval.limits.totalTokenLimit;
           // Historical observations retain their original ceiling. A raised
           // ceiling must be backed by the immutable, exact-task QA recovery.
@@ -167,7 +172,7 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
       }
 
       if (subtaskId !== owner.subtaskId || !budget.allowed || !Number.isSafeInteger(budget.totalTokens) || budget.totalTokens === null ||
-          budget.totalTokens < 0 || budget.totalTokens >= budget.effectiveLimitTokens ||
+          budget.totalTokens < 0 || (!warningOnly && budget.totalTokens >= budget.effectiveLimitTokens) ||
           budget.effectiveLimitTokens !== (approvedAggregateLimit ?? (extensionAuthorityId === null ? 120_000 : 160_000)) ||
           budget.extensionApplied !== (extensionAuthorityId !== null)) malformed();
       if (extensionAuthorityId !== null) {

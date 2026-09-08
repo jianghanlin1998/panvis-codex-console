@@ -23,6 +23,7 @@ import type {
   TaskStorage,
 } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   FIXED_TIME,
   captureTaskStorageError,
   fixedClock,
@@ -1600,7 +1601,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
         .map((row) => (row as { readonly name: string }).name);
       sqliteAfter.close();
       expect(schemaAfter).toBe(schemaBefore);
-      expect(migrationCount.count).toBe(25);
+      expect(migrationCount.count).toBe(EXPECTED_CURRENT_MIGRATION_COUNT);
       expect(tables).toEqual([
         "__drizzle_migrations",
         "audit_events",

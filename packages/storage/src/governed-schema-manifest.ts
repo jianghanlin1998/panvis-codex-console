@@ -107,7 +107,7 @@ export const governedSchemaManifest: Readonly<Record<string, string>> = Object.f
   "governed_role_authorization_immutable_delete": "072cfca99e05fbbd0fb0ef1b3ab58e1766cf1294ec9124331e92e5577b7a63f0",
   "governed_role_authorization_immutable_update": "35e18883c85ab173e5b900722b4d56a8cd6a0d33c1b6734defd45337851b418e",
   "governed_role_authorizations": "eb61c6fc668dc0100c2e46161f24574dcff6c6ff948e45f9a75716c3e1ade594",
-  "governed_role_authorizations_insert_conflict": "3fdc9dd2238c14bcd6b64e66c21e55da003206d6401984a779ed32b3bbecc1f1",
+  "governed_role_authorizations_insert_conflict": "62839c2749700b983327afeae8511c9e495eee284f78e84d41ecb15d6c82c16c",
   "governed_role_dispatch_index": "894ecaf5f64200791ff561ea32e58c481f87a4b787110eb7da59780ad2612941",
   "governed_role_execution_link_guard": "6b22280cbcd8318f7b1ae9722c7a3843d69d204fc32a6abff5c76a47baec5668",
   "governed_role_execution_link_immutable_delete": "f4f9b367b107d8c832eb2d8ad06f4486f01e251b57ff6d50b9d31870621bfc52",

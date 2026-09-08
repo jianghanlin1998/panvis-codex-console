@@ -13,6 +13,7 @@ import {
 import type { PlanCandidate, PlanReviewState } from "@codex-task-console/orchestration";
 import { openTaskDatabase } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   fixedClock,
   makeBigTask,
@@ -337,7 +338,7 @@ describe("canonical task materialization migration", () => {
         sqlite = new DatabaseSync(databasePath);
         expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get())
-          .toEqual({ count: predecessorMigrationNames.length + 13 });
+          .toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
         expect(() => sqlite.exec(
           "UPDATE canonical_task_materializations SET subtask_count = 9",
         )).toThrow();

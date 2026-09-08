@@ -15,7 +15,7 @@ import {
 import type { PlanCandidate } from "@codex-task-console/orchestration";
 import { governedStableId } from "../src/governed-evidence-validation.js";
 import { openTaskDatabase } from "../src/index.js";
-import { fixedClock, makeBigTask, withTemporaryDatabasePath } from "./fixtures.js";
+import { EXPECTED_CURRENT_MIGRATION_COUNT, fixedClock, makeBigTask, withTemporaryDatabasePath } from "./fixtures.js";
 
 const migrationsRoot = fileURLToPath(new URL("../drizzle", import.meta.url));
 const acceptedStep8cMigrationNames = [
@@ -171,7 +171,7 @@ describe("Operational Governed Execution V0 migration", () => {
       }
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 25 });
+      ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       sqlite.close();
 
       storage = openTaskDatabase({ databasePath, clock: fixedClock });

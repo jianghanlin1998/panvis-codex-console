@@ -478,16 +478,18 @@ const budgetFields = {
   status: oneOf("AVAILABLE", "AVAILABLE_WARNING", "HARD_PAUSE", "ABSOLUTE_CEILING", "UNKNOWN_USAGE"),
   allowed: wireBoolean, totalTokens: nullable(wireCount), warning: wireBoolean,
   extensionApplied: wireBoolean, effectiveLimitTokens: oneOf(120_000, 160_000),
-} satisfies WireFields<Omit<AggregateSubtaskUsageBudget, "scope" | "subtaskKnownTokens">>;
+} satisfies WireFields<Omit<AggregateSubtaskUsageBudget, "scope" | "subtaskKnownTokens" | "totalBudgetMode">>;
 const isGovernedBudget: WireCheck = value => {
   if (isRecord(value) && value.scope === "BIG_TASK") {
     if (!matchesFields(value, { ...budgetFields, scope: oneOf("BIG_TASK"), effectiveLimitTokens: wireCount,
-      ...("subtaskKnownTokens" in value ? { subtaskKnownTokens: wireCount } : {}) }) ||
+      ...("subtaskKnownTokens" in value ? { subtaskKnownTokens: wireCount } : {}),
+      ...("totalBudgetMode" in value ? { totalBudgetMode: oneOf("WARNING_ONLY") } : {}) }) ||
       typeof value.effectiveLimitTokens !== "number" || value.effectiveLimitTokens < 1 || value.effectiveLimitTokens > 2_880_000 ||
       typeof value.totalTokens !== "number" || value.extensionApplied !== false) return false;
     const warningTokens = value.subtaskKnownTokens ?? value.totalTokens;
     if (typeof warningTokens !== "number" || warningTokens > value.totalTokens) return false;
-    const allowed = value.totalTokens < value.effectiveLimitTokens, warning = warningTokens >= 120_000;
+    const allowed = value.totalBudgetMode === "WARNING_ONLY" || value.totalTokens < value.effectiveLimitTokens;
+    const warning = warningTokens >= 120_000 || value.totalBudgetMode === "WARNING_ONLY" && value.totalTokens >= value.effectiveLimitTokens;
     return value.allowed === allowed && value.warning === warning &&
       value.status === (!allowed ? "ABSOLUTE_CEILING" : warning ? "AVAILABLE_WARNING" : "AVAILABLE");
   }

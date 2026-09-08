@@ -15,6 +15,7 @@ import type { PlanCandidate, PlanReviewState } from "@codex-task-console/orchest
 import { openTaskDatabase } from "../src/index.js";
 import type { TaskStorage } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   makeBigTask,
   withTemporaryDatabasePath,
@@ -219,7 +220,7 @@ describe("Step 8B3a migration generation hardening", () => {
         expect(sqlite.prepare("SELECT count(*) AS count FROM workflow_initialization_receipts").get())
           .toEqual({ count: 0 });
         expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get())
-          .toEqual({ count: predecessorMigrationNames.length + 12 });
+          .toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
         expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         sqlite.close();
 

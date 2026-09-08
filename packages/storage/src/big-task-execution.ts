@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { devNull, tmpdir } from "node:os";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { BigTaskQaRecoverySchema, BigTaskRoleFailureSchema, executionUsageSettled, hasUnacknowledgedExecutionUsage, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
+import { BigTaskQaRecoverySchema, BigTaskRoleFailureSchema, executionUsageSettled, executionTokenLimitReached, hasUnacknowledgedExecutionUsage, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
 import type { BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
 import { TaskStorageError } from "./errors.js";
 import type { TaskStorage } from "./task-storage.js";
@@ -100,6 +100,7 @@ export interface BigTaskExecutionStatus {
   readonly activeRoleCount: number;
   readonly unknownCompletedUsage: boolean;
   readonly recovery?: BigTaskExecutionRecovery & { readonly authorizationId: string };
+  readonly totalBudgetMode?: "WARNING_ONLY";
   readonly additionalRecoveries?: readonly NonNullable<BigTaskExecutionStatus["recovery"]>[];
   readonly windowRenewal?: Pick<BigTaskExecutionWindowRenewal, "previousExpiresAt" | "durationMilliseconds"> & { readonly renewedAt: string };
   readonly qaRecovery?: BigTaskQaRecovery & { readonly authorizationId: string; readonly authorizedAt: string };
@@ -215,7 +216,8 @@ export class BigTaskExecutionStore {
           const request = BigTaskExecutionRecoverySchema.safeParse(event.request);
           if (Object.keys(event).length !== 4 || !request.success || additionalRecoveries.length >= 23 ||
             [recovery, ...additionalRecoveries].some(r => r?.failedAuthorizationId === request.data.failedAuthorizationId) || phase !== "HUMAN_REQUIRED" ||
-            stopReason !== "GOVERNED_BLOCKED" || startedAt === null || pendingIntegration !== null ||
+            !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED"].includes(stopReason ?? "") ||
+            (stopReason === "TOKEN_LIMIT_REACHED" && request.data.totalBudgetMode !== "WARNING_ONLY") || startedAt === null || pendingIntegration !== null ||
             event.at >= new Date(qaRecovery !== undefined ? Date.parse(qaRecovery.authorizedAt) + qaRecovery.durationMilliseconds :
               windowRenewal !== undefined ? Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds :
               Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString() ||
@@ -227,7 +229,7 @@ export class BigTaskExecutionStore {
           const old = access(this.storage).sqlite.prepare(`SELECT a.*, l.execution_run_id FROM governed_role_authorizations a
             JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id WHERE a.authorization_id=?`).get(request.data.failedAuthorizationId);
           const next = access(this.storage).sqlite.prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id=?").get(event.authorizationId);
-          if (old === undefined || next === undefined || old.big_task_id !== bigTaskId || old.role !== "EXECUTE" || old.recovery_attempt !== 0 ||
+          if (old === undefined || next === undefined || old.big_task_id !== bigTaskId || old.recovery_attempt !== 0 ||
             old.execution_run_id !== request.data.failedExecutionRunId || failed === null || !["FAILED", "INTERRUPTED"].includes(failed.status) ||
             failed.normalizedUsage?.totalTokens === undefined || next.recovery_attempt !== 1 || next.authorized_at !== event.at ||
             Object.keys(next).some(key => !["authorization_id", "authorized_at", "recovery_attempt"].includes(key) && next[key] !== old[key]) ||
@@ -321,6 +323,7 @@ export class BigTaskExecutionStore {
       ...(lastRoleFailure === undefined ? {} : { lastRoleFailure }),
       ...(lastControlFailure === undefined ? {} : { lastControlFailure }),
       ...(additionalRecoveries.length === 0 ? {} : { additionalRecoveries }),
+      ...([recovery, ...additionalRecoveries].some(r => r?.totalBudgetMode === "WARNING_ONLY") ? { totalBudgetMode: "WARNING_ONLY" as const } : {}),
       ...(windowRenewal === undefined ? {} : { windowRenewal }), resultRef: approval.resultRef, resultHeadSha: head,
       integratedSubtaskIds: Object.freeze(integrated), pendingIntegration, resultRefCreated });
     if (!BigTaskExecutionStatusSchema.safeParse(status).success) fail("MALFORMED_STORED_DATA");
@@ -339,20 +342,20 @@ export class BigTaskExecutionStore {
         if (executionCanonical(original) !== executionCanonical(request)) fail();
         return state;
       }
-      if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" || !executionUsageSettled(state) ||
+      if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED"].includes(state.stopReason ?? "") || !executionUsageSettled(state) ||
         state.expiresAt === null || Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage)) || state.pendingIntegration !== null ||
-        state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit ||
+        (request.totalBudgetMode !== "WARNING_ONLY" && executionTokenLimitReached(state)) || state.roleCalls >= state.limits.roleCallLimit ||
         request.planDigest !== state.planDigest || request.repositoryHeadSha !== this.#approval(request.bigTaskId).request.repositoryHeadSha) fail();
       this.assertCurrent(request.bigTaskId);
       const sql = access(this.storage).sqlite;
       const failed = sql.prepare(`SELECT a.*, l.execution_run_id FROM governed_role_authorizations a
         JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id WHERE a.authorization_id=?`).get(request.failedAuthorizationId);
       const run = this.storage.getExecutionRunById(request.failedExecutionRunId);
-      if (failed === undefined || failed.big_task_id !== request.bigTaskId || failed.role !== "EXECUTE" || failed.recovery_attempt !== 0 ||
+      if (failed === undefined || failed.big_task_id !== request.bigTaskId || failed.recovery_attempt !== 0 ||
         failed.execution_run_id !== request.failedExecutionRunId || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
         run.normalizedUsage?.totalTokens === undefined || sql.prepare("SELECT 1 FROM governed_role_results WHERE authorization_id=?").get(request.failedAuthorizationId)) fail();
       const view = this.storage.getDurableWorkflowControlView(failed.subtask_id as SubtaskId);
-      if (view?.currentStage !== "EXECUTE" || view.transitionCount + 1 !== failed.workflow_sequence || view.unresolvedHumanRequired !== null) fail();
+      if (view === null || view.currentStage !== failed.role || view.transitionCount + 1 !== failed.workflow_sequence || view.unresolvedHumanRequired !== null) fail();
       const at = timestamp(this.storage), authorizationId = recoveryAuthorizationId(request.failedAuthorizationId);
       sql.prepare(`INSERT INTO governed_role_authorizations
         (authorization_id, dispatch_receipt_id, project_id, big_task_id, plan_revision, candidate_binding, subtask_id, workflow_sequence,
@@ -381,7 +384,7 @@ export class BigTaskExecutionStore {
       const at = timestamp(this.storage);
       if (state.phase !== "PAUSED" || state.stopReason !== "CHECKPOINT_RECOVERED" || state.recovery === undefined ||
         state.expiresAt !== request.previousExpiresAt || at < request.previousExpiresAt || state.pendingIntegration !== null ||
-        !state.usageComplete || state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit ||
+        !state.usageComplete || executionTokenLimitReached(state) || state.roleCalls >= state.limits.roleCallLimit ||
         access(this.storage).sqlite.prepare("SELECT 1 FROM governed_role_execution_links WHERE authorization_id=?").get(state.recovery.authorizationId) ||
         !this.#safeCheckpoint(request.bigTaskId)) fail();
       this.assertCurrent(request.bigTaskId);
@@ -465,7 +468,7 @@ export class BigTaskExecutionStore {
       if (state.phase !== "APPROVED" && state.phase !== "PAUSED") fail();
       this.assertCurrent(bigTaskId);
       if (state.expiresAt !== null && Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage))) fail();
-      if (!this.#safeCheckpoint(bigTaskId) || !executionUsageSettled(state) || state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit) fail();
+      if (!this.#safeCheckpoint(bigTaskId) || !executionUsageSettled(state) || executionTokenLimitReached(state) || state.roleCalls >= state.limits.roleCallLimit) fail();
       this.#append(bigTaskId, { kind: "START", at: timestamp(this.storage) });
       this.storage.materializeDurablePlan(bigTaskId);
       return { claimed: true, status: this.inspect(bigTaskId) };
@@ -494,7 +497,7 @@ export class BigTaskExecutionStore {
 
   assertRunning(bigTaskId: BigTaskId): BigTaskExecutionStatus {
     const state = this.inspect(bigTaskId);
-    if (state.phase !== "RUNNING" || this.remainingMilliseconds(bigTaskId) <= 0 || hasUnacknowledgedExecutionUsage(state) || state.knownTokens >= state.limits.totalTokenLimit) fail();
+    if (state.phase !== "RUNNING" || this.remainingMilliseconds(bigTaskId) <= 0 || hasUnacknowledgedExecutionUsage(state) || executionTokenLimitReached(state)) fail();
     this.assertCurrent(bigTaskId);
     if (this.remainingMilliseconds(bigTaskId) <= 0) fail();
     return state;
@@ -696,7 +699,7 @@ export function executionDeadlineForSubtask(storage: TaskStorage, subtaskId: Sub
     return Math.max(0, expiresAt - Date.parse(timestamp(storage)));
   };
   if (state.phase !== "RUNNING" || hasUnacknowledgedExecutionUsage(state) ||
-    state.knownTokens >= state.limits.totalTokenLimit || remaining() <= 0) fail();
+    executionTokenLimitReached(state) || remaining() <= 0) fail();
   return remaining;
 }
 

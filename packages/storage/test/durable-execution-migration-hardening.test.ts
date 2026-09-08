@@ -15,6 +15,7 @@ import {
 } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   createHierarchy,
   makeAuditEvent,
   makeBigTask,
@@ -185,7 +186,7 @@ describe("Durable Execution V0 migration hardening", () => {
         ]);
         expect(
           sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 25 });
+        ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
         const indexes = sqlite
           .prepare(
             "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name IN ('chat_threads', 'execution_runs') ORDER BY name",
@@ -351,7 +352,7 @@ describe("Durable Execution V0 migration hardening", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 25 });
+      ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       sqlite.close();
     });
   });
@@ -504,7 +505,7 @@ describe("Durable Execution V0 migration hardening", () => {
       ).toEqual({ count: 1 });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 25 });
+      ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       sqlite.close();
     });
   });

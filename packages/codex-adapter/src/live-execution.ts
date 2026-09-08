@@ -1521,7 +1521,7 @@ async function executeGovernedRoleCodexWithDependencies(
       (usage) => {
         normalizedUsage = usage;
         const bounds = governed.approvedRoleBounds(authorizationId);
-        if (bounds !== null && usage.totalTokens !== undefined && usage.totalTokens >= bounds.remainingTokens) {
+        if (bounds !== null && bounds.remainingTokens !== null && usage.totalTokens !== undefined && usage.totalTokens >= bounds.remainingTokens) {
           throw new LiveExecutionError("TURN_INTERRUPTED");
         }
       },

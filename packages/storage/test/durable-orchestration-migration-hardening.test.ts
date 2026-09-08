@@ -12,6 +12,7 @@ import {
 } from "@codex-task-console/domain";
 import { openTaskDatabase } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   fixedClock,
   makeBigTask,
@@ -115,7 +116,7 @@ describe("Step 8B1 migration predecessor matrix", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 25 });
+      ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       expect(
         sqlite
           .prepare(
@@ -239,7 +240,7 @@ describe("Step 8B1 migration predecessor matrix", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 25 });
+      ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       sqlite.close();
     });
   });

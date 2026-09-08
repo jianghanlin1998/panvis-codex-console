@@ -358,6 +358,6 @@ export type {
   PlanningRunRecord,
 } from "./big-task-planning.js";
 
-export { BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskRoleFailureSchema, GovernedExecutionFailureCodeSchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
+export { BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskRoleFailureSchema, GovernedExecutionFailureCodeSchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, executionTokenLimitReached, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
 export type { BigTaskControlFailure, BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskExecutionLimits } from "./big-task-execution.js";
 export { BigTaskControlFailureSchema } from "./big-task-execution.js";

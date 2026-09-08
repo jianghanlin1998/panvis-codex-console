@@ -14,6 +14,7 @@ import type {
 } from "@codex-task-console/domain";
 import { openTaskDatabase } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   fixedClock,
   makeAuditEvent,
   makeBigTask,
@@ -276,7 +277,7 @@ describe("S1A migration from the accepted S0B2b foundation", () => {
         ).toEqual({ count: 0 });
         expect(
           verified.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 25 });
+        ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
         expect(
           verified
             .prepare(

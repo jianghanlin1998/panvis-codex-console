@@ -13,6 +13,7 @@ import {
 } from "@codex-task-console/domain";
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   fixedClock,
   makeAuditEvent,
@@ -156,7 +157,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(25);
+        expect(row.count).toBe(EXPECTED_CURRENT_MIGRATION_COUNT);
       } finally {
         sqlite.close();
       }
@@ -173,7 +174,7 @@ describe("database lifecycle and migrations", () => {
         const row = sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get() as {
           readonly count: number;
         };
-        expect(row.count).toBe(25);
+        expect(row.count).toBe(EXPECTED_CURRENT_MIGRATION_COUNT);
       } finally {
         sqlite.close();
       }
@@ -748,7 +749,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           after.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 25 });
+        ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       } finally {
         after.close();
       }
@@ -868,7 +869,7 @@ describe("database lifecycle and migrations", () => {
         ).toEqual({ count: 0 });
         expect(
           migrated.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-        ).toEqual({ count: 25 });
+        ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       } finally {
         migrated.close();
       }

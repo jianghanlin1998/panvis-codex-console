@@ -15,6 +15,7 @@ import type { PlanCandidate, PlanReviewState } from "@codex-task-console/orchest
 import { openTaskDatabase } from "../src/index.js";
 import type { TaskStorage } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   fixedClock,
   makeBigTask,
@@ -166,7 +167,7 @@ describe("Step 8C workflow control migration", () => {
       }
       expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get())
-        .toEqual({ count: b3aMigrationNames.length + 11 });
+        .toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       sqlite.close();
 
       storage = openTaskDatabase({ databasePath, clock: fixedClock });
@@ -207,7 +208,7 @@ describe("Step 8C workflow control migration", () => {
         sqlite.prepare(
           "SELECT count(*) AS count FROM __drizzle_migrations",
         ).get(),
-      ).toEqual({ count: step8cImplementationMigrationNames.length + 10 });
+      ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       expect(
         sqlite.prepare(
           "SELECT count(*) AS count FROM durable_workflow_evidence_authorities",

@@ -3,7 +3,7 @@ import {
   executeBigTaskPlanningCodex,
   executeSingleSubtaskOwnedWorktreeCodex,
 } from "@codex-task-console/codex-adapter";
-import { BigTaskControlFailureSchema, executionUsageSettled, type BigTaskControlFailure } from "@codex-task-console/domain";
+import { BigTaskControlFailureSchema, executionUsageSettled, executionTokenLimitReached, type BigTaskControlFailure } from "@codex-task-console/domain";
 import type {
   GovernedRoleCodexExecutionResult,
   OwnedWorktreeCodexExecutionResult,
@@ -499,7 +499,7 @@ class ProductionLocalControlService implements LocalControlService {
         if (state.phase !== "RUNNING" || signal.aborted) return;
         if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
         if (!executionUsageSettled(state)) { execution.stop(bigTaskId, "USAGE_UNKNOWN"); return; }
-        if (state.knownTokens >= state.limits.totalTokenLimit) { execution.stop(bigTaskId, "TOKEN_LIMIT_REACHED"); return; }
+        if (executionTokenLimitReached(state)) { execution.stop(bigTaskId, "TOKEN_LIMIT_REACHED"); return; }
         phase = "PREPARE_ROLE";
         const prepared = this.#governed.prepareNextRole(bigTaskId);
         if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
@@ -517,7 +517,7 @@ class ProductionLocalControlService implements LocalControlService {
           const after = execution.inspect(bigTaskId);
           if (after.phase === "RUNNING") execution.stop(bigTaskId,
             execution.remainingMilliseconds(bigTaskId) === 0 ? "TIME_LIMIT_REACHED" :
-              !executionUsageSettled(after) ? "USAGE_UNKNOWN" : after.knownTokens >= after.limits.totalTokenLimit ? "TOKEN_LIMIT_REACHED" : "GOVERNED_BLOCKED");
+              !executionUsageSettled(after) ? "USAGE_UNKNOWN" : executionTokenLimitReached(after) ? "TOKEN_LIMIT_REACHED" : "GOVERNED_BLOCKED");
           return;
         }
         await new Promise<void>(resolve => setImmediate(resolve));

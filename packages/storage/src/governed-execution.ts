@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 
 import {
   BigTaskExecutionRecoverySchema,
-  BigTaskQaRecoverySchema, hasUnacknowledgedExecutionUsage, executionUsageSettled,
+  BigTaskQaRecoverySchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, executionTokenLimitReached,
   ChatThreadIdSchema,
   NormalizedUsageSchema,
   DEFAULT_V1_BUDGET_POLICY,
@@ -119,6 +119,7 @@ export interface AggregateSubtaskUsageBudget {
   readonly effectiveLimitTokens: number;
   readonly scope?: "BIG_TASK";
   readonly subtaskKnownTokens?: number;
+  readonly totalBudgetMode?: "WARNING_ONLY";
 }
 
 export interface GovernedDispatchReceipt {
@@ -1073,9 +1074,9 @@ export class GovernedExecutionStore {
     const execution = new BigTaskExecutionStore(this.#storage);
     const state = execution.inspect(bigTaskId);
     execution.assertCurrent(bigTaskId);
-    if (state.phase !== "HUMAN_REQUIRED" || state.stopReason !== "GOVERNED_BLOCKED" ||
+    if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED"].includes(state.stopReason ?? "") ||
       !executionUsageSettled(state) || state.expiresAt === null || Date.parse(state.expiresAt) <= this.#access().clock().getTime() ||
-      state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit || state.pendingIntegration !== null) throw conflict("Recovery is unavailable.");
+      (state.stopReason !== "TOKEN_LIMIT_REACHED" && executionTokenLimitReached(state)) || state.roleCalls >= state.limits.roleCallLimit || state.pendingIntegration !== null) throw conflict("Recovery is unavailable.");
     this.#validateBigTaskAuthority(bigTaskId);
     const recovered = new Set([...executionRecoveries(state).map(r => r.failedAuthorizationId), state.qaRecovery?.failedAuthorizationId]);
     const rows = this.#access().sqlite.prepare(`SELECT a.authorization_id, l.execution_run_id FROM governed_role_authorizations a
@@ -1085,14 +1086,15 @@ export class GovernedExecutionStore {
     const authorization = this.getRoleAuthorization(String(rows[0]!.authorization_id))!;
     const run = this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(rows[0]!.execution_run_id));
     this.#assertRoleAuthorizationCurrent(authorization);
-    if (authorization.role !== "EXECUTE" || !authorization.writeEnabled || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
+    if (this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt !== 0 || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
       run.normalizedUsage?.totalTokens === undefined || this.#getRoleResult(authorization.authorizationId) !== null) throw conflict("The failed role cannot be recovered.");
     const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
     if (worktree.ownership.id !== authorization.worktreeOwnershipId || worktree.currentHeadSha !== authorization.candidateSha) throw conflict("Recovery candidate changed.");
     const candidateDigest = executionCandidateDigest(worktree.ownership, () => Date.parse(state.expiresAt!) - this.#access().clock().getTime());
     return { request: { bigTaskId, planDigest: state.planDigest, repositoryHeadSha: execution.review(bigTaskId).repositoryHeadSha,
       failedAuthorizationId: authorization.authorizationId, failedExecutionRunId: run.id, candidateDigest,
-      model: "gpt-5.6-sol" as const, reasoningEffort: "xhigh" as const, subtaskBudgetMode: "WARNING_ONLY" as const },
+      model: "gpt-5.6-sol" as const, reasoningEffort: "xhigh" as const, subtaskBudgetMode: "WARNING_ONLY" as const,
+      ...(state.stopReason === "TOKEN_LIMIT_REACHED" || state.totalBudgetMode === "WARNING_ONLY" ? { totalBudgetMode: "WARNING_ONLY" as const } : {}) },
       knownTokens: state.knownTokens, expiresAt: state.expiresAt };
   }
 
@@ -1527,7 +1529,7 @@ export class GovernedExecutionStore {
     });
   }
 
-  approvedRoleBounds(authorizationId: string): { remainingMilliseconds: number; remainingTokens: number } | null {
+  approvedRoleBounds(authorizationId: string): { remainingMilliseconds: number; remainingTokens: number | null } | null {
     const authorization = this.getRoleAuthorization(authorizationId);
     if (authorization === null) throw malformed();
     const id = authorization.bigTaskId as BigTaskId;
@@ -1540,7 +1542,7 @@ export class GovernedExecutionStore {
     const subtaskBudget = this.#deriveAggregateBudget(authorization.subtaskId, true,
       link === undefined ? undefined : String(link.execution_run_id));
     return { remainingMilliseconds: execution.remainingMilliseconds(id),
-      remainingTokens: hasUnacknowledgedExecutionUsage(state) ? 0 : state.recovery !== undefined ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
+      remainingTokens: hasUnacknowledgedExecutionUsage(state) ? 0 : state.totalBudgetMode === "WARNING_ONLY" ? null : state.recovery !== undefined ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
         subtaskBudget.effectiveLimitTokens - (subtaskBudget.totalTokens ?? subtaskBudget.effectiveLimitTokens)) };
   }
 
@@ -2878,9 +2880,11 @@ export class GovernedExecutionStore {
     if (executionState !== null) {
       const state = executionState;
       if (state.recovery !== undefined) {
-        const allowed = !hasUnacknowledgedExecutionUsage(state) && state.knownTokens < state.limits.totalTokenLimit;
-        return freeze({ scope: "BIG_TASK" as const, status: !allowed ? "ABSOLUTE_CEILING" : total >= 120_000 ? "AVAILABLE_WARNING" : "AVAILABLE",
-          allowed, totalTokens: state.knownTokens, subtaskKnownTokens: total, warning: total >= 120_000, extensionApplied: false, effectiveLimitTokens: state.limits.totalTokenLimit });
+        const allowed = !hasUnacknowledgedExecutionUsage(state) && !executionTokenLimitReached(state);
+        const warning = total >= 120_000 || state.totalBudgetMode === "WARNING_ONLY" && state.knownTokens >= state.limits.totalTokenLimit;
+        return freeze({ scope: "BIG_TASK" as const, ...(state.totalBudgetMode === undefined ? {} : { totalBudgetMode: state.totalBudgetMode }),
+          status: !allowed ? "ABSOLUTE_CEILING" : warning ? "AVAILABLE_WARNING" : "AVAILABLE",
+          allowed, totalTokens: state.knownTokens, subtaskKnownTokens: total, warning, extensionApplied: false, effectiveLimitTokens: state.limits.totalTokenLimit });
       }
     }
     const extension = includeExtension ? this.#getBudgetExtension(subtaskId) : null;
@@ -2952,7 +2956,7 @@ export class GovernedExecutionStore {
       writeEnabled: authorization.writeEnabled,
       ...(this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt === 1 ? { recovery: authorization.role === "FRESH_QA"
         ? "Perform fresh independent QA of this exact candidate against its contract. The previous call produced no verdict. Inspect the repository and run the required checks using the read-only sandbox; return your own structured result."
-        : "Continue from the preserved partial implementation. The prior run failed; its files are unaccepted. Inspect and complete this same task, run all required tests, and return a fresh structured result. Do not redo preserved work unnecessarily or claim prior QA passed." } : {}),
+        : "Continue the current role from its preserved work. The prior run stopped without an accepted result. Inspect existing changes and tests, complete only the remaining work for this role, and return a fresh structured result. Do not redo preserved work unnecessarily or claim prior QA passed." } : {}),
       instruction: isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)
         ? roleInstruction(authorization.role).replace("Leave a clean committed candidate.",
           "Leave the exact bounded file changes for the Console coordinator to commit. Do not run Git writes, push, deploy, or change other checkouts.") +

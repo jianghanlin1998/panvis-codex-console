@@ -21,6 +21,7 @@ import type {
   TaskStorage,
 } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   FIXED_TIME,
   captureTaskStorageError,
   fixedClock,
@@ -1611,7 +1612,7 @@ describe("S1B2a migration and reopen hardening", () => {
               .prepare("SELECT count(*) AS count FROM __drizzle_migrations")
               .get() as { count: number }
           ).count,
-        ).toBe(25);
+        ).toBe(EXPECTED_CURRENT_MIGRATION_COUNT);
         verify.close();
       }
     });

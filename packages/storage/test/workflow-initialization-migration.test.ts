@@ -15,6 +15,7 @@ import type { PlanCandidate, PlanReviewState } from "@codex-task-console/orchest
 import { openTaskDatabase } from "../src/index.js";
 import type { TaskStorage } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   fixedClock,
   makeBigTask,
@@ -132,7 +133,7 @@ describe("workflow initialization migration", () => {
       expect(sqlite.prepare("SELECT count(*) AS count FROM workflow_initialization_receipts").get())
         .toEqual({ count: 0 });
       expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get())
-        .toEqual({ count: predecessorMigrationNames.length + 12 });
+        .toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       sqlite.close();
 
@@ -205,7 +206,7 @@ describe("workflow initialization migration", () => {
       openTaskDatabase({ databasePath, clock: fixedClock }).close();
       const reopened = new DatabaseSync(databasePath, { readOnly: true });
       expect(reopened.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get())
-        .toEqual({ count: predecessorMigrationNames.length + 12 });
+        .toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       expect(reopened.prepare("SELECT count(*) AS count FROM subtask_workflow_instances").get())
         .toEqual({ count: 0 });
       expect(reopened.prepare("SELECT count(*) AS count FROM workflow_initialization_receipts").get())

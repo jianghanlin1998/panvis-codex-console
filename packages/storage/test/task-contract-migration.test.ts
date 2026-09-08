@@ -17,6 +17,7 @@ import type {
 import { beginPlanReview } from "@codex-task-console/orchestration";
 import { openTaskDatabase } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   fixedClock,
   makeBigTask,
@@ -54,6 +55,7 @@ const ALL_MIGRATIONS = [
   "20260907082500_two_repair_cycles",
   "20260907152456_board_recovery",
   "20260908054500_qa_recovery",
+  "20260908081800_retained_stage_recovery",
 ] as const;
 const REQUIRED_TASK_CONTRACT_TRIGGERS = [
   "candidate_task_contract_bindings_immutable_delete",
@@ -507,7 +509,7 @@ describe("Immutable Task Contract authority migration", () => {
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get(),
-      ).toEqual({ count: 25 });
+      ).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       expect(
         sqlite.prepare("SELECT count(*) AS count FROM task_contracts").get(),
       ).toEqual({ count: 0 });

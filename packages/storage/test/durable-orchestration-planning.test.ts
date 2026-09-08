@@ -24,6 +24,7 @@ import type {
   TaskStorageError,
 } from "../src/index.js";
 import {
+  EXPECTED_CURRENT_MIGRATION_COUNT,
   captureTaskStorageError,
   fixedClock,
   makeBigTask,
@@ -858,7 +859,7 @@ describe("durable orchestration migration", () => {
       storage.close();
       const sqlite = new DatabaseSync(databasePath, { readOnly: true });
       try {
-        expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({ count: 25 });
+        expect(sqlite.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({ count: EXPECTED_CURRENT_MIGRATION_COUNT });
       } finally {
         sqlite.close();
       }

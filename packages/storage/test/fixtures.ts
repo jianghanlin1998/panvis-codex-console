@@ -30,6 +30,9 @@ import type {
 import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import type { TaskStorage } from "../src/index.js";
 
+// Current-schema assertions only. Historical and failed-migration counts stay pinned separately.
+export const EXPECTED_CURRENT_MIGRATION_COUNT = 26;
+
 export const FIXED_TIME = "2026-08-09T00:00:00.000Z";
 export const fixedClock = (): Date => new Date(FIXED_TIME);
 
