@@ -699,8 +699,8 @@ const validateResponseShape = (
     case "execution-renew-window": {
       const parsed = BigTaskExecutionStatusSchema.safeParse(value);
       return parsed.success && parsed.data.bigTaskId === command.renewal.bigTaskId && parsed.data.planDigest === command.renewal.planDigest &&
-        parsed.data.windowRenewal?.previousExpiresAt === command.renewal.previousExpiresAt &&
-        parsed.data.windowRenewal.durationMilliseconds === command.renewal.durationMilliseconds;
+        [parsed.data.windowRenewal, ...(parsed.data.additionalWindowRenewals ?? [])].some(window =>
+          window?.previousExpiresAt === command.renewal.previousExpiresAt && window.durationMilliseconds === command.renewal.durationMilliseconds);
     }
     case "execution-recover": {
       const parsed = BigTaskExecutionStatusSchema.safeParse(value);

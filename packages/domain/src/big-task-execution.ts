@@ -110,6 +110,7 @@ export const BigTaskExecutionStatusSchema = z.object({
   totalBudgetMode: z.literal("WARNING_ONLY").optional(),
   additionalRecoveries: z.array(recovery).min(1).max(23).optional(),
   windowRenewal: windowRenewal.optional(),
+  additionalWindowRenewals: z.array(windowRenewal).min(1).optional(),
   qaRecovery: qaRecovery.optional(), unacknowledgedUnknownUsage: z.boolean().optional(),
   lastRoleFailure: BigTaskRoleFailureSchema.extend({ at: timestamp }).strict().optional(),
   lastControlFailure: BigTaskControlFailureSchema.extend({ at: timestamp }).strict().optional(),
@@ -121,14 +122,23 @@ export const BigTaskExecutionStatusSchema = z.object({
     new Set([v.recovery, ...v.additionalRecoveries].map(r => r.failedAuthorizationId)).size === v.additionalRecoveries.length + 1) &&
   (v.qaRecovery === undefined ? v.unacknowledgedUnknownUsage === undefined : v.recovery !== undefined && v.unknownCompletedUsage &&
     v.unacknowledgedUnknownUsage !== undefined && v.limits.totalTokenLimit === v.qaRecovery.knownTokenLimit) &&
-  (v.phase === "APPROVED" ? v.startedAt === null && v.expiresAt === null && v.roleCalls === 0 && v.windowRenewal === undefined && v.qaRecovery === undefined :
-    v.startedAt !== null && v.expiresAt !== null && (v.qaRecovery !== undefined
-      ? Date.parse(v.expiresAt) - Date.parse(v.qaRecovery.authorizedAt) === v.qaRecovery.durationMilliseconds &&
-        Date.parse(v.qaRecovery.previousExpiresAt) === (v.windowRenewal === undefined ? Date.parse(v.startedAt) + v.limits.durationMilliseconds : Date.parse(v.windowRenewal.renewedAt) + v.windowRenewal.durationMilliseconds)
-      : v.windowRenewal === undefined
-      ? Date.parse(v.expiresAt) - Date.parse(v.startedAt) === v.limits.durationMilliseconds
-      : v.recovery !== undefined && Date.parse(v.windowRenewal.previousExpiresAt) - Date.parse(v.startedAt) === v.limits.durationMilliseconds &&
-        Date.parse(v.windowRenewal.renewedAt) >= Date.parse(v.windowRenewal.previousExpiresAt) &&
-        Date.parse(v.expiresAt) - Date.parse(v.windowRenewal.renewedAt) === v.windowRenewal.durationMilliseconds)) &&
+  (() => {
+    if (v.phase === "APPROVED") return v.startedAt === null && v.expiresAt === null && v.roleCalls === 0 &&
+      v.windowRenewal === undefined && v.additionalWindowRenewals === undefined && v.qaRecovery === undefined;
+    if (v.startedAt === null || v.expiresAt === null || v.additionalWindowRenewals !== undefined && v.windowRenewal === undefined) return false;
+    const windows = v.windowRenewal === undefined ? [] : [v.windowRenewal, ...(v.additionalWindowRenewals ?? [])];
+    if (windows.some((window, index) => index > 0 && window.renewedAt < windows[index - 1]!.renewedAt)) return false;
+    const amendments = windows.map(window => ({ ...window, at: window.renewedAt, expiredOnly: true }));
+    if (v.qaRecovery !== undefined) amendments.push({ previousExpiresAt: v.qaRecovery.previousExpiresAt,
+      durationMilliseconds: v.qaRecovery.durationMilliseconds, renewedAt: v.qaRecovery.authorizedAt, at: v.qaRecovery.authorizedAt, expiredOnly: false });
+    amendments.sort((left, right) => left.at.localeCompare(right.at));
+    let expiry = Date.parse(v.startedAt) + v.limits.durationMilliseconds;
+    for (const amendment of amendments) {
+      if (Date.parse(amendment.previousExpiresAt) !== expiry || amendment.at < v.startedAt ||
+        amendment.expiredOnly && Date.parse(amendment.at) < expiry) return false;
+      expiry = Date.parse(amendment.at) + amendment.durationMilliseconds;
+    }
+    return Date.parse(v.expiresAt) === expiry;
+  })() &&
   (v.phase === "PAUSED" || v.phase === "HUMAN_REQUIRED" ? v.stopReason !== null : v.stopReason === null) &&
   (!["AWAITING_ACCEPTANCE", "ACCEPTED"].includes(v.phase) || v.resultRefCreated && v.pendingIntegration === null && executionUsageSettled(v)));

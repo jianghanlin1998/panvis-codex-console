@@ -1074,7 +1074,7 @@ export class GovernedExecutionStore {
     const execution = new BigTaskExecutionStore(this.#storage);
     const state = execution.inspect(bigTaskId);
     execution.assertCurrent(bigTaskId);
-    if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED"].includes(state.stopReason ?? "") ||
+    if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED", "TIME_LIMIT_REACHED"].includes(state.stopReason ?? "") ||
       !executionUsageSettled(state) || state.expiresAt === null || Date.parse(state.expiresAt) <= this.#access().clock().getTime() ||
       (state.stopReason !== "TOKEN_LIMIT_REACHED" && executionTokenLimitReached(state)) || state.roleCalls >= state.limits.roleCallLimit || state.pendingIntegration !== null) throw conflict("Recovery is unavailable.");
     this.#validateBigTaskAuthority(bigTaskId);

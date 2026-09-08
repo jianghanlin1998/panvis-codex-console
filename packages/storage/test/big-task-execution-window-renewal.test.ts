@@ -4,7 +4,7 @@ import { makeExecutionFixture } from "./big-task-execution-fixture.js";
 import { BigTaskExecutionStore } from "../src/big-task-execution.js";
 import { getGovernedProviderBridge } from "../src/governed-execution-public.js";
 
-it("renews an expired unused recovery once, preserving usage, files, original approval and all later deadlines", async () => {
+it("renews expired checkpoints with chained approvals, preserving usage, files and all later deadlines", async () => {
   let instant = Date.parse("2026-09-07T00:00:00.000Z");
   const f = makeExecutionFixture(() => new Date(instant++), (role, n) => role === "EXECUTE" && n === 1 ? "budget-exceeded" : undefined);
   try {
@@ -49,13 +49,39 @@ it("renews an expired unused recovery once, preserving usage, files, original ap
     expect(reopened.inspect(f.approval.bigTaskId)).toMatchObject({ knownTokens: 143692, roleCalls: 2, expiresAt: renewed.expiresAt, windowRenewal: renewed.windowRenewal });
     instant = Date.parse(renewed.expiresAt!) + 1;
     expect(reopened.renewWindow(request).expiresAt).toBe(renewed.expiresAt);
-    expect(() => reopened.renewWindow({ ...request, previousExpiresAt: renewed.expiresAt })).toThrow();
     expect(() => reopened.start(f.approval.bigTaskId)).toThrow();
+    const renewedAgain = reopened.renewWindow({ ...request, previousExpiresAt: renewed.expiresAt, durationMilliseconds: 5_400_000 });
+    expect(renewedAgain).toMatchObject({ knownTokens: 143692, roleCalls: 2, windowRenewal: renewed.windowRenewal,
+      additionalWindowRenewals: [{ previousExpiresAt: renewed.expiresAt, durationMilliseconds: 5_400_000 }] });
+    expect(reopened.renewWindow(request)).toEqual(renewedAgain); // Historical replay does not change the latest deadline.
+    expect(BigTaskExecutionStatusSchema.safeParse(renewedAgain).success).toBe(true);
+    expect(reopened.start(f.approval.bigTaskId).status.expiresAt).toBe(renewedAgain.expiresAt);
     expect(f.starts).toHaveLength(2);
   } finally { f.close(); }
 }, 30_000);
 
-it("refuses to renew after the replacement has already run, even at a recovered checkpoint", async () => {
+it.each(["active", "tokens", "calls"] as const)("time renewal does not override the %s boundary", async boundary => {
+  let instant = Date.parse("2026-09-07T00:00:00.000Z");
+  const f = makeExecutionFixture(() => new Date(instant++));
+  try {
+    if (boundary === "tokens") f.approval.limits.totalTokenLimit = 18;
+    if (boundary === "calls") f.approval.limits.roleCallLimit = 1;
+    f.execution.approve(f.approval); const original = f.execution.start(f.approval.bigTaskId).status;
+    const next = f.governed.prepareNextRole(f.approval.bigTaskId);
+    if (next.kind !== "ROLE_AUTHORIZED") throw new Error("Expected initial role");
+    if (boundary === "active") getGovernedProviderBridge(f.governed).reserveRoleExecutionAttempt(next.authorization.authorizationId);
+    else await f.execute(f.governed, next.authorization.authorizationId);
+    instant = Date.parse(original.expiresAt!) + 1;
+    const stopped = f.execution.stop(f.approval.bigTaskId, "TIME_LIMIT_REACHED");
+    expect(stopped.roleCalls).toBe(1);
+    expect(stopped.activeRoleCount).toBe(boundary === "active" ? 1 : 0);
+    expect(() => f.execution.renewWindow({ bigTaskId: f.approval.bigTaskId, planDigest: f.approval.planDigest,
+      previousExpiresAt: original.expiresAt, durationMilliseconds: 5_400_000 })).toThrow();
+    expect(f.execution.inspect(f.approval.bigTaskId)).toEqual(stopped);
+  } finally { f.close(); }
+}, 30_000);
+
+it("renews a later expired recovered checkpoint without repeating the completed replacement", async () => {
   let instant = Date.parse("2026-09-07T00:00:00.000Z");
   const f = makeExecutionFixture(() => new Date(instant++), (role, n) => role === "EXECUTE" && n === 1 ? "budget-exceeded" : undefined);
   try {
@@ -73,8 +99,12 @@ it("refuses to renew after the replacement has already run, even at a recovered 
     await f.execute(f.governed, next.authorization.authorizationId);
     f.execution.stop(f.approval.bigTaskId, "CHECKPOINT_RECOVERED");
     instant = Date.parse(original.expiresAt!) + 1;
-    expect(() => f.execution.renewWindow({ bigTaskId: f.approval.bigTaskId, planDigest: f.approval.planDigest,
-      previousExpiresAt: original.expiresAt, durationMilliseconds: 10_800_000 })).toThrow();
-    expect(f.execution.inspect(f.approval.bigTaskId).windowRenewal).toBeUndefined();
+    const renewed = f.execution.renewWindow({ bigTaskId: f.approval.bigTaskId, planDigest: f.approval.planDigest,
+      previousExpiresAt: original.expiresAt, durationMilliseconds: 10_800_000 });
+    expect(renewed).toMatchObject({ phase: "PAUSED", knownTokens: 143692, roleCalls: 2,
+      windowRenewal: { previousExpiresAt: original.expiresAt, durationMilliseconds: 10_800_000 } });
+    f.execution.start(f.approval.bigTaskId);
+    expect(f.governed.prepareNextRole(f.approval.bigTaskId)).toMatchObject({ kind: "ROLE_AUTHORIZED", authorization: { role: "HARDEN" } });
+    expect(f.starts).toHaveLength(2);
   } finally { f.close(); }
 }, 30_000);

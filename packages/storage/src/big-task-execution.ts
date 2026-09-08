@@ -103,6 +103,7 @@ export interface BigTaskExecutionStatus {
   readonly totalBudgetMode?: "WARNING_ONLY";
   readonly additionalRecoveries?: readonly NonNullable<BigTaskExecutionStatus["recovery"]>[];
   readonly windowRenewal?: Pick<BigTaskExecutionWindowRenewal, "previousExpiresAt" | "durationMilliseconds"> & { readonly renewedAt: string };
+  readonly additionalWindowRenewals?: readonly NonNullable<BigTaskExecutionStatus["windowRenewal"]>[];
   readonly qaRecovery?: BigTaskQaRecovery & { readonly authorizationId: string; readonly authorizedAt: string };
   readonly unacknowledgedUnknownUsage?: boolean;
   readonly lastRoleFailure?: BigTaskRoleFailure & { readonly at: string };
@@ -186,6 +187,7 @@ export class BigTaskExecutionStore {
     let phase: ExecutionPhase = "APPROVED";
     let stopReason: ExecutionStopReason | null = null;
     let startedAt: string | null = null;
+    let expiresAt: string | null = null;
     let lastAt = approval.approvedAt;
     let roleCalls = 0;
     let head: string = approval.request.repositoryHeadSha;
@@ -196,6 +198,7 @@ export class BigTaskExecutionStore {
     let recovery: BigTaskExecutionStatus["recovery"];
     const additionalRecoveries: NonNullable<BigTaskExecutionStatus["recovery"]>[] = [];
     let windowRenewal: BigTaskExecutionStatus["windowRenewal"];
+    const additionalWindowRenewals: NonNullable<BigTaskExecutionStatus["windowRenewal"]>[] = [];
     let qaRecovery: BigTaskExecutionStatus["qaRecovery"];
     let lastRoleFailure: BigTaskExecutionStatus["lastRoleFailure"];
     let lastControlFailure: BigTaskExecutionStatus["lastControlFailure"];
@@ -210,17 +213,17 @@ export class BigTaskExecutionStore {
       lastAt = event.at;
       switch (event.kind) {
         case "START":
-          if (Object.keys(event).length !== 2 || (phase !== "APPROVED" && phase !== "PAUSED")) fail("MALFORMED_STORED_DATA");
-          startedAt ??= event.at; phase = "RUNNING"; stopReason = null; break;
+          if (Object.keys(event).length !== 2 || (phase !== "APPROVED" && phase !== "PAUSED" &&
+            !(phase === "HUMAN_REQUIRED" && stopReason === "TIME_LIMIT_REACHED" && expiresAt !== null && event.at < expiresAt))) fail("MALFORMED_STORED_DATA");
+          if (startedAt === null) { startedAt = event.at; expiresAt = new Date(Date.parse(event.at) + approval.request.limits.durationMilliseconds).toISOString(); }
+          phase = "RUNNING"; stopReason = null; break;
         case "RECOVERY": {
           const request = BigTaskExecutionRecoverySchema.safeParse(event.request);
           if (Object.keys(event).length !== 4 || !request.success || additionalRecoveries.length >= 23 ||
             [recovery, ...additionalRecoveries].some(r => r?.failedAuthorizationId === request.data.failedAuthorizationId) || phase !== "HUMAN_REQUIRED" ||
-            !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED"].includes(stopReason ?? "") ||
+            !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED", "TIME_LIMIT_REACHED"].includes(stopReason ?? "") ||
             (stopReason === "TOKEN_LIMIT_REACHED" && request.data.totalBudgetMode !== "WARNING_ONLY") || startedAt === null || pendingIntegration !== null ||
-            event.at >= new Date(qaRecovery !== undefined ? Date.parse(qaRecovery.authorizedAt) + qaRecovery.durationMilliseconds :
-              windowRenewal !== undefined ? Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds :
-              Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString() ||
+            expiresAt === null || event.at >= expiresAt ||
             request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
             request.data.repositoryHeadSha !== approval.request.repositoryHeadSha || !roles.has(request.data.failedAuthorizationId) ||
             executionCanonical(request.data) !== executionCanonical(event.request) ||
@@ -240,12 +243,14 @@ export class BigTaskExecutionStore {
         }
         case "WINDOW_RENEWED": {
           const request = BigTaskExecutionWindowRenewalSchema.safeParse(event.request);
-          if (Object.keys(event).length !== 3 || !request.success || windowRenewal !== undefined || recovery === undefined ||
-            phase !== "PAUSED" || stopReason !== "CHECKPOINT_RECOVERED" || startedAt === null || pendingIntegration !== null ||
-            roles.has(recovery.authorizationId) || request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
-            request.data.previousExpiresAt !== new Date(Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString() ||
+          if (Object.keys(event).length !== 3 || !request.success ||
+            !["PAUSED", "HUMAN_REQUIRED"].includes(phase) || startedAt === null || pendingIntegration !== null ||
+            request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
+            request.data.previousExpiresAt !== expiresAt ||
             event.at < request.data.previousExpiresAt || executionCanonical(request.data) !== executionCanonical(event.request)) fail("MALFORMED_STORED_DATA");
-          windowRenewal = { previousExpiresAt: request.data.previousExpiresAt, durationMilliseconds: request.data.durationMilliseconds, renewedAt: event.at };
+          const renewal = { previousExpiresAt: request.data.previousExpiresAt, durationMilliseconds: request.data.durationMilliseconds, renewedAt: event.at };
+          if (windowRenewal === undefined) windowRenewal = renewal; else additionalWindowRenewals.push(renewal);
+          expiresAt = new Date(Date.parse(event.at) + request.data.durationMilliseconds).toISOString();
           break;
         }
         case "QA_RECOVERY": {
@@ -255,8 +260,7 @@ export class BigTaskExecutionStore {
             request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
             request.data.repositoryHeadSha !== approval.request.repositoryHeadSha || !roles.has(request.data.failedAuthorizationId) ||
             event.authorizationId !== recoveryAuthorizationId(request.data.failedAuthorizationId) ||
-            request.data.previousExpiresAt !== new Date(windowRenewal === undefined ? Date.parse(startedAt) + approval.request.limits.durationMilliseconds
-              : Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds).toISOString() ||
+            request.data.previousExpiresAt !== expiresAt ||
             executionCanonical(request.data) !== executionCanonical(event.request)) fail("MALFORMED_STORED_DATA");
           const old = this.#qaFailureAuthority(request.data);
           const next = access(this.storage).sqlite.prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id=?").get(event.authorizationId);
@@ -271,6 +275,7 @@ export class BigTaskExecutionStore {
           }
           if (priorUnknown !== 1 || priorKnown !== request.data.acknowledgedKnownTokens || priorKnown >= request.data.knownTokenLimit) fail("MALFORMED_STORED_DATA");
           qaRecovery = { ...request.data, authorizationId: event.authorizationId, authorizedAt: event.at };
+          expiresAt = new Date(Date.parse(event.at) + request.data.durationMilliseconds).toISOString();
           phase = "PAUSED"; stopReason = "CHECKPOINT_RECOVERED"; break;
         }
         case "CONTROL_FAILURE": {
@@ -316,15 +321,15 @@ export class BigTaskExecutionStore {
     if (linked.length !== roles.size || linked.some(row => !roles.has(String(row.authorization_id)))) fail("MALFORMED_STORED_DATA");
     const usage = this.#usage(bigTaskId, qaRecovery?.failedExecutionRunId);
     const status = Object.freeze({ bigTaskId, planDigest: approval.request.planDigest, phase, stopReason, startedAt,
-      expiresAt: startedAt === null ? null : new Date(qaRecovery !== undefined ? Date.parse(qaRecovery.authorizedAt) + qaRecovery.durationMilliseconds : windowRenewal === undefined ? Date.parse(startedAt) + approval.request.limits.durationMilliseconds
-        : Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds).toISOString(),
+      expiresAt,
       limits: qaRecovery === undefined ? approval.request.limits : { ...approval.request.limits, totalTokenLimit: qaRecovery.knownTokenLimit },
       roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }), ...(qaRecovery === undefined ? {} : { qaRecovery }),
       ...(lastRoleFailure === undefined ? {} : { lastRoleFailure }),
       ...(lastControlFailure === undefined ? {} : { lastControlFailure }),
       ...(additionalRecoveries.length === 0 ? {} : { additionalRecoveries }),
       ...([recovery, ...additionalRecoveries].some(r => r?.totalBudgetMode === "WARNING_ONLY") ? { totalBudgetMode: "WARNING_ONLY" as const } : {}),
-      ...(windowRenewal === undefined ? {} : { windowRenewal }), resultRef: approval.resultRef, resultHeadSha: head,
+      ...(windowRenewal === undefined ? {} : { windowRenewal }),
+      ...(additionalWindowRenewals.length === 0 ? {} : { additionalWindowRenewals }), resultRef: approval.resultRef, resultHeadSha: head,
       integratedSubtaskIds: Object.freeze(integrated), pendingIntegration, resultRefCreated });
     if (!BigTaskExecutionStatusSchema.safeParse(status).success) fail("MALFORMED_STORED_DATA");
     return status;
@@ -342,7 +347,7 @@ export class BigTaskExecutionStore {
         if (executionCanonical(original) !== executionCanonical(request)) fail();
         return state;
       }
-      if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED"].includes(state.stopReason ?? "") || !executionUsageSettled(state) ||
+      if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED", "TIME_LIMIT_REACHED"].includes(state.stopReason ?? "") || !executionUsageSettled(state) ||
         state.expiresAt === null || Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage)) || state.pendingIntegration !== null ||
         (request.totalBudgetMode !== "WARNING_ONLY" && executionTokenLimitReached(state)) || state.roleCalls >= state.limits.roleCallLimit ||
         request.planDigest !== state.planDigest || request.repositoryHeadSha !== this.#approval(request.bigTaskId).request.repositoryHeadSha) fail();
@@ -369,7 +374,7 @@ export class BigTaskExecutionStore {
     return access(this.storage).sqlite.isTransaction ? record() : this.storage.runInTransaction(record);
   }
 
-  /** One explicit time-only amendment for an expired, unused recovery; never resets budgets or history. */
+  /** Explicit time-only amendments form an immutable chain; no calls, budgets or prior usage are reset. */
   renewWindow(input: unknown): BigTaskExecutionStatus {
     const parsed = BigTaskExecutionWindowRenewalSchema.safeParse(input);
     if (!parsed.success || executionCanonical(parsed.data) !== executionCanonical(input)) fail("INVALID_INPUT");
@@ -377,16 +382,15 @@ export class BigTaskExecutionStore {
     return this.storage.runInTransaction(() => {
       const state = this.inspect(request.bigTaskId);
       if (request.planDigest !== state.planDigest) fail();
-      if (state.windowRenewal !== undefined) {
-        if (request.previousExpiresAt !== state.windowRenewal.previousExpiresAt || request.durationMilliseconds !== state.windowRenewal.durationMilliseconds) fail();
+      const prior = [state.windowRenewal, ...(state.additionalWindowRenewals ?? [])].find(window => window?.previousExpiresAt === request.previousExpiresAt);
+      if (prior !== undefined) {
+        if (request.durationMilliseconds !== prior.durationMilliseconds) fail();
         return state;
       }
       const at = timestamp(this.storage);
-      if (state.phase !== "PAUSED" || state.stopReason !== "CHECKPOINT_RECOVERED" || state.recovery === undefined ||
+      if (!["PAUSED", "HUMAN_REQUIRED"].includes(state.phase) ||
         state.expiresAt !== request.previousExpiresAt || at < request.previousExpiresAt || state.pendingIntegration !== null ||
-        !state.usageComplete || executionTokenLimitReached(state) || state.roleCalls >= state.limits.roleCallLimit ||
-        access(this.storage).sqlite.prepare("SELECT 1 FROM governed_role_execution_links WHERE authorization_id=?").get(state.recovery.authorizationId) ||
-        !this.#safeCheckpoint(request.bigTaskId)) fail();
+        !executionUsageSettled(state) || executionTokenLimitReached(state) || state.roleCalls >= state.limits.roleCallLimit) fail();
       this.assertCurrent(request.bigTaskId);
       this.#append(request.bigTaskId, { kind: "WINDOW_RENEWED", at, request });
       return this.inspect(request.bigTaskId);
@@ -465,7 +469,7 @@ export class BigTaskExecutionStore {
     return this.storage.runInTransaction(() => {
       const state = this.inspect(bigTaskId);
       if (state.phase === "RUNNING" || state.phase === "AWAITING_ACCEPTANCE" || state.phase === "ACCEPTED") return { claimed: false, status: state };
-      if (state.phase !== "APPROVED" && state.phase !== "PAUSED") fail();
+      if (state.phase !== "APPROVED" && state.phase !== "PAUSED" && !(state.phase === "HUMAN_REQUIRED" && state.stopReason === "TIME_LIMIT_REACHED")) fail();
       this.assertCurrent(bigTaskId);
       if (state.expiresAt !== null && Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage))) fail();
       if (!this.#safeCheckpoint(bigTaskId) || !executionUsageSettled(state) || executionTokenLimitReached(state) || state.roleCalls >= state.limits.roleCallLimit) fail();
