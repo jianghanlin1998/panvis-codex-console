@@ -128,6 +128,7 @@ export interface LocalControlService {
   reviewExecution?(bigTaskId: BigTaskId): Promise<object>;
   reviewExecutionRecovery?(bigTaskId: BigTaskId): Promise<object>;
   recoverExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
+  renewExecutionWindow?(input: unknown): Promise<BigTaskExecutionStatus>;
   approveExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
   inspectExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
   startExecution?(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus>;
@@ -420,6 +421,11 @@ class ProductionLocalControlService implements LocalControlService {
 
   async approveExecution(input: unknown): Promise<BigTaskExecutionStatus> {
     try { return new BigTaskExecutionStore(this.#storage).approve(input); }
+    catch (error) { throw sanitizeStorageError(error); }
+  }
+
+  async renewExecutionWindow(input: unknown): Promise<BigTaskExecutionStatus> {
+    try { return new BigTaskExecutionStore(this.#storage).renewWindow(input); }
     catch (error) { throw sanitizeStorageError(error); }
   }
 

@@ -30,6 +30,15 @@ export const BigTaskExecutionRecoverySchema = z.object({
   subtaskBudgetMode: z.literal("WARNING_ONLY"),
 }).strict();
 export type BigTaskExecutionRecovery = z.infer<typeof BigTaskExecutionRecoverySchema>;
+export const BigTaskExecutionWindowRenewalSchema = z.object({
+  bigTaskId: BigTaskIdSchema,
+  planDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  previousExpiresAt: z.string().datetime({ precision: 3 }),
+  durationMilliseconds: z.number().int().min(1).max(10_800_000),
+}).strict();
+export type BigTaskExecutionWindowRenewal = z.infer<typeof BigTaskExecutionWindowRenewalSchema>;
+const windowRenewal = BigTaskExecutionWindowRenewalSchema.omit({ bigTaskId: true, planDigest: true })
+  .extend({ renewedAt: z.string().datetime({ precision: 3 }) }).strict();
 export const BigTaskExecutionRecoveryReviewSchema = z.object({
   request: BigTaskExecutionRecoverySchema,
   knownTokens: z.number().int().nonnegative(),
@@ -47,10 +56,15 @@ export const BigTaskExecutionStatusSchema = z.object({
   startedAt: timestamp.nullable(), expiresAt: timestamp.nullable(), limits: BigTaskExecutionLimitsSchema,
   roleCalls: z.number().int().nonnegative().max(192), knownTokens: z.number().int().nonnegative(), usageComplete: z.boolean(), activeRoleCount: z.number().int().min(0).max(1), unknownCompletedUsage: z.boolean(),
   recovery: recovery.optional(),
+  windowRenewal: windowRenewal.optional(),
   resultRef: z.string().regex(/^refs\/heads\/codex\/execution\/[a-f0-9]{32}$/u), resultHeadSha: RepositoryCommitShaSchema,
   integratedSubtaskIds: z.array(SubtaskIdSchema).max(24), pendingIntegration: integration.nullable(), resultRefCreated: z.boolean(),
 }).strict().refine(v => v.roleCalls <= v.limits.roleCallLimit && v.usageComplete === (v.activeRoleCount === 0 && !v.unknownCompletedUsage) && new Set(v.integratedSubtaskIds).size === v.integratedSubtaskIds.length &&
-  (v.phase === "APPROVED" ? v.startedAt === null && v.expiresAt === null && v.roleCalls === 0 :
-    v.startedAt !== null && v.expiresAt !== null && Date.parse(v.expiresAt) - Date.parse(v.startedAt) === v.limits.durationMilliseconds) &&
+  (v.phase === "APPROVED" ? v.startedAt === null && v.expiresAt === null && v.roleCalls === 0 && v.windowRenewal === undefined :
+    v.startedAt !== null && v.expiresAt !== null && (v.windowRenewal === undefined
+      ? Date.parse(v.expiresAt) - Date.parse(v.startedAt) === v.limits.durationMilliseconds
+      : v.recovery !== undefined && Date.parse(v.windowRenewal.previousExpiresAt) - Date.parse(v.startedAt) === v.limits.durationMilliseconds &&
+        Date.parse(v.windowRenewal.renewedAt) >= Date.parse(v.windowRenewal.previousExpiresAt) &&
+        Date.parse(v.expiresAt) - Date.parse(v.windowRenewal.renewedAt) === v.windowRenewal.durationMilliseconds)) &&
   (v.phase === "PAUSED" || v.phase === "HUMAN_REQUIRED" ? v.stopReason !== null : v.stopReason === null) &&
   (!["AWAITING_ACCEPTANCE", "ACCEPTED"].includes(v.phase) || v.resultRefCreated && v.pendingIntegration === null && v.usageComplete));

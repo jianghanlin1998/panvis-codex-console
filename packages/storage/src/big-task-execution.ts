@@ -5,8 +5,8 @@ import { spawnSync } from "node:child_process";
 import { devNull, tmpdir } from "node:os";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
-import type { BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
+import { BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
+import type { BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
 import { TaskStorageError } from "./errors.js";
 import type { TaskStorage } from "./task-storage.js";
 import { getTaskStorageWorktreeAccess } from "./task-storage-internals.js";
@@ -77,6 +77,7 @@ const integrationWriters = new WeakMap<TaskStorage, (bigTaskId: BigTaskId, inten
 type ExecutionEvent =
   | { readonly kind: "START"; readonly at: string }
   | { readonly kind: "RECOVERY"; readonly at: string; readonly request: BigTaskExecutionRecovery; readonly authorizationId: string }
+  | { readonly kind: "WINDOW_RENEWED"; readonly at: string; readonly request: BigTaskExecutionWindowRenewal }
   | { readonly kind: "ROLE"; readonly at: string; readonly authorizationId: string }
   | ({ readonly kind: "INTEGRATION_PREPARED" | "INTEGRATE"; readonly at: string } & IntegrationIntent)
   | { readonly kind: "STOP"; readonly at: string; readonly reason: ExecutionStopReason }
@@ -95,6 +96,7 @@ export interface BigTaskExecutionStatus {
   readonly activeRoleCount: number;
   readonly unknownCompletedUsage: boolean;
   readonly recovery?: BigTaskExecutionRecovery & { readonly authorizationId: string };
+  readonly windowRenewal?: Pick<BigTaskExecutionWindowRenewal, "previousExpiresAt" | "durationMilliseconds"> & { readonly renewedAt: string };
   readonly resultRef: string;
   readonly resultHeadSha: string;
   readonly integratedSubtaskIds: readonly string[];
@@ -179,6 +181,7 @@ export class BigTaskExecutionStore {
     let resultRefCreated = false;
     const roles = new Set<string>();
     let recovery: BigTaskExecutionStatus["recovery"];
+    let windowRenewal: BigTaskExecutionStatus["windowRenewal"];
     const rows = access(this.storage).sqlite.prepare("SELECT sequence, payload FROM big_task_execution_events WHERE big_task_id = ? ORDER BY sequence").all(bigTaskId);
     if (rows.length > 1024) fail("MALFORMED_STORED_DATA");
     for (const [index, row] of rows.entries()) {
@@ -212,6 +215,16 @@ export class BigTaskExecutionStore {
           recovery = { ...request.data, authorizationId: event.authorizationId };
           phase = "PAUSED"; stopReason = "CHECKPOINT_RECOVERED"; break;
         }
+        case "WINDOW_RENEWED": {
+          const request = BigTaskExecutionWindowRenewalSchema.safeParse(event.request);
+          if (Object.keys(event).length !== 3 || !request.success || windowRenewal !== undefined || recovery === undefined ||
+            phase !== "PAUSED" || stopReason !== "CHECKPOINT_RECOVERED" || startedAt === null || pendingIntegration !== null ||
+            roles.has(recovery.authorizationId) || request.data.bigTaskId !== bigTaskId || request.data.planDigest !== approval.request.planDigest ||
+            request.data.previousExpiresAt !== new Date(Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString() ||
+            event.at < request.data.previousExpiresAt || executionCanonical(request.data) !== executionCanonical(event.request)) fail("MALFORMED_STORED_DATA");
+          windowRenewal = { previousExpiresAt: request.data.previousExpiresAt, durationMilliseconds: request.data.durationMilliseconds, renewedAt: event.at };
+          break;
+        }
         case "ROLE":
           if (Object.keys(event).length !== 3 || phase !== "RUNNING" || !/^gra_[a-f0-9]{48}$/u.test(event.authorizationId) || roles.has(event.authorizationId)) fail("MALFORMED_STORED_DATA");
           roles.add(event.authorizationId); roleCalls += 1; break;
@@ -241,8 +254,10 @@ export class BigTaskExecutionStore {
     if (linked.length !== roles.size || linked.some(row => !roles.has(String(row.authorization_id)))) fail("MALFORMED_STORED_DATA");
     const usage = this.#usage(bigTaskId);
     const status = Object.freeze({ bigTaskId, planDigest: approval.request.planDigest, phase, stopReason, startedAt,
-      expiresAt: startedAt === null ? null : new Date(Date.parse(startedAt) + approval.request.limits.durationMilliseconds).toISOString(),
-      limits: approval.request.limits, roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }), resultRef: approval.resultRef, resultHeadSha: head,
+      expiresAt: startedAt === null ? null : new Date(windowRenewal === undefined ? Date.parse(startedAt) + approval.request.limits.durationMilliseconds
+        : Date.parse(windowRenewal.renewedAt) + windowRenewal.durationMilliseconds).toISOString(),
+      limits: approval.request.limits, roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }),
+      ...(windowRenewal === undefined ? {} : { windowRenewal }), resultRef: approval.resultRef, resultHeadSha: head,
       integratedSubtaskIds: Object.freeze(integrated), pendingIntegration, resultRefCreated });
     if (!BigTaskExecutionStatusSchema.safeParse(status).success) fail("MALFORMED_STORED_DATA");
     return status;
@@ -284,6 +299,30 @@ export class BigTaskExecutionStore {
       return this.inspect(request.bigTaskId);
     };
     return access(this.storage).sqlite.isTransaction ? record() : this.storage.runInTransaction(record);
+  }
+
+  /** One explicit time-only amendment for an expired, unused recovery; never resets budgets or history. */
+  renewWindow(input: unknown): BigTaskExecutionStatus {
+    const parsed = BigTaskExecutionWindowRenewalSchema.safeParse(input);
+    if (!parsed.success || executionCanonical(parsed.data) !== executionCanonical(input)) fail("INVALID_INPUT");
+    const request = parsed.data;
+    return this.storage.runInTransaction(() => {
+      const state = this.inspect(request.bigTaskId);
+      if (request.planDigest !== state.planDigest) fail();
+      if (state.windowRenewal !== undefined) {
+        if (request.previousExpiresAt !== state.windowRenewal.previousExpiresAt || request.durationMilliseconds !== state.windowRenewal.durationMilliseconds) fail();
+        return state;
+      }
+      const at = timestamp(this.storage);
+      if (state.phase !== "PAUSED" || state.stopReason !== "CHECKPOINT_RECOVERED" || state.recovery === undefined ||
+        state.expiresAt !== request.previousExpiresAt || at < request.previousExpiresAt || state.pendingIntegration !== null ||
+        !state.usageComplete || state.knownTokens >= state.limits.totalTokenLimit || state.roleCalls >= state.limits.roleCallLimit ||
+        access(this.storage).sqlite.prepare("SELECT 1 FROM governed_role_execution_links WHERE authorization_id=?").get(state.recovery.authorizationId) ||
+        !this.#safeCheckpoint(request.bigTaskId)) fail();
+      this.assertCurrent(request.bigTaskId);
+      this.#append(request.bigTaskId, { kind: "WINDOW_RENEWED", at, request });
+      return this.inspect(request.bigTaskId);
+    });
   }
 
   start(bigTaskId: BigTaskId): { claimed: boolean; status: BigTaskExecutionStatus } {

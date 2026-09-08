@@ -1,5 +1,5 @@
-import { BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema, TaskContractV0Schema } from "@codex-task-console/domain";
-import type { BigTaskExecutionRecovery, BigTaskExecutionApproval } from "@codex-task-console/domain";
+import { BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema, TaskContractV0Schema } from "@codex-task-console/domain";
+import type { BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval } from "@codex-task-console/domain";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
@@ -64,7 +64,7 @@ const DEFAULT_OPERATOR_TIMEOUT_MILLISECONDS = 5 * 60_000;
 
 type ExecutionIdCommand = "execution-recovery-review" | "execution-review" | "execution-status" | "execution-start" | "execution-pause";
 export type OperatorCommandName =
-  | ExecutionIdCommand | "execution-recover" | "execution-approve" | "execution-accept"
+  | ExecutionIdCommand | "execution-renew-window" | "execution-recover" | "execution-approve" | "execution-accept"
   | "planning-intake" | "planning-status" | "planning-run"
   | "ping"
   | "status"
@@ -79,13 +79,14 @@ export type OperatorCommandName =
 export type OperatorCommand =
   | { readonly name: ExecutionIdCommand; readonly bigTaskId: BigTaskId }
   | { readonly name: "execution-recover"; readonly recovery: BigTaskExecutionRecovery }
+  | { readonly name: "execution-renew-window"; readonly renewal: BigTaskExecutionWindowRenewal }
   | { readonly name: "execution-approve"; readonly approval: BigTaskExecutionApproval }
   | { readonly name: "execution-accept"; readonly acceptance: { bigTaskId: BigTaskId; headSha: string } }
   | { readonly name: "planning-intake"; readonly intake: BigTaskPlanningIntake }
   | { readonly name: "planning-status" | "planning-run"; readonly bigTaskId: BigTaskId }
   | { readonly name: "ping" }
   | {
-      readonly name: Exclude<OperatorCommandName, ExecutionIdCommand | "execution-recover" | "execution-approve" | "execution-accept" | "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
+      readonly name: Exclude<OperatorCommandName, ExecutionIdCommand | "execution-renew-window" | "execution-recover" | "execution-approve" | "execution-accept" | "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
       readonly subtaskId: SubtaskId;
     }
   | {
@@ -682,6 +683,12 @@ const validateResponseShape = (
   switch (command.name) {
     case "execution-recovery-review": return BigTaskExecutionRecoveryReviewSchema.safeParse(value).success &&
       BigTaskExecutionRecoveryReviewSchema.parse(value).request.bigTaskId === command.bigTaskId;
+    case "execution-renew-window": {
+      const parsed = BigTaskExecutionStatusSchema.safeParse(value);
+      return parsed.success && parsed.data.bigTaskId === command.renewal.bigTaskId && parsed.data.planDigest === command.renewal.planDigest &&
+        parsed.data.windowRenewal?.previousExpiresAt === command.renewal.previousExpiresAt &&
+        parsed.data.windowRenewal.durationMilliseconds === command.renewal.durationMilliseconds;
+    }
     case "execution-recover": {
       const parsed = BigTaskExecutionStatusSchema.safeParse(value);
       if (!parsed.success || parsed.data.recovery === undefined) return false;
@@ -749,6 +756,10 @@ export const parseOperatorCommand = (
     try { return { name: command, recovery: BigTaskExecutionRecoverySchema.parse(readOperatorJson(subtaskId)) }; }
     catch { throw new LocalOperatorError("INVALID_COMMAND"); }
   }
+  if (command === "execution-renew-window" && subtaskId !== undefined) {
+    try { return { name: command, renewal: BigTaskExecutionWindowRenewalSchema.parse(readOperatorJson(subtaskId)) }; }
+    catch { throw new LocalOperatorError("INVALID_COMMAND"); }
+  }
   if ((command === "execution-approve" || command === "execution-accept") && subtaskId !== undefined) {
     try {
       const value = readOperatorJson(subtaskId);
@@ -799,6 +810,8 @@ const commandRequest = (
       return { method: "POST", path: `/v0/execution/${command.name.slice(10)}`, body: Buffer.from(JSON.stringify({ bigTaskId: command.bigTaskId }), "utf8") };
     case "execution-recover":
       return { method: "POST", path: "/v0/execution/recover", body: Buffer.from(JSON.stringify(command.recovery), "utf8") };
+    case "execution-renew-window":
+      return { method: "POST", path: "/v0/execution/renew-window", body: Buffer.from(JSON.stringify(command.renewal), "utf8") };
     case "execution-approve":
       return { method: "POST", path: "/v0/execution/approve", body: Buffer.from(JSON.stringify(command.approval), "utf8") };
     case "execution-accept":

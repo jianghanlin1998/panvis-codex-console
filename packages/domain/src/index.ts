@@ -358,5 +358,5 @@ export type {
   PlanningRunRecord,
 } from "./big-task-planning.js";
 
-export { BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
-export type { BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskExecutionLimits } from "./big-task-execution.js";
+export { BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
+export type { BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskExecutionLimits } from "./big-task-execution.js";

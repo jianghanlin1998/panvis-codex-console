@@ -10,7 +10,8 @@ import { parseOperatorCommand, runOperatorCommandForTesting } from "../src/opera
 import { ensureProductionStateDirectories, localControlPathsForTesting, writeSessionDescriptor } from "../src/state.js";
 
 it("reviews, binds and resumes Sol through the authenticated operator to integrated delivery", async () => {
-  const f = makeExecutionFixture(undefined, (role, n) => role === "EXECUTE" && n === 1 ? "budget-exceeded" : undefined);
+  let instant = Date.parse("2026-09-07T00:00:00.000Z");
+  const f = makeExecutionFixture(() => new Date(instant++), (role, n) => role === "EXECUTE" && n === 1 ? "budget-exceeded" : undefined);
   f.approval.limits.totalTokenLimit = 480000;
   const forbidden = async (): Promise<never> => { throw new Error("No other provider path"); };
   let report = () => {}, observing = true;
@@ -36,6 +37,16 @@ it("reviews, binds and resumes Sol through the authenticated operator to integra
     const recovered = await call(["execution-recover", file]);
     expect(recovered.succeeded).toBe(true);
     expect(recovered.body).toMatchObject({ phase: "PAUSED", knownTokens: 143674, expiresAt: original.expiresAt });
+    instant = Date.parse(original.expiresAt!) + 1;
+    const renewal = { bigTaskId: f.approval.bigTaskId, planDigest: f.approval.planDigest,
+      previousExpiresAt: original.expiresAt, durationMilliseconds: 10_800_000 };
+    const renewalFile = join(f.root, "renewal.json"); writeFileSync(renewalFile, JSON.stringify(renewal), "utf8");
+    expect((await call(["execution-start", f.approval.bigTaskId])).succeeded).toBe(false);
+    const renewed = await call(["execution-renew-window", renewalFile]);
+    expect(renewed.succeeded).toBe(true);
+    expect(renewed.body).toMatchObject({ phase: "PAUSED", startedAt: original.startedAt, knownTokens: 143674,
+      windowRenewal: { previousExpiresAt: original.expiresAt, durationMilliseconds: 10_800_000 } });
+    expect((await call(["execution-renew-window", renewalFile])).body).toEqual(renewed.body);
     expect((await call(["governed-status", f.approval.bigTaskId])).body.budgets).toContainEqual({
       scope: "BIG_TASK", status: "AVAILABLE_WARNING", allowed: true, totalTokens: 143674, warning: true, extensionApplied: false, effectiveLimitTokens: 480000 });
     const done = new Promise<Awaited<ReturnType<NonNullable<typeof service.inspectExecution>>>>((resolve, reject) => {
@@ -48,7 +59,7 @@ it("reviews, binds and resumes Sol through the authenticated operator to integra
     report();
     const delivered = await done;
     expect(delivered, JSON.stringify({ delivered, outcomes: f.outcomes, decisions: f.decisions })).toMatchObject({
-      phase: "AWAITING_ACCEPTANCE", knownTokens: 143782, roleCalls: 7, usageComplete: true, expiresAt: original.expiresAt, recovery: { model: "gpt-5.6-sol" } });
+      phase: "AWAITING_ACCEPTANCE", knownTokens: 143782, roleCalls: 7, usageComplete: true, expiresAt: renewed.body.expiresAt, recovery: { model: "gpt-5.6-sol" } });
     expect(delivered.integratedSubtaskIds).toHaveLength(2);
     expect(new Set(f.starts).size).toBe(7);
     expect(f.git(["rev-parse", "HEAD"]).toString().trim()).toBe(f.approval.repositoryHeadSha);

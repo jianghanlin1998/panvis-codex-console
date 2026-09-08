@@ -46,3 +46,9 @@ Hanlin approved a task-scoped continuation after the Board's first implementatio
 Migration 24 adds a default-zero recovery ordinal to role authorizations and extends the uniqueness/immutable-insert guards. Existing rows, links, provider claims and events stay unchanged. The recovery request is append-only execution evidence. Older binaries cannot understand this new evidence/schema; do not downgrade an activated database in place.
 
 Fixed authenticated localhost routes are `/v0/execution/recovery-review` and `/v0/execution/recover`, retaining the ordinary request/response size, origin, token and method checks. Activation requires all repository verification checks first.
+
+### One approved replacement time window
+
+If the recorded recovery expires before its replacement role has been attempted, an explicitly approved `execution-renew-window <json-file>` can record one new window of at most three hours. Its strict request contains `bigTaskId`, `planDigest`, `previousExpiresAt` and `durationMilliseconds`. It requires the expired PAUSED / CHECKPOINT_RECOVERED state, a current plan/source, complete usage, remaining aggregate/call budgets, and no replacement provider attempt or pending integration. It does not start a model.
+
+The append-only `WINDOW_RENEWED` event retains the original approval, start, expiry, failed run, usage and repair allowance. Status exposes `windowRenewal` with the previous expiry, renewal time and duration; `expiresAt` becomes the new effective deadline for all subsequent work and leases. Identical replay returns the same window without extending it; any second amendment is rejected. No automatic renewal or token increase is provided. The authenticated `/v0/execution/renew-window` route retains existing request/response limits. No schema migration is needed, but older binaries cannot replay this new event and must not reopen an amended database.

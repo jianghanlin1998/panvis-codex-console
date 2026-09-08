@@ -71,5 +71,8 @@ describe("human-approved continuous Big Task execution", () => {
       await service.startExecution!(f.approval.bigTaskId);
       expect(f.starts).toHaveLength(6);
     } finally { observing = false; await service.stopAndDrain!(); }
-  }, 30_000);
+  // Six real mock processes plus Git integration share a loaded four-worker host.
+  // This is a harness ceiling, not the product deadline: frozen-clock deadline
+  // and lease tests independently enforce expiry without machine-speed dependence.
+  }, 60_000);
 });
