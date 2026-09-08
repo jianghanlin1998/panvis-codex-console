@@ -66,9 +66,10 @@ describe("Subtask dependency schema", () => {
     ).toBe(false);
   });
 
-  it("exports exactly the three V1 required gates", () => {
+  it("preserves the V1 gates and adds basic verification for LIGHT workflows", () => {
     expect(DependencyRequiredGateSchema.options).toEqual([
       "NONE",
+      "VERIFIED",
       "HARDENED",
       "ACCEPTED",
     ]);

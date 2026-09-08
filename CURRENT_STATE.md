@@ -1,20 +1,23 @@
 # Codex Task Console — CURRENT STATE
 
-Last reconciled: 2026-09-08
+Last reconciled: 2026-09-09
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
 ## Repository
 - Repo: `jianghanlin1998/panvis-codex-console`
-- Branch: `codex/step10-full-console-ui` (complete UI, hardening and QA authorized)
+- Branch: `codex/step10-workspace-navigation` (approved hierarchy, context, review levels and desktop entry)
 - Current HEAD: the commit containing this file; verify with `git rev-parse HEAD`
 - Public-repository hygiene guard: enabled
 - Development verification: offline fail-closed preflight; explicit stable pnpm settings; full suite bounded to four workers
 
-## Step 10 Console UI
-- Complete local browser workspace implemented: project / big-task / subtask discussions and confirmed context, direct small-task intake, direction confirmation, reviewed plan approval, governed execution controls, decisions, delivery and supported preview. Human product acceptance remains separate. [Workflow, QA repairs and limits](docs/STEP_10_CONSOLE_UI.md).
-- Fresh independent QA found seven issues; all repaired, including two residual recheck defects. Final focused independent re-QA PASS. Stable full suite: **182 files / 4,789 tests PASS**, four workers, 503.66 seconds; zero failures/errors/skips. Lint, typecheck, build and compiled executable E2E PASS; zero real model turns or target writes in this milestone's verification. Browser layout/intake/delivery checks used isolated synthetic data. Managed tool review blocked synthetic approval/acceptance clicks; interface/render tests cover the handlers, and Hanlin's personal browser test remains pending.
-- Activated additive schema 28 after a private mode-0600 schema-27 SQLite backup. SQLite integrity and foreign-key checks PASS; no new production draft or discussion row was created during activation. Read-only execution status still returns CLOSED, 7,253,151 known tokens and the original Board revision. No new planning run started.
-- Formal UI launcher opened the default browser; the local daemon is running for Hanlin's personal test. Use `pnpm ctc:ui` to reopen it, or Ctrl+C in the owning terminal to stop safely. Session/port authority is local and ephemeral; do not copy launch tickets. No main merge or deployment. Windows remains unverified; automatic Node previews require macOS.
+## Step 10 workspace navigation
+- Implemented project → big-task → subtask navigation, persistent fold state, ended-project grouping, dependency/role/stage progress graph, source-labeled context and discussion-origin links. Completed big tasks collapse without reordering. Existing Board delivery is displayed separately from seven retained early attempts. [Behavior, QA repairs and limits](docs/STEP_10_WORKSPACE_NAVIGATION.md); [previous UI baseline](docs/STEP_10_CONSOLE_UI.md).
+- Project/task/subtask chat can create direction drafts with suggested subtasks and change review defaults. Selected profiles on an unapproved plan can be amended through a fresh independently reviewed version, preserving history and planning usage. New LIGHT / independent-QA / hardening-QA workflows enforce the agreed zero / one / two repair allowances. Human direction, execution-plan approval and personal product acceptance remain distinct.
+- Independent QA and focused rechecks PASS. Final full suite: **188 files / 4,838 tests PASS**, four workers, 519.79 seconds, no failures/errors/skips. Final public hygiene, lint, typecheck, build, compiled executable E2E and diff checks PASS. Final render/navigation/launcher checks: **16/16 PASS**. A quadratic large-graph scan found in the first full attempt was repaired; unchanged large-graph and expiry/no-write regressions passed. The initial timeout/failed attempt is not relabeled as a pass.
+- Browser checks on an isolated mock-provider service cover chat-to-draft, prefilled direction/source, selected-profile amendment/fresh review, fold/reload/deep-link, graph layout and 390-pixel narrow view. No real model turn or new Board execution was initiated. Real-provider interface confidence is regression/contract evidence, not a new live smoke; Windows remains unverified.
+- Activated schema 30 after a private mode-0600 schema-28 backup. Integrity and foreign-key checks PASS; hashes of all 13 core record sets are unchanged. Added only presentation grouping and three attributed owner-context conclusions. Formal HTTP readback PASS: one current delivery, seven historical attempts, four completed children, three dependency edges, original Board revision/usage and CLOSED state intact, zero active model roles.
+- Desktop `Codex Task Console.app` is installed. Actual first launch was blocked by the system refusing to read the repository's startup file under Documents (EPERM). The Mac is locked; owner unlock and desktop folder-access/visual verification remain pending. Do not claim the desktop entry passed actual cold-start/reopen QA. The new formal service runs through the already-authorized development launcher for inspection; the underlying local address is ephemeral. No main merge or hosted deployment.
+- One automatic permission-review timeout prevented the first activation command from running; its expressly allowed single retry succeeded. This was not a product-authority rejection or a production repair cycle.
 
 ## Current Board delivery
 - Step 9 is CLOSED by Hanlin's explicit closeout decision. All four Board engineering tasks remain ACCEPTED/integrated at `5b16359b88b2182b6c7e0ced2c1c6e1a1b229b4b`. The saved CLOSE event at `2026-09-08T12:21:17.005Z` records `productAccepted: false`, the browser-recheck waiver and deferred content direction. No additional model or browser call was made for closeout.

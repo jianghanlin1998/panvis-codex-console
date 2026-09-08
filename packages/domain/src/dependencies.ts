@@ -6,7 +6,7 @@ import { SubtaskMaturitySchema } from "./tasks.js";
 import type { SubtaskMaturity } from "./tasks.js";
 
 export const DependencyTypeSchema = z.enum(["BLOCKING", "INFORMATIONAL"]);
-export const DependencyRequiredGateSchema = z.enum(["NONE", "HARDENED", "ACCEPTED"]);
+export const DependencyRequiredGateSchema = z.enum(["NONE", "VERIFIED", "HARDENED", "ACCEPTED"]);
 
 const dependencyReason = z.string().trim().min(1).max(1_000);
 const dependencyEndpoints = {
@@ -20,7 +20,7 @@ export const SubtaskDependencySchema = z.discriminatedUnion("dependencyType", [
     .object({
       ...dependencyEndpoints,
       dependencyType: z.literal("BLOCKING"),
-      requiredGate: z.enum(["HARDENED", "ACCEPTED"]),
+      requiredGate: z.enum(["VERIFIED", "HARDENED", "ACCEPTED"]),
     })
     .strict(),
   z
@@ -53,6 +53,7 @@ export interface DependencySubtask {
 
 export interface DependencyReadinessSubtask extends DependencySubtask {
   readonly maturity: SubtaskMaturity;
+  readonly verificationComplete?: boolean | undefined;
 }
 
 const DependencyReadinessSubtaskSchema = z
@@ -60,6 +61,7 @@ const DependencyReadinessSubtaskSchema = z
     id: SubtaskIdSchema,
     bigTaskId: BigTaskIdSchema,
     maturity: SubtaskMaturitySchema,
+    verificationComplete: z.boolean().optional(),
   })
   .strict();
 
@@ -245,10 +247,13 @@ const compareCodeUnits = (left: string, right: string): number =>
 const satisfiesRequiredGate = (
   maturity: SubtaskMaturity,
   requiredGate: DependencyRequiredGate,
+  verificationComplete = false,
 ): boolean => {
   switch (requiredGate) {
     case "NONE":
       return true;
+    case "VERIFIED":
+      return verificationComplete;
     case "HARDENED":
       return maturity === "HARDENED" || maturity === "ACCEPTED";
     case "ACCEPTED":
@@ -357,7 +362,7 @@ export const evaluateSubtaskDependencyReadiness = (
       const upstream = subtasksById.get(dependency.upstreamSubtaskId);
       if (
         upstream === undefined ||
-        satisfiesRequiredGate(upstream.maturity, dependency.requiredGate)
+        satisfiesRequiredGate(upstream.maturity, dependency.requiredGate, upstream.verificationComplete)
       ) {
         return [];
       }

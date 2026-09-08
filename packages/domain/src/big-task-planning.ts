@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { ContextItemSchema } from "./context.js";
+import { BigTaskIdSchema } from "./identifiers.js";
 import { BigTaskSchema } from "./tasks.js";
 import { isWellFormedUnicode } from "./well-formed-unicode.js";
 import { NormalizedUsageSchema, ProviderModelReferenceSchema, ProviderRunReferenceSchema, ProviderThreadReferenceSchema } from "./execution.js";
@@ -61,6 +62,10 @@ export const BigTaskPlanningIntakeSchema = z.object({
   productDirection: ProductDirectionSchema.optional(),
   reviewIntensity: z.enum(["LIGHT", "STANDARD", "THOROUGH"]).optional(),
   taskSize: z.literal("SMALL").optional(),
+  consoleReviewPolicy: z.literal(true).optional(),
+  planningRevisionOf: BigTaskIdSchema.optional(),
+  consoleTaskReviewLevels: z.array(z.object({ title: text, reviewLevel: z.enum(["LIGHT", "STANDARD", "THOROUGH"]) }).strict()).max(24).optional(),
+  suggestedSubtasks: z.array(z.object({ title: text, goal: text, scopeIn: texts.min(1), scopeOut: texts, successCriteria: texts.min(1) }).strict()).max(24).optional(),
   planningTokenLimit: z.number().int().min(1).max(120_000),
   budgetException: PlanningBudgetExceptionSchema.optional(),
 }).strict();
@@ -82,7 +87,7 @@ const proposedTask = z.object({
 const proposedDependency = z.object({
   upstreamKey: key,
   downstreamKey: key,
-  requiredGate: z.enum(["HARDENED", "ACCEPTED"]),
+  requiredGate: z.enum(["VERIFIED", "HARDENED", "ACCEPTED"]),
   reason: text,
 }).strict();
 

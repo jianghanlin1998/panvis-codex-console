@@ -181,6 +181,7 @@ export class BigTaskExecutionStore {
 
   #review(bigTaskId: BigTaskId) {
     idOf(bigTaskId);
+    if (new LivePlanningStore(this.storage).successor(bigTaskId)) fail();
     const bundle = this.storage.getApprovedTaskContractAuthority(bigTaskId);
     const planning = this.storage.getDurablePlanningSnapshot(bigTaskId);
     const bigTask = this.storage.getBigTaskById(bigTaskId);
@@ -193,7 +194,7 @@ export class BigTaskExecutionStore {
       taskContracts: bundle.taskContracts, intent: { ...bigTask, status: "IN_PROGRESS" } });
     const repositoryHeadSha = RepositoryCommitShaSchema.parse(executionGit(project.repository.path, ["rev-parse", "--verify", "HEAD^{commit}"]));
     const repository = new TrustedRepositorySourceReader(this.storage).readTrustedRepositorySourceSnapshotForBigTask(bigTaskId);
-    return { bigTaskId, planDigest, repositoryHeadSha, candidate: planning.reviewState.candidate,
+    return { bigTaskId, planDigest, repositoryHeadSha, consoleReviewPolicy: intake.consoleReviewPolicy, candidate: planning.reviewState.candidate,
       taskContracts: bundle.taskContracts, project, repository, ...(productDirection === undefined ? {} : { productDirection, reviewIntensity: intake.reviewIntensity ?? "STANDARD" }), executionIssues: executionPlanIssues(planning.reviewState.candidate, productDirection !== undefined) };
   }
 
@@ -209,7 +210,7 @@ export class BigTaskExecutionStore {
       }
       const review = this.review(request.bigTaskId);
       if (review.executionIssues.length !== 0 ||
-        request.limits.repairCycleLimit === 2 && review.candidate.subtasks.some(task => (task.profile !== "HIGH_RISK_FOUNDATION" && !(review.productDirection !== undefined && task.profile === "STANDARD")) || !task.writeEnabled) ||
+        !review.consoleReviewPolicy && request.limits.repairCycleLimit === 2 && review.candidate.subtasks.some(task => (task.profile !== "HIGH_RISK_FOUNDATION" && !(review.productDirection !== undefined && task.profile === "STANDARD")) || !task.writeEnabled) ||
         review.planDigest !== request.planDigest || review.repositoryHeadSha !== request.repositoryHeadSha ||
         this.storage.getCanonicalTaskMaterialization(request.bigTaskId) !== null) fail();
       const value: ApprovalRecord = { request, approvedAt: timestamp(this.storage), projectBinding: executionDigest(review.project),
@@ -844,11 +845,16 @@ export function commitApprovedExecutionCandidate(storage: TaskStorage, input: {
 }
 
 /** Historical workflow replay uses the immutable approval limit, without requiring a running lease. */
-export function approvedRepairCycleLimit(storage: TaskStorage, id: BigTaskId): 1 | 2 {
+export function approvedRepairCycleLimit(storage: TaskStorage, id: BigTaskId, subtaskId?: string): 1 | 2 {
   if (!isLivePlannedTask(storage, id)) return 1;
   const row = access(storage).sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id = ?").get(id);
   if (row === undefined) return 1;
-  return new BigTaskExecutionStore(storage).repairCycleLimit(id);
+  const legacyLimit = new BigTaskExecutionStore(storage).repairCycleLimit(id);
+  if (subtaskId && new LivePlanningStore(storage).readIntake(id).intake.consoleReviewPolicy) {
+    const profile = storage.getDurablePlanningSnapshot(id)?.reviewState.candidate.subtasks.find(task => task.id === subtaskId)?.profile;
+    return profile === "HIGH_RISK_FOUNDATION" ? Math.min(2, legacyLimit) as 1 | 2 : 1;
+  }
+  return legacyLimit;
 }
 
 export const recoveryAuthorizationId = (failedAuthorizationId: string): string =>

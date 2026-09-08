@@ -586,3 +586,31 @@ export const removeOwnedAuthorityFile = (authority: OwnedAuthorityFile): void =>
     throw new LocalStateError("AUTHORITY_CLEANUP_FAILED");
   }
 };
+
+/** Reclaim only authority belonging to a provably stopped process. Never steal a live lock. */
+export const recoverStoppedDaemonAuthority = (
+  paths: LocalControlPaths,
+  alive: (pid: number) => boolean = pid => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw new LocalStateError("UNSAFE_LOCAL_STATE"); }
+  },
+): boolean => {
+  verifyOperatorStateDirectories(paths);
+  let lock: unknown;
+  try { lock = JSON.parse(readPrivateFile(paths.lockPath, "SESSION_UNAVAILABLE")) as unknown; }
+  catch (error) { if (error instanceof LocalStateError && error.code === "SESSION_UNAVAILABLE") return false; throw new LocalStateError("SESSION_MALFORMED"); }
+  if (!isRecord(lock) || !hasExactKeys(lock, ["schemaVersion", "instanceId", "pid", "startedAt"])
+    || lock.schemaVersion !== 1 || typeof lock.instanceId !== "string" || !/^inst_[0-9a-f]{32}$/.test(lock.instanceId)
+    || typeof lock.pid !== "number" || !Number.isSafeInteger(lock.pid) || lock.pid <= 0 || !isCanonicalTimestamp(lock.startedAt)) throw new LocalStateError("SESSION_MALFORMED");
+  if (alive(lock.pid)) return false;
+  const ownedLock = { path: paths.lockPath, instanceId: lock.instanceId, identity: fileIdentity(safeLstat(paths.lockPath)) };
+  let session: LocalSessionDescriptor | null;
+  try { session = readSessionDescriptor(paths); }
+  catch (error) { if (!(error instanceof LocalStateError) || error.code !== "SESSION_UNAVAILABLE") throw error; session = null; }
+  if (session) {
+    if (session.instanceId !== lock.instanceId || session.pid !== lock.pid || session.startedAt !== lock.startedAt) throw new LocalStateError("SESSION_MALFORMED");
+    removeOwnedAuthorityFile({ path: paths.sessionPath, instanceId: session.instanceId, identity: fileIdentity(safeLstat(paths.sessionPath)) });
+  }
+  removeOwnedAuthorityFile(ownedLock);
+  return true;
+};

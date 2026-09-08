@@ -2,23 +2,24 @@
 import { spawn } from "node:child_process";
 import { request } from "node:http";
 import { startLocalControlDaemon } from "./daemon.js";
-import { LocalStateError, productionLocalControlPaths, readSessionDescriptor, ensureProductionStateDirectories } from "./state.js";
+import { connectUiDaemon } from "./ui-launcher.js";
+import { recoverStoppedDaemonAuthority, productionLocalControlPaths, readSessionDescriptor, ensureProductionStateDirectories } from "./state.js";
 
 async function main(): Promise<void> {
   if (process.argv.length !== 2) throw new Error("INVALID_COMMAND");
   const paths = productionLocalControlPaths();
   ensureProductionStateDirectories(paths);
-  let ownsDaemon = false;
-  try { readSessionDescriptor(paths); }
-  catch (error) {
-    if (!(error instanceof LocalStateError) || error.code !== "SESSION_UNAVAILABLE") throw error;
-    const daemon = await startLocalControlDaemon();
-    ownsDaemon = true;
+  const connected = await connectUiDaemon({ readSession: () => readSessionDescriptor(paths),
+    recoverStopped: () => recoverStoppedDaemonAuthority(paths), start: () => startLocalControlDaemon(),
+    wait: () => new Promise(resolve => setTimeout(resolve, 100)) });
+  const ownsDaemon = connected.owned !== null;
+  if (connected.owned) {
+    const daemon = connected.owned;
     let stopping = false;
     const stop = () => { if (!stopping) { stopping = true; void daemon.stop().catch(() => { process.exitCode = 1; }); } };
     process.once("SIGINT", stop); process.once("SIGTERM", stop);
   }
-  const session = readSessionDescriptor(paths);
+  const session = connected.session;
   const code = await new Promise<string>((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port: session.port, path: "/v0/browser/launch", method: "POST", timeout: 10_000,
       headers: { authorization: `Bearer ${session.sessionToken}`, "x-ctc-request": "1", "content-type": "application/json", "content-length": "2" } }, response => {

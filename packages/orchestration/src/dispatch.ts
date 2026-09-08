@@ -260,6 +260,7 @@ export const selectSerialWriteDispatch = (
       id: subtask.id,
       bigTaskId: subtask.bigTaskId,
       maturity: state?.maturity ?? "NOT_STARTED",
+      verificationComplete: state?.stage === "COMPLETE",
     };
   });
 

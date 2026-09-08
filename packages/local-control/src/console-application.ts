@@ -25,34 +25,52 @@ export class ConsoleApplication {
   readonly store: ConsoleWorkspaceStore;
   readonly #previews: ResultPreviews;
   readonly #jobs = new Map<string, Promise<unknown>>();
+  readonly #queued = new Map<string, () => Promise<unknown>>();
   #stopping = false;
   constructor(private readonly storage: TaskStorage, private readonly service: LocalControlService,
     private readonly dependencies: ConsoleApplicationDependencies = { discuss: executeConsoleDiscussionCodex }) {
     this.store = new ConsoleWorkspaceStore(storage);
     this.#previews = dependencies.previews ?? new ResultPreviews();
   }
-  async stop(): Promise<void> { this.#stopping = true; await Promise.allSettled(this.#jobs.values()); await this.#previews.stopAll(); }
+  async stop(): Promise<void> { this.#stopping = true; this.#queued.clear(); await Promise.allSettled(this.#jobs.values()); await this.#previews.stopAll(); }
   #schedule(id: string, job: () => Promise<unknown>) {
-    if (this.#jobs.has(id)) return;
-    if (this.#stopping || this.#jobs.size >= 4) throw new TaskStorageError("CONFLICT", "Console is busy.");
-    const promise = Promise.resolve().then(job).finally(() => { this.#jobs.delete(id); });
-    this.#jobs.set(id, promise);
-    // Jobs persist their own final/failed state. Avoid an unhandled rejection after a client disconnect.
-    void promise.catch(() => undefined);
+    if (this.#jobs.has(id) || this.#queued.has(id)) return;
+    if (this.#stopping) throw new TaskStorageError("CONFLICT", "Console is stopping.");
+    this.#queued.set(id, job); this.#drain();
+  }
+  #drain() {
+    while (!this.#stopping && this.#jobs.size < 4 && this.#queued.size) {
+      const [id, job] = this.#queued.entries().next().value!;
+      this.#queued.delete(id);
+      const promise = Promise.resolve().then(job).finally(() => { this.#jobs.delete(id); this.#drain(); });
+      this.#jobs.set(id, promise);
+      void promise.catch(() => undefined);
+    }
   }
   async request(action: string, input: unknown): Promise<object> {
     const data = object(input);
     if (action === "workspace") {
       exact(input, []);
       const projects = this.storage.listProjects();
-      return { projects: projects.slice(0, 200), hasMore: projects.length > 200 };
+      const directory = projects.slice(0, 200).map(project => ({ ...project, settings: this.store.settings({ kind: "PROJECT", id: project.id }),
+        tasks: this.store.navigation(project.id).map(task => ({ id: task.id, title: task.title.slice(0, 200), status: task.status, closed: task.closed, taskKind: task.taskKind, presentation: task.presentation,
+          subtasks: task.subtasks.map(subtask => ({ id: subtask.id, title: subtask.title.slice(0, 200), status: subtask.status, stage: subtask.stage, materialized: subtask.materialized })) })),
+        drafts: this.store.listDrafts(project.id).filter(draft => !draft.confirmedBigTaskId).map(draft => ({ id: draft.id, title: draft.title, confirmedBigTaskId: null })), directoryTruncated: false }));
+      // The bootstrap directory never includes task bodies or provider/planning transcripts.
+      while (Buffer.byteLength(JSON.stringify(directory), "utf8") > 850_000) {
+        const largest = [...directory].sort((a, b) => b.tasks.length + b.drafts.length - a.tasks.length - a.drafts.length)[0];
+        if (!largest || !largest.tasks.length && !largest.drafts.length) break;
+        if (largest.tasks.length >= largest.drafts.length) largest.tasks.pop(); else largest.drafts.pop();
+        largest.directoryTruncated = true;
+      }
+      return { projects: directory, hasMore: projects.length > 200 };
     }
     if (action === "project") {
       exact(input, ["projectId"]);
       const id = ProjectIdSchema.parse(data.projectId);
       const project = this.storage.getProjectById(id);
       if (!project) throw new TaskStorageError("PARENT_NOT_FOUND", "Project unavailable.");
-      return { project, drafts: this.store.listDrafts(id), bigTasks: this.storage.listBigTasksByProject(id).slice(0, 200) };
+      return { project, drafts: this.store.listDrafts(id), settings: this.store.settings({ kind: "PROJECT", id }), bigTasks: this.store.navigation(id).slice(0, 200) };
     }
     if (action === "project-create") {
       const parsed = ConsoleProjectCreateSchema.parse(input);
@@ -77,6 +95,13 @@ export class ConsoleApplication {
       if (!draft) throw new TaskStorageError("PARENT_NOT_FOUND", "Draft unavailable.");
       return draft;
     }
+    if (action === "plan-review-change") {
+      const result = this.store.amendPlanReview(input);
+      this.#schedule(`planning:${result.bigTaskId}`, () => this.service.runPlanning!(BigTaskIdSchema.parse(result.bigTaskId)));
+      return result;
+    }
+    if (action === "scope-settings") { exact(input, ["scope"]); return this.store.settings(data.scope); }
+    if (action === "settings-change") return this.store.changeSettings(input);
     if (action === "direction-confirm") return this.store.confirmDirection(input);
     if (action === "context") { exact(input, ["scope"]); return this.store.context(data.scope); }
     if (action === "context-confirm") return this.store.confirmContext(input);
@@ -95,7 +120,11 @@ export class ConsoleApplication {
           const result = await this.dependencies.discuss(this.storage, claim.inputText, CONSOLE_DISCUSSION_OUTPUT_SCHEMA as Parameters<typeof executeConsoleDiscussionCodex>[2], remaining);
           let answer: unknown = null;
           if (result.success && result.agentResponseText) { try { answer = JSON.parse(result.agentResponseText); } catch { /* Persist invalid output. */ } }
-          this.store.finishDiscussion(claim.turn.id, answer, result.normalizedUsage, result.failureCode);
+          const finished = this.store.finishDiscussion(claim.turn.id, answer, result.normalizedUsage, result.failureCode);
+          for (const effect of finished.effects ?? []) if (effect.kind === "PLAN_REVIEW_CHANGED") {
+            const id = BigTaskIdSchema.parse(effect.targetId);
+            this.#schedule(`planning:${id}`, () => this.service.runPlanning!(id));
+          }
         } catch { this.store.finishDiscussion(claim.turn.id, null, null, "PROVIDER_FAILED"); }
       });
       return claim.turn;
@@ -105,7 +134,7 @@ export class ConsoleApplication {
       const id = SubtaskIdSchema.parse(data.subtaskId);
       const task = this.storage.getSubtaskById(id);
       if (!task) throw new TaskStorageError("PARENT_NOT_FOUND", "Task unavailable.");
-      return { task, inspection: await this.service.inspectSubtask(id), workflow: this.storage.getDurableWorkflowControlView(id),
+      return { task, parent: this.storage.getBigTaskById(task.bigTaskId), settings: this.store.settings({ kind: "SUBTASK", id }), inspection: await this.service.inspectSubtask(id), workflow: this.storage.getDurableWorkflowControlView(id),
         checkpoints: this.storage.listSubtaskImplementationCheckpoints(id).slice(-20) };
     }
     if (action === "execution-approve") return this.service.approveExecution!(input);
@@ -133,10 +162,10 @@ export class ConsoleApplication {
       const canRenewWindow = execution !== null && windowExpired && ["PAUSED", "HUMAN_REQUIRED"].includes(execution.phase)
         && executionUsageSettled(execution) && !executionTokenLimitReached(execution)
         && execution.roleCalls < execution.limits.roleCallLimit && execution.pendingIntegration === null;
-      return { task, sourceDraft: this.store.sourceDraft(id), planning, execution, canResume, canRenewWindow,
+      return { task, planningBinding: this.store.planningBinding(id), presentation: this.store.presentation(id), settings: this.store.settings({ kind: "BIG_TASK", id }), navigation: this.store.navigation(task.projectId).find(item => item.id === id), sourceDraft: this.store.sourceDraft(id), planning, execution, canResume, canRenewWindow,
         subtasks: this.storage.listSubtasksByBigTask(id), plan: this.storage.getDurablePlanningSnapshot(id),
         contracts: this.storage.getDurablePlanningReviewBundle(id)?.taskContracts ?? [],
-        planningActive: this.#jobs.has(`planning:${id}`) };
+        planningActive: this.#jobs.has(`planning:${id}`) || this.#queued.has(`planning:${id}`) };
     }
     if (action === "planning-start") {
       const before = await this.service.inspectPlanning!(id);

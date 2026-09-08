@@ -2405,7 +2405,7 @@ export class GovernedExecutionStore {
         this.#resolveBlockingFinding(authorization.subtaskId, result);
         references.push(...this.#recordDeliveryEvidence(view, result));
       }
-      nextStage = result.outcome === "BLOCKING_FAIL" && view.repairCyclesUsed < approvedRepairCycleLimit(this.#storage, view.bigTaskId)
+      nextStage = result.outcome === "BLOCKING_FAIL" && view.repairCyclesUsed < approvedRepairCycleLimit(this.#storage, view.bigTaskId, view.subtaskId)
         ? "REPAIR" : "COMPLETE";
     }
 
@@ -2973,6 +2973,9 @@ export class GovernedExecutionStore {
           "Leave the exact bounded file changes for the Console coordinator to commit. Do not run Git writes, push, deploy, or change other checkouts.") +
           " Return compact JSON only, below 16,384 UTF-8 bytes; keep every text field concise."
         : roleInstruction(authorization.role),
+      ...(isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId) && new LivePlanningStore(this.#storage).readIntake(authorization.bigTaskId as BigTaskId).intake.consoleReviewPolicy ? {
+        consoleReviewPolicy: "Respect the selected review depth and mandatory repository checks. VERIFY performs only necessary basic verification. For UI work, FRESH_QA and FOCUSED_RE_QA must inspect the actual rendered interface and relevant interactions, and report concrete visual evidence. If rendering or visual tools are unavailable, report BLOCKING_FAIL with that limitation; never substitute source inspection or synthetic tests for visual verification. HARDEN investigates edge cases and regressions within scope before independent QA. The coordinator enforces the selected QA failure limit; do not invent additional loops or claim product acceptance.",
+      } : {}),
       resultContract: roleResultContract(authorization.role),
       ...(targets.length === 0 ? {} : { boundedFindings: targets }),
       canonicalContext: base.text,

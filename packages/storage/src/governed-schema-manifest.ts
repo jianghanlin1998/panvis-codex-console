@@ -21,7 +21,7 @@ export const governedSchemaManifest: Readonly<Record<string, string>> = Object.f
   "governed_budget_extensions": "9ad0d37cf577bbe16b614e44b8af07f2269cc48f852cadaef5f6fadb6afb39aa",
   "governed_budget_extensions_insert_conflict": "c4baa1145c7968881f34665a6eb0e548e1f7a724ec460c3c5e92bfc6910040a6",
   "governed_dispatch_big_task_index": "d6436da81028a0646a73e2aa0d2f907757e7b787609e91c2526eeb71a3d699e7",
-  "governed_dispatch_current_state_guard": "06c584bd300895a9ce9fa3638cfa35f52ac518f8831a6ef479ce235e2f1ffcf5",
+  "governed_dispatch_current_state_guard": "289d209d5e24008623cf313024c0a27e4bb7c58eb9fdb1c238334b56f94ed5e1",
   "governed_dispatch_gate_snapshots": "c4399633d46bbff5cb42d6a18f3634fd7377602fe9a06306afc20320be5d2d18",
   "governed_dispatch_gate_snapshots_immutable_delete": "b126a628365fe89cb15c061f5bd8b3f9a7e1801b254032a250cd8f5fc654331e",
   "governed_dispatch_gate_snapshots_immutable_update": "b5f2314d230ef7a30dd3407b92fd9cdcedf50bf9a95e2417de5f829b94ec14ce",

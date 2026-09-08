@@ -1838,11 +1838,11 @@ export const taskDependenciesTable = sqliteTable(
     ),
     check(
       "task_dependencies_required_gate_check",
-      sql`${table.requiredGate} in ('NONE', 'HARDENED', 'ACCEPTED')`,
+      sql`${table.requiredGate} in ('NONE', 'VERIFIED', 'HARDENED', 'ACCEPTED')`,
     ),
     check(
       "task_dependencies_type_gate_check",
-      sql`(${table.dependencyType} = 'BLOCKING' and ${table.requiredGate} in ('HARDENED', 'ACCEPTED'))
+      sql`(${table.dependencyType} = 'BLOCKING' and ${table.requiredGate} in ('VERIFIED', 'HARDENED', 'ACCEPTED'))
         or (${table.dependencyType} = 'INFORMATIONAL' and ${table.requiredGate} = 'NONE')`,
     ),
     check(
@@ -2217,3 +2217,16 @@ export const consoleDiscussionTurnsTable = sqliteTable("console_discussion_turns
   check("console_turn_status", sql`${table.status} in ('RUNNING', 'SUCCEEDED', 'FAILED', 'INTERRUPTED')`),
   check("console_turn_json", sql`json_valid(${table.payload})`),
 ]);
+
+/** Owner defaults and display metadata never rewrite execution evidence. */
+export const consoleScopeSettingsTable = sqliteTable("console_scope_settings", {
+  scopeKey: text("scope_key").primaryKey(), projectId: text("project_id").notNull().references(() => projectsTable.id),
+  payload: text("payload").notNull(),
+}, table => [check("console_settings_json", sql`json_valid(${table.payload})`)]);
+export const consoleSettingsChangesTable = sqliteTable("console_settings_changes", {
+  requestId: text("request_id").primaryKey(), projectId: text("project_id").notNull().references(() => projectsTable.id),
+  payload: text("payload").notNull(),
+}, table => [check("console_settings_change_json", sql`json_valid(${table.payload})`)]);
+export const consoleTaskPresentationTable = sqliteTable("console_task_presentation", {
+  bigTaskId: text("big_task_id").primaryKey().references(() => bigTasksTable.id), payload: text("payload").notNull(),
+}, table => [check("console_task_presentation_json", sql`json_valid(${table.payload})`)]);

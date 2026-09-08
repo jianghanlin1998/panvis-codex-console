@@ -102,8 +102,9 @@ export class LivePlanningStore {
     const latest = runs.at(-1);
     const planning = this.#storage.getDurablePlanningSnapshot(input);
     const review = planning?.reviewState;
-    const totalTokens = runs.reduce((sum, run) => sum + (run.normalizedUsage?.totalTokens ?? 0), 0);
-    const usageComplete = runs.every((run) => run.normalizedUsage?.totalTokens !== undefined);
+    const accountedRuns = this.#familyRuns(input);
+    const totalTokens = accountedRuns.reduce((sum, run) => sum + (run.normalizedUsage?.totalTokens ?? 0), 0);
+    const usageComplete = accountedRuns.every((run) => run.normalizedUsage?.totalTokens !== undefined);
     let phase: LivePlanningStatus["phase"] = "READY";
     let stopReason: LivePlanningStatus["stopReason"] = null;
     if (latest?.status === "RUNNING") phase = "RUNNING";
@@ -117,7 +118,7 @@ export class LivePlanningStore {
     else if (this.remainingTimeMs(input) === 0) {
       phase = "HUMAN_REQUIRED";
       stopReason = "TIME_LIMIT_REACHED";
-    } else if (runs.length >= 6 || (intake.budgetException === undefined && totalTokens >= intake.planningTokenLimit) || !usageComplete) {
+    } else if (accountedRuns.length >= 6 || (intake.budgetException === undefined && totalTokens >= intake.planningTokenLimit) || !usageComplete) {
       phase = "HUMAN_REQUIRED";
       stopReason = usageComplete ? "BUDGET_BLOCKED" : "USAGE_UNKNOWN";
     }
@@ -143,7 +144,7 @@ export class LivePlanningStore {
   claim(input: BigTaskId): PlanningRunRecord {
     return this.#storage.runInTransaction(() => {
       const status = this.inspect(input);
-      if (status.phase !== "READY" || status.nextRole === null) fail();
+      if (status.phase !== "READY" || status.nextRole === null || this.successor(input)) fail();
       const source = this.#intake(input);
       const contextMatches = this.#contextMatches(input, source);
       const bundle = this.#storage.getDurablePlanningReviewBundle(input);
@@ -164,6 +165,7 @@ export class LivePlanningStore {
             : " If a complete review cannot fit, use ESCALATE with a concise question instead of truncating or omitting blocking findings."),
         approvedIntent: source.intake,
         ...(source.intake.taskSize === "SMALL" ? { taskSizeInstruction: "This is a direct small-task intake. Propose exactly one bounded task and no dependencies. If the goal cannot fit one task, ask a product question rather than silently expanding it." } : {}),
+        reviewPolicy: source.intake.consoleReviewPolicy ? "Owner-selected review levels are binding: LIGHT maps to LOW and basic verification; STANDARD maps to independent QA with at most two failed QA attempts; THOROUGH maps to hardening plus QA with at most three failed QA attempts. Apply consoleTaskReviewLevels by exact task title, otherwise reviewIntensity. Preserve each listed title exactly once during engineering revision; renaming or dropping a human-selected task requires a product question. Do not silently alter selected levels; ask if a genuine requirement conflicts. A LIGHT upstream uses VERIFIED dependency gate: implementation alone never satisfies it, trusted completion of VERIFY is required. UI tasks under STANDARD/THOROUGH require real visual evidence; unavailable visual verification is a blocker, never an invented PASS." : null,
         productAuthority: "The confirmed product direction defines what to build. A tool, feed, vendor or implementation choice is not a substitute for product alignment. Do not silently narrow the audience, coverage, content-selection criteria or meaning of success. Ask a product question when any such decision is unresolved; engineering choices within the confirmed direction need no additional human tool approval. Treat reviewIntensity as the owner's preferred review depth; use the lightest sufficient per-task review and explain material deviations in a product question.",
         project: source.project,
         repository: source.repository,
@@ -236,6 +238,7 @@ export class LivePlanningStore {
             } else {
               const { intake } = this.#intake(input);
               if (intake.taskSize === "SMALL" && (proposal.tasks.length !== 1 || proposal.dependencies.length !== 0)) fail("INVALID_INPUT");
+              if (intake.consoleTaskReviewLevels?.some(level => proposal.tasks.filter(task => task.title === level.title).length !== 1)) fail("INVALID_INPUT");
               const current = this.#storage.getDurablePlanningSnapshot(input);
               const revision = (current?.reviewState.candidate.revision ?? 0) + 1;
               const ids = new Map(proposal.tasks.map((task) => [task.key,
@@ -252,14 +255,14 @@ export class LivePlanningStore {
               const candidate: PlanCandidate = {
                 kind: "PLAN_CANDIDATE", projectId: intake.bigTask.projectId, bigTaskId: input, revision,
                 subtasks: proposal.tasks.map((task, index) => ({
-                  id: contracts[index]!.subtaskId, bigTaskId: input, profile: task.profile,
+                  id: contracts[index]!.subtaskId, bigTaskId: input, profile: intake.consoleReviewPolicy ? ({ LIGHT: "LOW", STANDARD: "STANDARD", THOROUGH: "HIGH_RISK_FOUNDATION" } as const)[intake.consoleTaskReviewLevels?.find(item => item.title === task.title)?.reviewLevel ?? intake.reviewIntensity ?? "STANDARD"] : task.profile,
                   taskContractRef: contracts[index]!.taskContractRef, writeEnabled: task.writeEnabled,
                 })),
                 dependencies: proposal.dependencies.map((edge) => {
                   const upstreamSubtaskId = ids.get(edge.upstreamKey);
                   const downstreamSubtaskId = ids.get(edge.downstreamKey);
                   if (upstreamSubtaskId === undefined || downstreamSubtaskId === undefined) fail("INVALID_INPUT");
-                  return { upstreamSubtaskId, downstreamSubtaskId, dependencyType: "BLOCKING", requiredGate: edge.requiredGate, reason: edge.reason };
+                  return { upstreamSubtaskId, downstreamSubtaskId, dependencyType: "BLOCKING", requiredGate: intake.consoleReviewPolicy && (intake.consoleTaskReviewLevels?.find(item => item.title === proposal.tasks.find(task => task.key === edge.upstreamKey)?.title)?.reviewLevel ?? intake.reviewIntensity) === "LIGHT" ? "VERIFIED" : edge.requiredGate, reason: edge.reason };
                 }),
               };
               if (!validatePlanCandidateGraph(candidate).valid) fail("INVALID_INPUT");
@@ -328,6 +331,22 @@ export class LivePlanningStore {
         || intake.bigTask.id !== input || canonical({ ...value, intake }) !== row.payload) fail("MALFORMED_STORED_DATA");
       return { intake, project: value.project, repository: value.repository };
     } catch { return fail("MALFORMED_STORED_DATA"); }
+  }
+
+  successor(input: BigTaskId): BigTaskId | null {
+    const row = this.#access.sqlite.prepare("SELECT big_task_id FROM live_planning_intakes WHERE json_extract(payload, '$.intake.planningRevisionOf') = ?").get(input);
+    return row ? BigTaskIdSchema.parse(row.big_task_id) : null;
+  }
+  #familyRuns(input: BigTaskId): PlanningRunRecord[] {
+    const runs: PlanningRunRecord[] = [];
+    const seen = new Set<BigTaskId>();
+    let id: BigTaskId | undefined = input;
+    while (id) {
+      if (seen.has(id) || seen.size >= 200) fail("MALFORMED_STORED_DATA");
+      seen.add(id); runs.unshift(...this.#runs(id));
+      id = this.#intake(id).intake.planningRevisionOf;
+    }
+    return runs;
   }
 
   #runs(input: BigTaskId): PlanningRunRecord[] {

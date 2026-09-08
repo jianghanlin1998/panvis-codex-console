@@ -2894,7 +2894,7 @@ export class TaskStorage {
             facts: resolved.facts,
           },
           repairCyclesUsed: view.repairCyclesUsed,
-        }, approvedRepairCycleLimit(this, view.bigTaskId));
+        }, approvedRepairCycleLimit(this, view.bigTaskId, view.subtaskId));
         if (decision.kind === "BLOCKED") {
           return deepFreeze({ kind: "BLOCKED", decision, view });
         }
@@ -4309,11 +4309,15 @@ export class TaskStorage {
           .all()
           .map(subtaskFromRow);
 
+        const verifiedUpstreamIds = new Set(dependencies
+          .filter(edge => edge.requiredGate === "VERIFIED")
+          .map(edge => edge.upstreamSubtaskId));
         const result = evaluateSubtaskDependencyReadiness(
           subtasks.map(({ id, bigTaskId, maturity }) => ({
             id,
             bigTaskId,
             maturity,
+            ...(verifiedUpstreamIds.has(id) ? { verificationComplete: this.getDurableWorkflowControlView(id)?.currentStage === "COMPLETE" } : {}),
           })),
           dependencies,
           subtaskId,
@@ -5644,7 +5648,7 @@ export class TaskStorage {
             facts: resolved.facts,
           },
           repairCyclesUsed,
-        }, approvedRepairCycleLimit(this, instance.bigTaskId));
+        }, approvedRepairCycleLimit(this, instance.bigTaskId, instance.subtaskId));
         if (
           decision.kind !== "ELIGIBLE" ||
           decision.currentStage !== transition.priorStage ||
@@ -5704,7 +5708,7 @@ export class TaskStorage {
             facts: resolved.facts,
           },
           repairCyclesUsed,
-        }, approvedRepairCycleLimit(this, instance.bigTaskId));
+        }, approvedRepairCycleLimit(this, instance.bigTaskId, instance.subtaskId));
         if (
           decision.kind !== "HUMAN_REQUIRED" ||
           decision.reason !== scopedRequirement.reason
