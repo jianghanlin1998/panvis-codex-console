@@ -194,6 +194,7 @@ const standardRequirements = (
       return Object.freeze(["PLAN_REVIEW_SATISFIED"]);
     case "MATERIALIZE->EXECUTE":
       return Object.freeze([...executionEntryEvidence]);
+    case "EXECUTE->FRESH_QA":
     case "EXECUTE->VERIFY":
     case "EXECUTE->HARDEN":
       return Object.freeze(["EXECUTION_EVIDENCE_PASSED"]);
@@ -349,11 +350,11 @@ export const evaluateStageTransition = (
   }
 
   if (
-    (input.profile !== "HIGH_RISK_FOUNDATION" && input.repairCyclesUsed !== 0) ||
-    (input.profile === "HIGH_RISK_FOUNDATION" &&
+    (input.profile === "LOW" && input.repairCyclesUsed !== 0) ||
+    (input.profile !== "LOW" &&
       (input.currentStage === "REPAIR" || input.currentStage === "FOCUSED_RE_QA") &&
       input.repairCyclesUsed !== 1 && input.repairCyclesUsed !== 2) ||
-    (input.profile === "HIGH_RISK_FOUNDATION" &&
+    (input.profile !== "LOW" &&
       input.currentStage !== "REPAIR" &&
       input.currentStage !== "FOCUSED_RE_QA" &&
       input.currentStage !== "COMPLETE" &&
@@ -370,10 +371,12 @@ export const evaluateStageTransition = (
   }
 
   let expectedNextStage = nextStageFor(input.profile, input.currentStage);
+  // Legacy STANDARD verification remains replayable; new approved work can choose independent QA without a hardening sweep.
+  if (input.profile === "STANDARD" && input.currentStage === "EXECUTE" && input.requestedNextStage === "FRESH_QA") expectedNextStage = "FRESH_QA";
   let requiredEvidence: readonly StageEvidenceCode[] = [];
   let nextRepairCyclesUsed = input.repairCyclesUsed;
 
-  if (input.profile === "HIGH_RISK_FOUNDATION" && input.currentStage === "FRESH_QA") {
+  if (input.profile !== "LOW" && input.currentStage === "FRESH_QA") {
     requiredEvidence = Object.freeze(["FRESH_QA_OUTCOME_RECORDED"]);
     if (!hasOnlyRelevantEvidence(input.evidence, requiredEvidence)) {
       return blocked(
@@ -402,7 +405,7 @@ export const evaluateStageTransition = (
       expectedNextStage = "COMPLETE";
     }
   } else if (
-    input.profile === "HIGH_RISK_FOUNDATION" &&
+    input.profile !== "LOW" &&
     input.currentStage === "REPAIR"
   ) {
     if (input.repairCyclesUsed !== 1 && input.repairCyclesUsed !== 2) {
@@ -418,7 +421,7 @@ export const evaluateStageTransition = (
     expectedNextStage = "FOCUSED_RE_QA";
     requiredEvidence = Object.freeze(["REPAIR_EVIDENCE_PASSED"]);
   } else if (
-    input.profile === "HIGH_RISK_FOUNDATION" &&
+    input.profile !== "LOW" &&
     input.currentStage === "FOCUSED_RE_QA"
   ) {
     if (input.repairCyclesUsed !== 1 && input.repairCyclesUsed !== 2) {

@@ -1,3 +1,6 @@
+import { LivePlanningStore } from "./live-planning.js";
+import { readExecutionProgress } from "./execution-progress.js";
+import type { ExecutionProgress, ExecutionUsageBreakdown } from "@codex-task-console/domain";
 import { assertGovernedSchemaIntegrity } from "./governed-schema-integrity.js";
 import { BigTaskControlFailureSchema, type BigTaskControlFailure } from "@codex-task-console/domain";
 import { executionPlanIssues } from "./execution-plan-readiness.js";
@@ -6,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { devNull, tmpdir } from "node:os";
 import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
 import { join, sep } from "node:path";
-import { BigTaskQaRecoverySchema, BigTaskRoleFailureSchema, executionUsageSettled, executionTokenLimitReached, hasUnacknowledgedExecutionUsage, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
+import { BigTaskExecutionCloseoutSchema, BigTaskQaRecoverySchema, BigTaskRoleFailureSchema, executionUsageSettled, executionTokenLimitReached, hasUnacknowledgedExecutionUsage, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionApprovalSchema, BigTaskExecutionStatusSchema, BigTaskIdSchema, ExecutionRunIdSchema, RepositoryCommitShaSchema } from "@codex-task-console/domain";
 import type { BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskId, SubtaskId, WorktreeOwnership } from "@codex-task-console/domain";
 import { TaskStorageError } from "./errors.js";
 import type { TaskStorage } from "./task-storage.js";
@@ -71,7 +74,7 @@ interface ApprovalRecord {
   readonly repositoryBinding: string;
   readonly resultRef: string;
 }
-export type ExecutionPhase = "APPROVED" | "RUNNING" | "PAUSED" | "HUMAN_REQUIRED" | "AWAITING_ACCEPTANCE" | "ACCEPTED";
+export type ExecutionPhase = "APPROVED" | "RUNNING" | "PAUSED" | "HUMAN_REQUIRED" | "AWAITING_ACCEPTANCE" | "ACCEPTED" | "CLOSED";
 export type ExecutionStopReason = "USER_PAUSED" | "DAEMON_STOPPING" | "CHECKPOINT_RECOVERED" | "INTERRUPTED" | "TIME_LIMIT_REACHED" | "TOKEN_LIMIT_REACHED" | "ROLE_LIMIT_REACHED" | "USAGE_UNKNOWN" | "GOVERNED_BLOCKED" | "LOCAL_OPERATION_FAILED";
 type IntegrationIntent = { readonly subtaskId: string | null; readonly fromSha: string; readonly toSha: string };
 const integrationWriters = new WeakMap<TaskStorage, (bigTaskId: BigTaskId, intent: IntegrationIntent) => void>();
@@ -85,17 +88,21 @@ type ExecutionEvent =
   | { readonly kind: "ROLE"; readonly at: string; readonly authorizationId: string }
   | ({ readonly kind: "INTEGRATION_PREPARED" | "INTEGRATE"; readonly at: string } & IntegrationIntent)
   | { readonly kind: "STOP"; readonly at: string; readonly reason: ExecutionStopReason }
+  | { readonly kind: "CLOSE"; readonly at: string; readonly headSha: string; readonly reason: string }
   | { readonly kind: "DELIVER" | "ACCEPT"; readonly at: string; readonly headSha: string };
 export interface BigTaskExecutionStatus {
   readonly bigTaskId: BigTaskId;
   readonly planDigest: string;
   readonly phase: ExecutionPhase;
+  readonly closeout?: { readonly at: string; readonly reason: string; readonly productAccepted: false };
   readonly stopReason: ExecutionStopReason | null;
   readonly startedAt: string | null;
   readonly expiresAt: string | null;
   readonly limits: BigTaskExecutionApproval["limits"];
   readonly roleCalls: number;
   readonly knownTokens: number;
+  readonly usageBreakdown?: ExecutionUsageBreakdown;
+  readonly activeRole?: { readonly runId: string; readonly subtaskId: string; readonly role: string; readonly usageState: "IN_PROGRESS"; readonly progress: ExecutionProgress | null };
   readonly usageComplete: boolean;
   readonly activeRoleCount: number;
   readonly unknownCompletedUsage: boolean;
@@ -151,12 +158,14 @@ export class BigTaskExecutionStore {
     if (!isLivePlannedTask(this.storage, bigTaskId) || bundle?.taskContractAuthorityReadiness !== "TASK_CONTRACT_AUTHORITY_READY" || planning === null || bigTask === null) fail();
     const project = this.storage.getProjectById(bigTask.projectId);
     if (project?.repository.kind !== "PATH") fail();
-    const planDigest = executionDigest({ candidate: planning.reviewState.candidate, candidateBinding: bundle.candidateBinding,
+    const intake = new LivePlanningStore(this.storage).readIntake(bigTaskId).intake;
+    const productDirection = intake.productDirection;
+    const planDigest = executionDigest({ ...(productDirection === undefined ? {} : { productDirection, reviewIntensity: intake.reviewIntensity ?? "STANDARD" }), candidate: planning.reviewState.candidate, candidateBinding: bundle.candidateBinding,
       taskContracts: bundle.taskContracts, intent: { ...bigTask, status: "IN_PROGRESS" } });
     const repositoryHeadSha = RepositoryCommitShaSchema.parse(executionGit(project.repository.path, ["rev-parse", "--verify", "HEAD^{commit}"]));
     const repository = new TrustedRepositorySourceReader(this.storage).readTrustedRepositorySourceSnapshotForBigTask(bigTaskId);
     return { bigTaskId, planDigest, repositoryHeadSha, candidate: planning.reviewState.candidate,
-      taskContracts: bundle.taskContracts, project, repository, executionIssues: executionPlanIssues(planning.reviewState.candidate) };
+      taskContracts: bundle.taskContracts, project, repository, ...(productDirection === undefined ? {} : { productDirection, reviewIntensity: intake.reviewIntensity ?? "STANDARD" }), executionIssues: executionPlanIssues(planning.reviewState.candidate, productDirection !== undefined) };
   }
 
   approve(input: unknown): BigTaskExecutionStatus {
@@ -171,7 +180,7 @@ export class BigTaskExecutionStore {
       }
       const review = this.review(request.bigTaskId);
       if (review.executionIssues.length !== 0 ||
-        request.limits.repairCycleLimit === 2 && review.candidate.subtasks.some(task => task.profile !== "HIGH_RISK_FOUNDATION" || !task.writeEnabled) ||
+        request.limits.repairCycleLimit === 2 && review.candidate.subtasks.some(task => (task.profile !== "HIGH_RISK_FOUNDATION" && !(review.productDirection !== undefined && task.profile === "STANDARD")) || !task.writeEnabled) ||
         review.planDigest !== request.planDigest || review.repositoryHeadSha !== request.repositoryHeadSha ||
         this.storage.getCanonicalTaskMaterialization(request.bigTaskId) !== null) fail();
       const value: ApprovalRecord = { request, approvedAt: timestamp(this.storage), projectBinding: executionDigest(review.project),
@@ -202,6 +211,7 @@ export class BigTaskExecutionStore {
     let qaRecovery: BigTaskExecutionStatus["qaRecovery"];
     let lastRoleFailure: BigTaskExecutionStatus["lastRoleFailure"];
     let lastControlFailure: BigTaskExecutionStatus["lastControlFailure"];
+    let closeout: BigTaskExecutionStatus["closeout"];
     const failedRoles = new Set<string>();
     const rows = access(this.storage).sqlite.prepare("SELECT sequence, payload FROM big_task_execution_events WHERE big_task_id = ? ORDER BY sequence").all(bigTaskId);
     if (rows.length > 1024) fail("MALFORMED_STORED_DATA");
@@ -309,6 +319,11 @@ export class BigTaskExecutionStore {
         case "STOP":
           if (Object.keys(event).length !== 3 || phase !== "RUNNING" || !["USER_PAUSED", "DAEMON_STOPPING", "CHECKPOINT_RECOVERED", "INTERRUPTED", "TIME_LIMIT_REACHED", "TOKEN_LIMIT_REACHED", "ROLE_LIMIT_REACHED", "USAGE_UNKNOWN", "GOVERNED_BLOCKED", "LOCAL_OPERATION_FAILED"].includes(event.reason)) fail("MALFORMED_STORED_DATA");
           stopReason = event.reason; phase = event.reason === "USER_PAUSED" || event.reason === "DAEMON_STOPPING" || event.reason === "CHECKPOINT_RECOVERED" ? "PAUSED" : "HUMAN_REQUIRED"; break;
+        case "CLOSE":
+          if (Object.keys(event).length !== 4 || phase !== "AWAITING_ACCEPTANCE" || event.headSha !== head ||
+            !BigTaskExecutionCloseoutSchema.safeParse({ bigTaskId, headSha: event.headSha, reason: event.reason }).success) fail("MALFORMED_STORED_DATA");
+          closeout = { at: event.at, reason: event.reason, productAccepted: false };
+          phase = "CLOSED"; break;
         case "DELIVER":
         case "ACCEPT":
           if (Object.keys(event).length !== 3 || event.headSha !== head || phase !== (event.kind === "DELIVER" ? "RUNNING" : "AWAITING_ACCEPTANCE")) fail("MALFORMED_STORED_DATA");
@@ -326,6 +341,7 @@ export class BigTaskExecutionStore {
       roleCalls, ...usage, ...(recovery === undefined ? {} : { recovery }), ...(qaRecovery === undefined ? {} : { qaRecovery }),
       ...(lastRoleFailure === undefined ? {} : { lastRoleFailure }),
       ...(lastControlFailure === undefined ? {} : { lastControlFailure }),
+      ...(closeout === undefined ? {} : { closeout }),
       ...(additionalRecoveries.length === 0 ? {} : { additionalRecoveries }),
       ...([recovery, ...additionalRecoveries].some(r => r?.totalBudgetMode === "WARNING_ONLY") ? { totalBudgetMode: "WARNING_ONLY" as const } : {}),
       ...(windowRenewal === undefined ? {} : { windowRenewal }),
@@ -468,7 +484,7 @@ export class BigTaskExecutionStore {
   start(bigTaskId: BigTaskId): { claimed: boolean; status: BigTaskExecutionStatus } {
     return this.storage.runInTransaction(() => {
       const state = this.inspect(bigTaskId);
-      if (state.phase === "RUNNING" || state.phase === "AWAITING_ACCEPTANCE" || state.phase === "ACCEPTED") return { claimed: false, status: state };
+      if (state.phase === "RUNNING" || state.phase === "AWAITING_ACCEPTANCE" || state.phase === "ACCEPTED" || state.phase === "CLOSED") return { claimed: false, status: state };
       if (state.phase !== "APPROVED" && state.phase !== "PAUSED" && !(state.phase === "HUMAN_REQUIRED" && state.stopReason === "TIME_LIMIT_REACHED")) fail();
       this.assertCurrent(bigTaskId);
       if (state.expiresAt !== null && Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage))) fail();
@@ -547,6 +563,29 @@ export class BigTaskExecutionStore {
     });
   }
 
+  /** Human-directed closeout retains engineering results without claiming product acceptance. */
+  close(input: unknown): BigTaskExecutionStatus {
+    const parsed = BigTaskExecutionCloseoutSchema.safeParse(input);
+    if (!parsed.success || executionCanonical(parsed.data) !== executionCanonical(input)) fail("INVALID_INPUT");
+    const { bigTaskId, headSha, reason } = parsed.data;
+    return this.storage.runInTransaction(() => {
+      const state = this.inspect(bigTaskId);
+      const approval = this.#approval(bigTaskId);
+      const task = this.storage.getBigTaskById(bigTaskId);
+      const project = task === null ? null : this.storage.getProjectById(task.projectId);
+      if (project?.repository.kind !== "PATH" || executionDigest(project) !== approval.projectBinding ||
+        executionGit(project.repository.path, ["rev-parse", "--verify", `${state.resultRef}^{commit}`]) !== headSha ||
+        state.resultHeadSha !== headSha) fail();
+      if (state.phase === "CLOSED") {
+        if (state.closeout?.reason !== reason) fail();
+        return state;
+      }
+      if (state.phase !== "AWAITING_ACCEPTANCE") fail();
+      this.#append(bigTaskId, { kind: "CLOSE", at: timestamp(this.storage), headSha, reason });
+      return this.inspect(bigTaskId);
+    });
+  }
+
   recoverInterrupted(): void {
     const rows = access(this.storage).sqlite.prepare("SELECT big_task_id FROM big_task_execution_approvals").all();
     for (const row of rows) {
@@ -618,10 +657,14 @@ export class BigTaskExecutionStore {
       WHERE auth.big_task_id = ? AND (run.status IS NULL OR run.status != 'SUCCEEDED')`).all(bigTaskId).every(row => recovered.has(String(row.authorization_id)));
   }
 
-  #usage(bigTaskId: BigTaskId, acknowledgedRunId?: string): { knownTokens: number; usageComplete: boolean; activeRoleCount: number; unknownCompletedUsage: boolean; unacknowledgedUnknownUsage?: boolean } {
-    const rows = access(this.storage).sqlite.prepare(`SELECT link.execution_run_id FROM governed_role_execution_links link
+  #usage(bigTaskId: BigTaskId, acknowledgedRunId?: string): Pick<BigTaskExecutionStatus, "knownTokens" | "usageComplete" | "activeRoleCount" | "unknownCompletedUsage" | "unacknowledgedUnknownUsage" | "usageBreakdown" | "activeRole"> {
+    const rows = access(this.storage).sqlite.prepare(`SELECT link.execution_run_id, auth.subtask_id, auth.role FROM governed_role_execution_links link
       JOIN governed_role_authorizations auth ON auth.authorization_id = link.authorization_id WHERE auth.big_task_id = ?`).all(bigTaskId);
     let knownTokens = 0;
+    let activeRole: BigTaskExecutionStatus["activeRole"];
+    const usageBreakdown = { completedRuns: 0, accounting: "TOKENS_NOT_CURRENCY" as const,
+      inputTokens: { known: 0, missingRuns: 0 }, cachedInputTokens: { known: 0, missingRuns: 0 },
+      outputTokens: { known: 0, missingRuns: 0 }, reasoningTokens: { known: 0, missingRuns: 0 } };
     let activeRoleCount = 0;
     let unknownCompletedUsage = false;
     let unacknowledgedUnknownUsage = false;
@@ -629,11 +672,25 @@ export class BigTaskExecutionStore {
       const run = this.storage.getExecutionRunById(ExecutionRunIdSchema.parse(row.execution_run_id));
       if (run === null) fail("MALFORMED_STORED_DATA");
       knownTokens += run.normalizedUsage?.totalTokens ?? 0;
-      if (["CREATED", "RUNNING"].includes(run.status)) activeRoleCount += 1;
+      if (["CREATED", "RUNNING"].includes(run.status)) {
+        activeRoleCount += 1;
+        let progress: ExecutionProgress | null = null;
+        // Optional display data cannot invalidate authoritative usage/status.
+        try { progress = readExecutionProgress(this.storage, run.id); } catch { /* Report unavailable activity. */ }
+        activeRole = { runId: run.id, subtaskId: String(row.subtask_id), role: String(row.role), usageState: "IN_PROGRESS", progress };
+      }
       else if (run.normalizedUsage?.totalTokens === undefined) { unknownCompletedUsage = true; if (run.id !== acknowledgedRunId) unacknowledgedUnknownUsage = true; }
+      if (!["CREATED", "RUNNING"].includes(run.status)) {
+        usageBreakdown.completedRuns += 1;
+        for (const key of ["inputTokens", "cachedInputTokens", "outputTokens", "reasoningTokens"] as const) {
+          const value = run.normalizedUsage?.[key];
+          if (value === undefined) usageBreakdown[key].missingRuns += 1;
+          else usageBreakdown[key].known += value;
+        }
+      }
     }
     if (activeRoleCount > 1 || !Number.isSafeInteger(knownTokens)) fail("MALFORMED_STORED_DATA");
-    return { knownTokens, usageComplete: activeRoleCount === 0 && !unknownCompletedUsage, activeRoleCount, unknownCompletedUsage,
+    return { knownTokens, usageBreakdown, ...(activeRole === undefined ? {} : { activeRole }), usageComplete: activeRoleCount === 0 && !unknownCompletedUsage, activeRoleCount, unknownCompletedUsage,
       ...(acknowledgedRunId === undefined ? {} : { unacknowledgedUnknownUsage }) };
   }
 

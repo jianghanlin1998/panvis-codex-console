@@ -121,7 +121,7 @@ describe("bounded planning HTTP envelope", () => {
         call.once("error", reject); call.end(input);
       });
       expect(result.status).toBe(bytes <= 262_144 ? 200 : 500);
-      expect(result.body).toBe(bytes <= 262_144 ? JSON.stringify(body) : JSON.stringify({ error: { code: "LOCAL_OPERATION_FAILED" } }));
+      expect(result.body).toBe(bytes <= 262_144 ? JSON.stringify(body) : JSON.stringify({ error: { code: "RESPONSE_TOO_LARGE" } }));
     } finally {
       await new Promise<void>(resolve => { http.server.close(() => resolve()); http.server.closeAllConnections(); });
     }

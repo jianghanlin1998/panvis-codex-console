@@ -1782,9 +1782,16 @@ it("upgrades predecessor-format claims without inventing input or gate provenanc
     db.exec("DROP TABLE governed_provider_turn_starts");
     db.exec("DROP TABLE governed_provider_input_observations");
     db.exec("DROP TABLE governed_gate_observations");
-    // Steps 9B and 9C are newer than the exact pre-provenance schema reconstructed here.
-    // Its empty additive tables and ledger suffix must be removed together.
-    for (const table of ["big_task_execution_events", "big_task_execution_approvals", "live_planning_runs", "live_planning_intakes"]) {
+    // Derive later additive tables from the pinned predecessor snapshot, so a
+    // future migration cannot accidentally remain in this version-19 fixture.
+    // Only empty later tables may be removed; predecessor rows stay untouched.
+    const predecessor = JSON.parse(readFileSync(new URL("../drizzle/20260905050930_governed_gate_sources/snapshot.json", import.meta.url), "utf8")) as { ddl: Array<{ entityType: string; name: string }> };
+    const priorTables = new Set(predecessor.ddl.filter(entry => entry.entityType === "tables").map(entry => entry.name));
+    const laterTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'")
+      .all().map(row => String(row.name)).filter(name => !priorTables.has(name));
+    expect(laterTables).toContain("execution_run_progress");
+    for (const table of laterTables) {
+      expect(table).toMatch(/^[a-z_][a-z0-9_]*$/u);
       expect(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
       db.exec(`DROP TABLE ${table}`);
     }

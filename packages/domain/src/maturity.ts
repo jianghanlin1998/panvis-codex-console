@@ -19,13 +19,15 @@ const NEXT_MATURITY = {
 export const validateSubtaskMaturityTransition = (
   from: SubtaskMaturity,
   to: SubtaskMaturity,
+  independentQaPassed = false,
 ): SubtaskMaturityTransitionResult => {
   const parsedFrom = SubtaskMaturitySchema.safeParse(from);
   const parsedTo = SubtaskMaturitySchema.safeParse(to);
   if (!parsedFrom.success || !parsedTo.success) {
     return { allowed: false, errorCodes: ["UNSUPPORTED_MATURITY_TRANSITION"] };
   }
-  return NEXT_MATURITY[parsedFrom.data] === parsedTo.data
+  return (NEXT_MATURITY[parsedFrom.data] === parsedTo.data ||
+    independentQaPassed === true && parsedFrom.data === "IMPLEMENTED" && parsedTo.data === "ACCEPTED")
     ? { allowed: true, errorCodes: [] }
     : { allowed: false, errorCodes: ["UNSUPPORTED_MATURITY_TRANSITION"] };
 };

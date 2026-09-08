@@ -1,5 +1,5 @@
-import { BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema, TaskContractV0Schema } from "@codex-task-console/domain";
-import type { BigTaskQaRecovery, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval } from "@codex-task-console/domain";
+import { ProductDirectionSchema, BigTaskExecutionCloseoutSchema, BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema, TaskContractV0Schema } from "@codex-task-console/domain";
+import type { BigTaskExecutionCloseout, BigTaskQaRecovery, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval } from "@codex-task-console/domain";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
@@ -64,7 +64,7 @@ const DEFAULT_OPERATOR_TIMEOUT_MILLISECONDS = 5 * 60_000;
 
 type ExecutionIdCommand = "execution-qa-recovery-review" | "execution-recovery-review" | "execution-review" | "execution-status" | "execution-start" | "execution-pause";
 export type OperatorCommandName =
-  | ExecutionIdCommand | "execution-recover-qa" | "execution-renew-window" | "execution-recover" | "execution-approve" | "execution-accept"
+  | ExecutionIdCommand | "execution-recover-qa" | "execution-renew-window" | "execution-recover" | "execution-approve" | "execution-accept" | "execution-close"
   | "planning-intake" | "planning-status" | "planning-run"
   | "ping"
   | "status"
@@ -72,12 +72,15 @@ export type OperatorCommandName =
   | "run"
   | "release"
   | "governed-status"
+  | "governed-history"
   | "governed-advance"
   | "governed-manual-start"
   | "governed-budget-extension";
 
 export type OperatorCommand =
   | { readonly name: ExecutionIdCommand; readonly bigTaskId: BigTaskId }
+  | { readonly name: "governed-history"; readonly history: { readonly bigTaskId: BigTaskId; readonly subtaskId: SubtaskId; readonly afterSequence: number; readonly limit: number } }
+  | { readonly name: "execution-close"; readonly closeout: BigTaskExecutionCloseout }
   | { readonly name: "execution-recover"; readonly recovery: BigTaskExecutionRecovery }
   | { readonly name: "execution-recover-qa"; readonly recovery: BigTaskQaRecovery }
   | { readonly name: "execution-renew-window"; readonly renewal: BigTaskExecutionWindowRenewal }
@@ -87,7 +90,7 @@ export type OperatorCommand =
   | { readonly name: "planning-status" | "planning-run"; readonly bigTaskId: BigTaskId }
   | { readonly name: "ping" }
   | {
-      readonly name: Exclude<OperatorCommandName, ExecutionIdCommand | "execution-recover-qa" | "execution-renew-window" | "execution-recover" | "execution-approve" | "execution-accept" | "ping" | "governed-status" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
+      readonly name: Exclude<OperatorCommandName, ExecutionIdCommand | "execution-recover-qa" | "execution-renew-window" | "execution-recover" | "execution-approve" | "execution-accept" | "execution-close" | "ping" | "governed-status" | "governed-history" | "governed-advance" | "planning-intake" | "planning-status" | "planning-run">;
       readonly subtaskId: SubtaskId;
     }
   | {
@@ -553,6 +556,40 @@ const sameFields = (
 const sameOwner = (left: Readonly<Record<string, unknown>>, right: Readonly<Record<string, unknown>>): boolean =>
   sameFields(left, right, Object.keys(ownerFields));
 
+const wireDigest: WireCheck = value => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+const isGovernedSummary = (value: Readonly<Record<string, unknown>>, bigTaskId: BigTaskId): boolean => {
+  if (!matchesFields(value, { format: oneOf("CTC_GOVERNED_STATUS_V1"), bigTaskId: canonical(BigTaskIdSchema),
+    status: oneOf("IN_PROGRESS", "DONE"), candidateDigest: nullable(wireDigest),
+    workflows: arrayOf(w => matchesFields(w, { subtaskId: canonical(SubtaskIdSchema), profile: wireProfile,
+      currentStage: wireStage, repairCyclesUsed: oneOf(0, 1, 2), boardStatus: oneOf("TODO", "IN_PROGRESS", "QA_DEBUG", "DONE"),
+      deliveryMaturity: oneOf("NOT_STARTED", "IMPLEMENTED", "HARDENED", "ACCEPTED"), transitionCount: wireCount,
+      blockedReason: nullable(oneOf("REPLAN_REQUIRED", "REPAIR_REQA_EXHAUSTED", "AUTHORITY_BLOCKED")) })),
+    budgets: arrayOf(isGovernedBudget), dispatchReceipts: arrayOf(r => matchesFields(r, {
+      subtaskId: canonical(SubtaskIdSchema), worktreeOwnershipId: canonical(WorktreeOwnershipIdSchema),
+      status: oneOf("RESERVED", "ACTIVE", "COMPLETED", "HUMAN_REQUIRED"), reservedAt: isCanonicalTimestamp, terminalAt: nullable(isCanonicalTimestamp) })),
+  }) || value.bigTaskId !== bigTaskId) return false;
+  const workflows = value.workflows as Readonly<Record<string, unknown>>[];
+  const receipts = value.dispatchReceipts as Readonly<Record<string, unknown>>[];
+  return workflows.length <= 24 && workflows.length === (value.budgets as unknown[]).length &&
+    new Set(workflows.map(w => w.subtaskId)).size === workflows.length &&
+    new Set(receipts.map(r => r.subtaskId)).size === receipts.length && receipts.every(r => workflows.some(w => w.subtaskId === r.subtaskId)) &&
+    (value.status !== "DONE" || workflows.length > 0 && workflows.every(w => w.currentStage === "COMPLETE" && w.boardStatus === "DONE" &&
+      w.blockedReason === null && receipts.some(r => r.subtaskId === w.subtaskId && r.status === "COMPLETED")));
+};
+
+const isGovernedHistory = (value: Readonly<Record<string, unknown>>, command: Extract<OperatorCommand, { name: "governed-history" }>): boolean => {
+  const input = command.history;
+  if (!matchesFields(value, { format: oneOf("CTC_GOVERNED_HISTORY_V1"), bigTaskId: canonical(BigTaskIdSchema), subtaskId: canonical(SubtaskIdSchema),
+    candidateDigest: nullable(wireDigest), totalTransitions: wireCount, nextAfterSequence: nullable(wirePositive),
+    transitions: arrayOf(t => matchesFields(t, { sequence: wirePositive, operationId: wireText, priorStage: wireStage,
+      resultingStage: wireStage, repairCyclesUsed: oneOf(0, 1, 2), occurredAt: isCanonicalTimestamp, evidenceCount: wireCount })),
+  }) || value.bigTaskId !== input.bigTaskId || value.subtaskId !== input.subtaskId) return false;
+  const rows = value.transitions as Readonly<Record<string, unknown>>[];
+  const last = Number(rows.at(-1)?.sequence ?? input.afterSequence);
+  return rows.length === Math.min(input.limit, Math.max(0, Number(value.totalTransitions) - input.afterSequence)) && rows.every((r, i) => r.sequence === input.afterSequence + i + 1 && Number(r.sequence) <= Number(value.totalTransitions)) &&
+    value.nextAfterSequence === (rows.length > 0 && last < Number(value.totalTransitions) ? last : null);
+};
+
 const isGovernedInspection = (value: Readonly<Record<string, unknown>>, bigTaskId: BigTaskId): boolean => {
   if (!matchesFields(value, {
     bigTaskId: canonical(BigTaskIdSchema), status: oneOf("IN_PROGRESS", "DONE"),
@@ -650,7 +687,8 @@ const governedAdvanceSucceeded = (value: Readonly<Record<string, unknown>>): boo
       (value.execution.outcome === "READY" || value.execution.outcome === "PASS")));
 
 const isExecutionReview = (value: Readonly<Record<string, unknown>>, id: BigTaskId): boolean => {
-  if (!hasExactKeys(value, ["bigTaskId", "planDigest", "repositoryHeadSha", "candidate", "taskContracts", "executionIssues", "confirmation"]) ||
+  if ("productDirection" in value && (!ProductDirectionSchema.safeParse(value.productDirection).success || !["LIGHT", "STANDARD", "THOROUGH"].includes(value.reviewIntensity as string))) return false;
+  if (!hasExactKeys(value, ["bigTaskId", "planDigest", "repositoryHeadSha", "candidate", "taskContracts", "executionIssues", "confirmation", ...("productDirection" in value ? ["productDirection", "reviewIntensity"] : [])]) ||
     !Array.isArray(value.executionIssues) || value.executionIssues.length > 24 || value.executionIssues.some(issue =>
       !isRecord(issue) || !hasExactKeys(issue, ["code", "subtaskId"]) || issue.code !== "DEPENDENCY_PROFILE_CONFLICT" || !schemaMatchesExactly(SubtaskIdSchema, issue.subtaskId)) ||
     value.bigTaskId !== id || value.confirmation !== "HANLIN_EXECUTION_APPROVAL_REQUIRED" ||
@@ -716,6 +754,8 @@ const validateResponseShape = (
     case "execution-pause": return BigTaskExecutionStatusSchema.safeParse(value).success && value.bigTaskId === command.bigTaskId;
     case "execution-approve": return BigTaskExecutionStatusSchema.safeParse(value).success && value.bigTaskId === command.approval.bigTaskId &&
       value.planDigest === command.approval.planDigest && JSON.stringify(BigTaskExecutionStatusSchema.parse(value).limits) === JSON.stringify(command.approval.limits);
+    case "execution-close": return BigTaskExecutionStatusSchema.safeParse(value).success && value.bigTaskId === command.closeout.bigTaskId &&
+      value.resultHeadSha === command.closeout.headSha && value.phase === "CLOSED" && isRecord(value.closeout) && value.closeout.reason === command.closeout.reason;
     case "execution-accept": return BigTaskExecutionStatusSchema.safeParse(value).success && value.bigTaskId === command.acceptance.bigTaskId &&
       value.resultHeadSha === command.acceptance.headSha && value.phase === "ACCEPTED";
     case "planning-intake":
@@ -738,7 +778,8 @@ const validateResponseShape = (
     case "release":
       return isWorktreeResponse(value, "RELEASED");
     case "governed-status":
-      return isGovernedInspection(value, command.bigTaskId);
+      return isGovernedSummary(value, command.bigTaskId) || isGovernedInspection(value, command.bigTaskId);
+    case "governed-history": return isGovernedHistory(value, command);
     case "governed-advance":
       return isGovernedAdvance(value, command.bigTaskId);
     case "governed-manual-start":
@@ -765,6 +806,18 @@ export const parseOperatorCommand = (
   }
   if (command === "planning-intake" && subtaskId !== undefined) {
     try { return { name: "planning-intake", intake: BigTaskPlanningIntakeSchema.parse(readOperatorJson(subtaskId)) }; }
+    catch { throw new LocalOperatorError("INVALID_COMMAND"); }
+  }
+  if (command === "governed-history" && subtaskId !== undefined) {
+    const value = readOperatorJson(subtaskId);
+    if (!isRecord(value) || !hasExactKeys(value, ["bigTaskId", "subtaskId", "afterSequence", "limit"]) ||
+      !schemaMatchesExactly(BigTaskIdSchema, value.bigTaskId) || !schemaMatchesExactly(SubtaskIdSchema, value.subtaskId) ||
+      !Number.isSafeInteger(value.afterSequence) || Number(value.afterSequence) < 0 || Number(value.afterSequence) > 9999 ||
+      !Number.isSafeInteger(value.limit) || Number(value.limit) < 1 || Number(value.limit) > 20) throw new LocalOperatorError("INVALID_COMMAND");
+    return { name: command, history: { bigTaskId: BigTaskIdSchema.parse(value.bigTaskId), subtaskId: SubtaskIdSchema.parse(value.subtaskId), afterSequence: Number(value.afterSequence), limit: Number(value.limit) } };
+  }
+  if (command === "execution-close" && subtaskId !== undefined) {
+    try { return { name: command, closeout: BigTaskExecutionCloseoutSchema.parse(readOperatorJson(subtaskId)) }; }
     catch { throw new LocalOperatorError("INVALID_COMMAND"); }
   }
   if (command === "execution-recover" && subtaskId !== undefined) {
@@ -838,6 +891,8 @@ const commandRequest = (
       return { method: "POST", path: "/v0/execution/approve", body: Buffer.from(JSON.stringify(command.approval), "utf8") };
     case "execution-accept":
       return { method: "POST", path: "/v0/execution/accept", body: Buffer.from(JSON.stringify(command.acceptance), "utf8") };
+    case "execution-close":
+      return { method: "POST", path: "/v0/execution/close", body: Buffer.from(JSON.stringify(command.closeout), "utf8") };
     case "planning-intake":
       return { method: "POST", path: "/v0/planning/intake", body: Buffer.from(JSON.stringify(command.intake), "utf8") };
     case "planning-status":
@@ -846,9 +901,11 @@ const commandRequest = (
     case "governed-status":
       return {
         method: "GET",
-        path: `/v0/governed/big-tasks/${encodeURIComponent(command.bigTaskId)}`,
+        path: `/v0/governed/big-tasks/${encodeURIComponent(command.bigTaskId)}/summary`,
         body: undefined,
       };
+    case "governed-history":
+      return { method: "GET", path: `/v0/governed/big-tasks/${command.history.bigTaskId}/subtasks/${command.history.subtaskId}/history?after=${command.history.afterSequence}&limit=${command.history.limit}`, body: undefined };
     case "governed-advance":
       return {
         method: "POST",
@@ -1077,7 +1134,24 @@ const runWithPaths = async (
     }
     throw new LocalOperatorError("SESSION_UNAVAILABLE");
   }
-  return requestDaemon(descriptor, command, timeoutMilliseconds);
+  try {
+    return await requestDaemon(descriptor, command, timeoutMilliseconds);
+  } catch (error) {
+    if (command.name !== "planning-run" || !(error instanceof LocalOperatorError) || error.code !== "OPERATOR_TIMEOUT") throw error;
+    const unavailable = (): OperatorResult => ({ httpStatus: 202, succeeded: true, body: { bigTaskId: command.bigTaskId, phase: "STATUS_UNAVAILABLE",
+      operatorNotice: { code: "WAIT_ENDED", message: "The command stopped waiting; this does not mean planning failed. Query status before retrying.",
+        statusCommand: ["planning-status", command.bigTaskId] } } });
+    let state: OperatorResult;
+    try {
+      state = await requestDaemon(descriptor, { name: "planning-status", bigTaskId: command.bigTaskId }, timeoutMilliseconds);
+    } catch {
+      return unavailable();
+    }
+    if (!state.succeeded) return unavailable();
+    return { ...state, body: { ...state.body, operatorNotice: { code: "WAIT_ENDED",
+      message: "The command stopped waiting. The saved planning status below is authoritative; do not start a duplicate run.",
+      statusCommand: ["planning-status", command.bigTaskId] } } };
+  }
 };
 
 export const runOperatorCommand = async (

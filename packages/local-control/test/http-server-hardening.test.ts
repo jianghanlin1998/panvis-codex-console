@@ -589,7 +589,7 @@ describe("HTTP resource bounds, serialization, and concurrency", () => {
       } else {
         expect(result.status).toBe(500);
         expect(JSON.parse(result.bytes.toString("utf-8"))).toEqual({
-          error: { code: "LOCAL_OPERATION_FAILED" },
+          error: { code: "RESPONSE_TOO_LARGE" },
         });
       }
     }

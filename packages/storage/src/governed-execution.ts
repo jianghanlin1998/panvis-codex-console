@@ -1,3 +1,6 @@
+import { LivePlanningStore } from "./live-planning.js";
+import { recordExecutionProgress } from "./execution-progress.js";
+import type { ExecutionProgress } from "@codex-task-console/domain";
 import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId, executionGit, executionRecoveries } from "./big-task-execution.js";
 import { checkExecutionGitFilters, executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
 import { spawnSync } from "node:child_process";
@@ -887,6 +890,12 @@ export class GovernedExecutionStore {
     this.#storage = storage;
     this.#worktrees = worktrees ?? createWorktreeOwnershipManager(storage);
     this.#access();
+  }
+
+  recordRoleProgress(authorizationId: string, progress: Omit<ExecutionProgress, "observedAt">): void {
+    const link = this.#access().sqlite.prepare("SELECT execution_run_id FROM governed_role_execution_links WHERE authorization_id=?").get(authorizationId);
+    if (!link) throw conflict("The role has no execution attempt.");
+    recordExecutionProgress(this.#storage, String(link.execution_run_id), progress);
   }
 
   inspectBigTask(bigTaskId: BigTaskId): Readonly<{
@@ -2311,7 +2320,9 @@ export class GovernedExecutionStore {
         sourceType: "IMPLEMENTATION_CHECKPOINT",
         sourceReference: checkpointId,
       });
-      nextStage = view.profile === "HIGH_RISK_FOUNDATION" ? "HARDEN" : "VERIFY";
+      const reviewedStandard = view.profile === "STANDARD" && isLivePlannedTask(this.#storage, view.bigTaskId) &&
+        new LivePlanningStore(this.#storage).readIntake(view.bigTaskId).intake.productDirection !== undefined;
+      nextStage = view.profile === "HIGH_RISK_FOUNDATION" ? "HARDEN" : reviewedStandard ? "FRESH_QA" : "VERIFY";
     } else if (authorization.role === "VERIFY") {
       if (result.outcome !== "PASS") {
         return freeze({

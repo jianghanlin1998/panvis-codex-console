@@ -24,6 +24,7 @@ import type {
 } from "../src/index.js";
 import {
   EXPECTED_CURRENT_MIGRATION_COUNT,
+  EXPECTED_CURRENT_TABLES,
   FIXED_TIME,
   captureTaskStorageError,
   fixedClock,
@@ -1602,57 +1603,7 @@ describe("JIT storage source shape, trust, immutability, and deferred scope", ()
       sqliteAfter.close();
       expect(schemaAfter).toBe(schemaBefore);
       expect(migrationCount.count).toBe(EXPECTED_CURRENT_MIGRATION_COUNT);
-      expect(tables).toEqual([
-        "__drizzle_migrations",
-        "audit_events",
-          "big_task_execution_approvals",
-          "big_task_execution_events",
-        "big_tasks",
-        "candidate_task_contract_bindings",
-        "canonical_task_materializations",
-        "chat_threads",
-        "context_digests",
-        "context_items",
-        "durable_workflow_evidence",
-        "durable_workflow_evidence_authorities",
-        "durable_workflow_human_requirements",
-        "durable_workflow_transitions",
-        "execution_runs",
-        "governed_big_task_completion_receipts",
-        "governed_budget_extensions",
-        "governed_dispatch_gate_snapshots",
-        "governed_dispatch_receipts",
-        "governed_finding_resolutions",
-        "governed_findings",
-        "governed_gate_observations",
-          "governed_gate_sources",
-        "governed_handoffs",
-        "governed_manual_start_authorities",
-        "governed_promoted_context_dispositions",
-        "governed_promotion_candidates",
-        "governed_provider_claims",
-          "governed_provider_input_observations",
-          "governed_provider_turn_starts",
-        "governed_result_provenance",
-        "governed_role_authorizations",
-        "governed_role_execution_links",
-        "governed_role_results",
-        "live_planning_intakes",
-        "live_planning_runs",
-        "orchestration_materializations",
-        "orchestration_plan_candidates",
-        "orchestration_planning_tracks",
-        "orchestration_review_decisions",
-        "projects",
-        "subtask_implementation_checkpoints",
-        "subtask_workflow_instances",
-        "subtasks",
-        "task_contracts",
-        "task_dependencies",
-        "workflow_initialization_receipts",
-        "worktree_checkout_generations",
-        "worktree_ownerships",
-      ]);
+      expect(tables).toEqual(EXPECTED_CURRENT_TABLES);
       expect(applicationRows(databasePath)).toBe(beforeRows);
     });
 

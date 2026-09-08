@@ -1020,7 +1020,7 @@ describe("Step 9A preserved boundary states", () => {
     const body = { bigTaskId: id, status: "IN_PROGRESS", candidateBinding: null, workflows: [], budgets: [], dispatchReceipts: [] };
     const port = await startHttpServer((request, response) => {
       requests++;
-      expect(request.url).toBe(`/v0/governed/big-tasks/${encodeURIComponent(id)}`);
+      expect(request.url).toBe(`/v0/governed/big-tasks/${encodeURIComponent(id)}/summary`);
       expect(request.method).toBe("GET");
       respond(response, 200, JSON.stringify(body));
     });

@@ -63,7 +63,11 @@ All operational requests require `Authorization: Bearer <token>` and the exact `
 
 ## Narrow HTTP API
 
-All responses are bounded JSON. The planning intake/status/run and execution-plan review responses use 256 KiB after the approved 100 KiB planning-capacity change; all other routes retain 64 KiB. The server and CLI use the same route-specific bound for declared and streamed response bytes. Errors have a stable `{ "error": { "code": "..." } }` shape and contain no stacks, raw storage/Git/provider errors, paths, prompt/context, response text, JSONL, stderr, environment, or credentials.
+All responses are bounded JSON. The planning intake/status/run and execution-plan review responses use 256 KiB after the approved 100 KiB planning-capacity change; all other routes retain 64 KiB. The server and CLI use the same route-specific bound for declared and streamed response bytes. An oversized response reports `RESPONSE_TOO_LARGE`, not a task failure. Errors have a stable `{ "error": { "code": "..." } }` shape and contain no stacks, raw storage/Git/provider errors, paths, prompt/context, response text, JSONL, stderr, environment, or credentials.
+
+`governed-status` now requests `GET /v0/governed/big-tasks/<id>/summary`, returning `CTC_GOVERNED_STATUS_V1`: one plan digest, current workflow stages, transition counts, budgets and compact receipts. It omits repeated canonical bindings and full transition history. The old full-history route remains available with its existing capacity limit. `governed-history <json-file>` takes `{bigTaskId, subtaskId, afterSequence, limit}` (after ≥ 0, limit 1–20), maps to `GET /v0/governed/big-tasks/<id>/subtasks/<id>/history?after=<n>&limit=<n>`, and returns bounded transition metadata and `nextAfterSequence`. Pagination uses stable per-subtask sequence numbers; full evidence remains in storage. Status/history reads cannot authorize work or call a model.
+
+`execution-close <json-file>` uses authenticated `POST /v0/execution/close` to record an exact delivered-result closeout without product acceptance. See [execution contract](BIG_TASK_APPROVED_EXECUTION_V0.md#operator-contract). Client wait expiry during `planning-run` queries saved status once, reports WAIT_ENDED, and never resubmits the run; other transport errors remain bounded errors.
 
 | Method and route | Exact caller input | Trusted producer | Result |
 | --- | --- | --- | --- |
@@ -116,7 +120,7 @@ add no planning, lifecycle, execution or budget authority.
 
 | Command | Existing route | Effect |
 | --- | --- | --- |
-| `pnpm ctc:operator governed-status <big-task-id>` | `GET /v0/governed/big-tasks/<id>` | Inspect authoritative workflow state, budgets and dispatch receipts |
+| `pnpm ctc:operator governed-status <big-task-id>` | `GET /v0/governed/big-tasks/<id>/summary` | Inspect compact authoritative workflow state, budgets and dispatch receipts |
 | `pnpm ctc:operator governed-advance <big-task-id>` | `POST /v0/governed/advance` | Ask the controller for one bounded advance; execute at most its one authorized role |
 | `pnpm ctc:operator governed-manual-start <subtask-id>` | `POST /v0/governed/manual-start` | Explicitly authorize manual start; does not dispatch or run |
 | `pnpm ctc:operator governed-budget-extension <subtask-id>` | `POST /v0/governed/budget-extension` | Request the existing one-time 40K extension at its eligible pause; does not run |

@@ -6,6 +6,11 @@ import {
 import type { SubtaskMaturity } from "../src/index.js";
 
 describe("Subtask maturity transitions", () => {
+  it("allows implemented work to be accepted only with independent QA evidence", () => {
+    expect(validateSubtaskMaturityTransition("IMPLEMENTED", "ACCEPTED", true).allowed).toBe(true);
+    expect(validateSubtaskMaturityTransition("IMPLEMENTED", "ACCEPTED", false).allowed).toBe(false);
+    expect(validateSubtaskMaturityTransition("NOT_STARTED", "ACCEPTED", true).allowed).toBe(false);
+  });
   it.each<[SubtaskMaturity, SubtaskMaturity]>([
     ["NOT_STARTED", "IMPLEMENTED"],
     ["IMPLEMENTED", "HARDENED"],

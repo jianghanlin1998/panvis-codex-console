@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import { ProviderThreadReferenceSchema, ProviderRunReferenceSchema, ProviderModelReferenceSchema } from "@codex-task-console/domain";
 
 import { makePlanningFixture, sizedPlanningProposal } from "./live-planning-fixture.js";
+import { executionCanonical } from "../src/big-task-execution.js";
+import { TrustedRepositorySourceReader } from "../src/trusted-repository-source.js";
 
 type Fixture = ReturnType<typeof makePlanningFixture>;
 const run = (f: Fixture, output: unknown, tokens: number | null = 100) => {
@@ -30,6 +32,45 @@ const review = (f: Fixture, outcome = "APPROVE") => {
 };
 
 describe("Big Task live planning ownership", () => {
+  it("requires confirmed product direction before creating a new task, and pins the brief for planner/reviewer", () => {
+    const f = makePlanningFixture();
+    try {
+      const { productDirection, ...legacy } = f.intake;
+      for (const intake of [legacy, { ...f.intake, productDirection: { ...productDirection, confirmed: false } }]) {
+        expect(() => f.planning.accept(intake)).toThrow();
+        expect(f.storage.getBigTaskById(f.intake.bigTask.id)).toBeNull();
+      }
+      f.planning.accept({ ...f.intake, reviewIntensity: "THOROUGH" });
+      const packet = JSON.parse(f.planning.claim(f.intake.bigTask.id).inputText);
+      expect(packet.approvedIntent).toMatchObject({ productDirection, reviewIntensity: "THOROUGH" });
+      expect(packet.productAuthority).toContain("not a substitute for product alignment");
+      expect(packet.instruction).toContain("STANDARD uses execution plus fresh independent QA");
+      f.reopen();
+      expect(f.planning.readIntake(f.intake.bigTask.id).intake.productDirection).toEqual(productDirection);
+      expect(() => f.planning.accept({ ...f.intake, reviewIntensity: "LIGHT" })).toThrow();
+    } finally { f.close(); }
+  });
+  it("reopens historical intakes without retroactively changing their review contract", () => {
+    const f = makePlanningFixture();
+    try {
+      // Seed the exact prior-version shape, without changing any immutable row
+      // or disabling its guards. New public intake still requires direction.
+      f.storage.createBigTask(f.intake.bigTask);
+      const legacy = { ...f.intake }; delete legacy.productDirection; delete legacy.reviewIntensity;
+      const payload = executionCanonical({ intake: legacy, project: f.storage.getProjectById(f.intake.bigTask.projectId),
+        repository: new TrustedRepositorySourceReader(f.storage).readTrustedRepositorySourceSnapshotForBigTask(f.intake.bigTask.id) });
+      const sql = new DatabaseSync(f.databasePath);
+      try {
+        sql.prepare("INSERT INTO live_planning_intakes (big_task_id, payload, created_at) VALUES (?, ?, ?)")
+          .run(f.intake.bigTask.id, payload, "2026-09-01T00:00:00.000Z");
+      } finally { sql.close(); }
+      f.reopen();
+      expect(f.planning.readIntake(f.intake.bigTask.id).intake.productDirection).toBeUndefined();
+      const packet = JSON.parse(f.planning.claim(f.intake.bigTask.id).inputText);
+      expect(packet.instruction).toContain("LOW and STANDARD use execution plus verification");
+      expect(packet.instruction).not.toContain("STANDARD uses execution plus fresh independent QA");
+    } finally { f.close(); }
+  });
   it.each([102_399, 102_400, 102_401])("validates and durably reopens a planning response at %i UTF-8 bytes", (bytes) => {
     const f = makePlanningFixture();
     try {

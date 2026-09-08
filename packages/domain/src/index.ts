@@ -342,7 +342,7 @@ export type {
 } from "./durable-execution.js";
 export {
   BIG_TASK_PLANNING_LIMITS,
-  BigTaskPlanningIntakeSchema,
+  ProductDirectionSchema, BigTaskPlanningIntakeSchema,
   PlanningBudgetExceptionSchema,
   PlanningProviderDiagnosticsSchema,
   PlannerResponseSchema,
@@ -358,6 +358,9 @@ export type {
   PlanningRunRecord,
 } from "./big-task-planning.js";
 
-export { BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskRoleFailureSchema, GovernedExecutionFailureCodeSchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, executionTokenLimitReached, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
-export type { BigTaskControlFailure, BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskExecutionLimits } from "./big-task-execution.js";
+export { BigTaskExecutionCloseoutSchema, BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskRoleFailureSchema, GovernedExecutionFailureCodeSchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, executionTokenLimitReached, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
+export type { BigTaskExecutionCloseout, BigTaskControlFailure, BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskExecutionLimits } from "./big-task-execution.js";
 export { BigTaskControlFailureSchema } from "./big-task-execution.js";
+
+export { ExecutionProgressSchema, ExecutionUsageBreakdownSchema } from "./execution-progress.js";
+export type { ExecutionProgress, ExecutionUsageBreakdown } from "./execution-progress.js";

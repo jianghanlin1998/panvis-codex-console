@@ -66,6 +66,9 @@ export class LivePlanningStore {
     if (!parsed.success || canonical(input) !== canonical(parsed.data)
       || Buffer.byteLength(canonical(parsed.data), "utf8") > 24_000) fail("INVALID_INPUT");
     const intake = parsed.data;
+    if (intake.productDirection === undefined) {
+      throw new TaskStorageError("INVALID_INPUT", "Confirm the product direction, success examples and scope before planning; tool permission is not product approval.");
+    }
     if (intake.budgetException !== undefined) {
       const remaining = Date.parse(intake.budgetException.expiresAt) - Date.parse(this.#now());
       if (remaining <= 0 || remaining > 3 * 60 * 60_000) fail("INVALID_INPUT");
@@ -142,12 +145,16 @@ export class LivePlanningStore {
         instruction: (role === "PLANNER"
           ? "Propose a complete bounded task graph and precise contracts for the approved goal. Respect scope and repository rules. No tools, edits, execution, self-approval or invented evidence. Ask product questions when intent is ambiguous. Dependencies must use task keys. Revision must satisfy the supplied review requirements."
           : "Independently review goal coverage, scope, testable acceptance, dependencies and risk profiles. Review only; do not rewrite tasks or approve your own plan. APPROVE only a complete executable plan consistent with the approved goal. REJECT with concrete engineering revisions; ESCALATE product decisions. No tools or edits. Echo the exact candidate binding and revision.")
-          + " Workflow capabilities: LOW/STANDARD finish at IMPLEMENTED and cannot satisfy HARDENED or ACCEPTED dependency gates. Only HIGH_RISK_FOUNDATION runs hardening and fresh independent QA, reaches ACCEPTED, and supports repair/re-QA. Use HIGH_RISK_FOUNDATION with writeEnabled=true when bounded automatic repairs are required. Models do not commit: the Console saves and integrates their candidate files. Execution roles have no network access; never claim that synthetic tests prove live fetching. Any required live acceptance needs an explicit coordinator or human verification step."
+          + (source.intake.productDirection === undefined
+            ? " Historical workflow capabilities: LOW and STANDARD use execution plus verification and finish IMPLEMENTED. Only HIGH_RISK_FOUNDATION adds hardening, fresh QA and bounded repairs to reach ACCEPTED. Preserve this pinned historical contract."
+            : " Workflow capabilities for this confirmed product brief: LOW uses execution plus verification and finishes IMPLEMENTED. STANDARD uses execution plus fresh independent QA and can reach ACCEPTED and perform bounded repair/re-QA without a separate hardening sweep. HIGH_RISK_FOUNDATION adds comprehensive hardening before fresh QA. Use STANDARD for ordinary reviewed work, HIGH_RISK_FOUNDATION when deeper invariant testing is warranted, and LOW only where IMPLEMENTED suffices. Both reviewed paths support bounded repairs when writeEnabled=true.")
+          + " Models do not commit: the Console saves and integrates their candidate files. Execution roles have no network access; never claim that synthetic tests prove live fetching. Any required live acceptance needs an explicit coordinator or human verification step."
           + ` Return compact JSON without indentation or formatting whitespace. The entire response has a hard limit of ${BIG_TASK_PLANNING_LIMITS.maxResponseBytes} UTF-8 bytes (100 KiB); this is a ceiling, not a target. Every text field must be a trimmed single-line string of at most 1,000 characters, with no control characters. Be concise and do not repeat shared intent or repository rules inside every contract. Use only the tasks needed for complete, independently verifiable delivery. Preserve all goal coverage and acceptance criteria.`
           + (role === "PLANNER"
             ? " If a complete plan cannot fit, return HUMAN_REQUIRED with a concise scope question instead of truncating or omitting required work."
             : " If a complete review cannot fit, use ESCALATE with a concise question instead of truncating or omitting blocking findings."),
         approvedIntent: source.intake,
+        productAuthority: "The confirmed product direction defines what to build. A tool, feed, vendor or implementation choice is not a substitute for product alignment. Do not silently narrow the audience, coverage, content-selection criteria or meaning of success. Ask a product question when any such decision is unresolved; engineering choices within the confirmed direction need no additional human tool approval. Treat reviewIntensity as the owner's preferred review depth; use the lightest sufficient per-task review and explain material deviations in a product question.",
         project: source.project,
         repository: source.repository,
         proposal: bundle === null ? null : {

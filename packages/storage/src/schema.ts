@@ -2190,3 +2190,9 @@ export const bigTaskExecutionEventsTable = sqliteTable("big_task_execution_event
   sequence: integer("sequence").notNull(),
   payload: text("payload").notNull(),
 }, table => [primaryKey({ columns: [table.bigTaskId, table.sequence] })]);
+
+/** Latest safe activity, independent from immutable results and settled token accounting. */
+export const executionRunProgressTable = sqliteTable("execution_run_progress", {
+  executionRunId: text("execution_run_id").primaryKey().references(() => executionRunsTable.id, { onUpdate: "restrict", onDelete: "restrict" }),
+  payload: text("payload").notNull(),
+});

@@ -1071,12 +1071,12 @@ const isWorkflowLifecycleCompositionCompatible = (
     case "FRESH_QA":
     case "REPAIR":
     case "FOCUSED_RE_QA":
-      return status === "QA_DEBUG" && maturity === "HARDENED";
+      return status === "QA_DEBUG" && (maturity === "HARDENED" || profile === "STANDARD" && maturity === "IMPLEMENTED");
     case "COMPLETE":
       return (
         status === "DONE" &&
-        maturity ===
-          (profile === "HIGH_RISK_FOUNDATION" ? "ACCEPTED" : "IMPLEMENTED")
+        (profile === "STANDARD" ? maturity === "IMPLEMENTED" || maturity === "ACCEPTED" :
+          maturity === (profile === "HIGH_RISK_FOUNDATION" ? "ACCEPTED" : "IMPLEMENTED"))
       );
   }
 };
@@ -5778,6 +5778,9 @@ export class TaskStorage {
       const finalStage: WorkflowStage =
         transitions[transitions.length - 1]?.resultingStage ??
         instance.initialStage;
+      const lastTransition = transitions.at(-1);
+      if (finalStage === "COMPLETE" && instance.profile === "STANDARD" &&
+        subtask.maturity !== (["FRESH_QA", "FOCUSED_RE_QA"].includes(lastTransition?.priorStage ?? "") ? "ACCEPTED" : "IMPLEMENTED")) throw malformedStoredData();
       if (
         !isWorkflowLifecycleCompositionCompatible(
           finalStage,
@@ -5954,10 +5957,11 @@ export class TaskStorage {
         );
       }
       status = "DONE";
-      if (view.profile === "HIGH_RISK_FOUNDATION") {
+      if (view.currentStage === "FRESH_QA" || view.currentStage === "FOCUSED_RE_QA") {
         const maturityTransition = validateSubtaskMaturityTransition(
           maturity,
           "ACCEPTED",
+          true,
         );
         if (!maturityTransition.allowed) {
           throw new TaskStorageError(

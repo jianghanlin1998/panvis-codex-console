@@ -14,7 +14,7 @@ import { executeGovernedRoleCodexWithDependenciesForTest } from "../../codex-ada
 import { validateOwnedWorktreeHardlinkSafety } from "../../codex-adapter/src/worktree-filesystem-safety.js";
 import { planningProviderFixture } from "../../codex-adapter/test/planning-provider-fixture.js";
 
-export function makeExecutionFixture(clock?: () => Date, scenario?: (role: string, occurrence: number) => string | undefined) {
+export function makeExecutionFixture(clock?: () => Date, scenario?: (role: string, occurrence: number) => string | undefined, profile: "STANDARD" | "HIGH_RISK_FOUNDATION" = "HIGH_RISK_FOUNDATION") {
   let instant = Date.parse("2026-09-07T00:00:00.000Z");
   const now = clock ?? (() => new Date(instant++));
   const f = makePlanningFixture(now);
@@ -32,7 +32,7 @@ export function makeExecutionFixture(clock?: () => Date, scenario?: (role: strin
     });
     f.planning.finish(f.intake.bigTask.id, claim.sequence, true, JSON.stringify(output));
   };
-  f.proposal.tasks.forEach(task => { task.profile = "HIGH_RISK_FOUNDATION"; });
+  f.proposal.tasks.forEach(task => { task.profile = profile; });
   finish(f.proposal);
   const bundle = f.storage.getDurablePlanningReviewBundle(f.intake.bigTask.id)!;
   finish({ outcome: "APPROVE", planRevision: bundle.reviewState.candidate.revision,

@@ -44,10 +44,19 @@ export const PlanningProviderDiagnosticsSchema = z.object({
 }).strict();
 
 /** Human intake contains intent, never a caller-authored execution graph. */
+export const ProductDirectionSchema = z.object({
+  confirmed: z.literal(true),
+  summary: text,
+  successCriteria: texts.min(1),
+  scopeBoundaries: texts,
+}).strict();
 export const BigTaskPlanningIntakeSchema = z.object({
   bigTask: BigTaskSchema.extend({ status: z.literal("IN_PROGRESS") }).strict(),
   approved: z.literal(true),
   productDecisions: texts,
+  // Optional when reading historical intakes; new intake requires a human-confirmed brief.
+  productDirection: ProductDirectionSchema.optional(),
+  reviewIntensity: z.enum(["LIGHT", "STANDARD", "THOROUGH"]).optional(),
   planningTokenLimit: z.number().int().min(1).max(120_000),
   budgetException: PlanningBudgetExceptionSchema.optional(),
 }).strict();

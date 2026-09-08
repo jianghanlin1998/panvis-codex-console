@@ -1,3 +1,4 @@
+import { summarizeGovernedStatus, summarizeGovernedHistory } from "./governed-summary.js";
 import { BIG_TASK_PLANNING_LIMITS, BigTaskExecutionAcceptanceSchema, hasUnambiguousJsonStructure } from "@codex-task-console/domain";
 import { isUtf8 } from "node:buffer";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -63,7 +64,7 @@ const writeJson = (
   if (bytes.byteLength > limitBytes) {
     finalStatus = 500;
     bytes = Buffer.from(
-      JSON.stringify({ error: { code: "LOCAL_OPERATION_FAILED" } }),
+      JSON.stringify({ error: { code: "RESPONSE_TOO_LARGE" } }),
       "utf-8",
     );
   }
@@ -395,18 +396,19 @@ const routeRequest = async (
 ): Promise<object> => {
   const method = request.method ?? "";
   const url = request.url ?? "";
-  if (["/v0/execution/qa-recovery-review", "/v0/execution/recover-qa", "/v0/execution/renew-window", "/v0/execution/recovery-review", "/v0/execution/recover", "/v0/execution/review", "/v0/execution/approve", "/v0/execution/status", "/v0/execution/start", "/v0/execution/pause", "/v0/execution/accept"].includes(url)) {
+  if (["/v0/execution/qa-recovery-review", "/v0/execution/recover-qa", "/v0/execution/renew-window", "/v0/execution/recovery-review", "/v0/execution/recover", "/v0/execution/review", "/v0/execution/approve", "/v0/execution/status", "/v0/execution/start", "/v0/execution/pause", "/v0/execution/accept", "/v0/execution/close"].includes(url)) {
     if (method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
     requireMutationHeaders(request);
     const body = await readBoundedBody(request);
     if (!hasUnambiguousJsonStructure(body)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
-    if (url === "/v0/execution/recover-qa" || url === "/v0/execution/renew-window" || url === "/v0/execution/recover" || url === "/v0/execution/approve" || url === "/v0/execution/accept") {
+    if (url === "/v0/execution/recover-qa" || url === "/v0/execution/renew-window" || url === "/v0/execution/recover" || url === "/v0/execution/approve" || url === "/v0/execution/accept" || url === "/v0/execution/close") {
       let value: unknown;
       try { value = JSON.parse(body); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
       if (url === "/v0/execution/recover-qa") return requireGovernedMethod(service.recoverQaExecution).call(service, value);
       if (url === "/v0/execution/renew-window") return requireGovernedMethod(service.renewExecutionWindow).call(service, value);
       if (url === "/v0/execution/recover") return requireGovernedMethod(service.recoverExecution).call(service, value);
       if (url === "/v0/execution/approve") return requireGovernedMethod(service.approveExecution).call(service, value);
+      if (url === "/v0/execution/close") return requireGovernedMethod(service.closeExecution).call(service, value);
       const parsed = BigTaskExecutionAcceptanceSchema.safeParse(value);
       if (!parsed.success) throw new HttpBoundaryError("INVALID_REQUEST", 400);
       return requireGovernedMethod(service.acceptExecution).call(service, parsed.data.bigTaskId, parsed.data.headSha);
@@ -432,6 +434,25 @@ const routeRequest = async (
     return Object.freeze({ ok: true, schemaVersion: 1 });
   }
   if (method === "GET") {
+    const summaryMatch = /^\/v0\/governed\/big-tasks\/([^/]+)\/summary$/u.exec(url);
+    const historyMatch = /^\/v0\/governed\/big-tasks\/([^/]+)\/subtasks\/([^/]+)\/history\?after=(\d{1,4})&limit=(\d{1,2})$/u.exec(url);
+    if (summaryMatch || historyMatch) {
+      const decodePart = (part: string): string => {
+        let decoded: string;
+        try { decoded = decodeURIComponent(part); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
+        if (decoded.includes("/") || decoded.includes("\\") || encodeURIComponent(decoded) !== part) throw new HttpBoundaryError("INVALID_REQUEST", 400);
+        return decoded;
+      };
+      const id = parseCanonicalBigTaskId(decodePart((summaryMatch ?? historyMatch)![1]!));
+      if (summaryMatch) return summarizeGovernedStatus(await requireGovernedMethod(service.inspectGovernedBigTask).call(service, id) as Parameters<typeof summarizeGovernedStatus>[0]);
+      const subtask = SubtaskIdSchema.safeParse(decodePart(historyMatch![2]!));
+      const after = Number(historyMatch![3]); const limit = Number(historyMatch![4]);
+      if (!subtask.success || limit < 1 || limit > 20 || String(after) !== historyMatch![3] || String(limit) !== historyMatch![4]) throw new HttpBoundaryError("INVALID_REQUEST", 400);
+      const status = await requireGovernedMethod(service.inspectGovernedBigTask).call(service, id) as Parameters<typeof summarizeGovernedStatus>[0];
+      const page = summarizeGovernedHistory(status, subtask.data, after, limit);
+      if (!page) throw new HttpBoundaryError("SUBTASK_NOT_FOUND", 404);
+      return page;
+    }
     const governedMatch = /^\/v0\/governed\/big-tasks\/([^/]+)$/u.exec(url);
     if (governedMatch !== null) {
       let decoded: string;

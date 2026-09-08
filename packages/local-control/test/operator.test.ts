@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { SubtaskId } from "@codex-task-console/domain";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js";
 import { BIG_TASK_ID, IntegratedOrchestrationFixture, SUBTASK_IDS } from "./integrated-orchestration-fixture.js";
 
 import { LOCAL_CONTROL_HOST } from "../src/http-server.js";
@@ -106,6 +107,44 @@ const validInspection = (): Readonly<Record<string, unknown>> => ({
     returnedChatThreadCount: 0,
     recentChatThreads: [],
   },
+});
+
+it.each(["running", "completed", "unavailable"] as const)("planning client wait expiry queries saved status without resubmitting (%s)", async scenario => {
+  const f = makePlanningFixture();
+  f.planning.accept(f.intake);
+  let received!: () => void;
+  const originalReceived = new Promise<void>(resolve => { received = resolve; });
+  let originalResponse: ServerResponse | undefined;
+  const calls: string[] = [];
+  const responder = await startResponder((request, response) => {
+    request.resume();
+    request.once("end", () => {
+      calls.push(request.url!);
+      if (request.url === "/v0/planning/run") {
+        f.planning.claim(f.intake.bigTask.id);
+        originalResponse = response;
+        if (scenario === "completed") f.planning.finish(f.intake.bigTask.id, 1, false, "");
+        received();
+      } else if (scenario === "unavailable") respondJson(response, 500, { error: { code: "LOCAL_OPERATION_FAILED" } });
+      else respondJson(response, 200, { ...f.planning.inspect(f.intake.bigTask.id) });
+    });
+  });
+  try {
+    const paths = createPaths(); installSession(paths, responder.port);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const running = runOperatorCommandForTesting(parseOperatorCommand(["planning-run", f.intake.bigTask.id]), paths, 100);
+    await originalReceived;
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await running;
+    expect(result).toMatchObject({ succeeded: true, body: { phase: scenario === "running" ? "RUNNING" : scenario === "completed" ? "HUMAN_REQUIRED" : "STATUS_UNAVAILABLE",
+      operatorNotice: { code: "WAIT_ENDED", statusCommand: ["planning-status", f.intake.bigTask.id] } } });
+    expect(calls).toEqual(["/v0/planning/run", "/v0/planning/status"]);
+    expect(f.planning.inspect(f.intake.bigTask.id).runs).toHaveLength(1);
+    // The original server work may finish after the command has stopped waiting.
+    if (scenario !== "completed") f.planning.finish(f.intake.bigTask.id, 1, false, "");
+    expect(f.planning.inspect(f.intake.bigTask.id).runs[0]!.status).toBe("HUMAN_REQUIRED");
+    originalResponse?.end();
+  } finally { vi.useRealTimers(); f.close(); }
 });
 
 describe("thin operator command boundary", () => {
@@ -334,7 +373,7 @@ describe("governed operator commands", () => {
     const manual = { ...owner, authorityId: "manual_operator", workflowSequence: 0, authorizedAt: stamp };
     const extension = { ...owner, authorityId: "extension_operator", grantedTokens: 40_000, authorizedAt: stamp };
     const cases = [
-      { args: ["governed-status", owner.bigTaskId], path: `/v0/governed/big-tasks/${owner.bigTaskId}`, method: "GET", body: "",
+      { args: ["governed-status", owner.bigTaskId], path: `/v0/governed/big-tasks/${owner.bigTaskId}/summary`, method: "GET", body: "",
         response: { bigTaskId: owner.bigTaskId, status: "IN_PROGRESS", candidateBinding: null, workflows: [], budgets: [], dispatchReceipts: [] } },
       { args: ["governed-advance", owner.bigTaskId], path: "/v0/governed/advance", method: "POST", body: JSON.stringify({ bigTaskId: owner.bigTaskId }),
         response: { prepared: { kind: "BIG_TASK_COMPLETE", bigTaskId: owner.bigTaskId, completionReceiptId: "complete_operator" }, execution: null } },

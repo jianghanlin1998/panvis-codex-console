@@ -35,6 +35,7 @@ const MAX_RECENT_THREADS = 8;
 const MAX_RECENT_RUNS_PER_THREAD = 8;
 
 export type LocalControlServiceErrorCode =
+  | "PRODUCT_DIRECTION_REQUIRED"
   | "INVALID_REQUEST"
   | "SUBTASK_NOT_FOUND"
   | "OPERATION_CONFLICT"
@@ -145,6 +146,7 @@ export interface LocalControlService {
   provisionOwnedWorktree(subtaskId: SubtaskId): Promise<WorktreeOperationResult>;
   runOwnedWorktreeExecution(subtaskId: SubtaskId): Promise<ExecutionOperationResult>;
   releaseOwnedWorktree(subtaskId: SubtaskId): Promise<WorktreeOperationResult>;
+  closeExecution?(input: unknown): Promise<BigTaskExecutionStatus>;
   inspectGovernedBigTask?(bigTaskId: BigTaskId): Promise<object>;
   advanceGovernedBigTask?(bigTaskId: BigTaskId): Promise<object>;
   authorizeGovernedManualStart?(subtaskId: SubtaskId): Promise<object>;
@@ -283,6 +285,8 @@ class ProductionLocalControlService implements LocalControlService {
   }
 
   async acceptPlanningIntake(input: unknown): Promise<LivePlanningStatus> {
+    if (input !== null && typeof input === "object" && !Array.isArray(input) && !("productDirection" in input))
+      throw new LocalControlServiceError("PRODUCT_DIRECTION_REQUIRED", 400);
     try { return new LivePlanningStore(this.#storage).accept(input); }
     catch (error) { throw sanitizeStorageError(error); }
   }
@@ -410,7 +414,8 @@ class ProductionLocalControlService implements LocalControlService {
     try {
       const review = new BigTaskExecutionStore(this.#storage).review(bigTaskId);
       return { bigTaskId, planDigest: review.planDigest, repositoryHeadSha: review.repositoryHeadSha,
-        candidate: review.candidate, taskContracts: review.taskContracts, executionIssues: review.executionIssues, confirmation: "HANLIN_EXECUTION_APPROVAL_REQUIRED" };
+        candidate: review.candidate, taskContracts: review.taskContracts, executionIssues: review.executionIssues,
+        ...(review.productDirection === undefined ? {} : { productDirection: review.productDirection, reviewIntensity: review.reviewIntensity }), confirmation: "HANLIN_EXECUTION_APPROVAL_REQUIRED" };
     } catch (error) { throw sanitizeStorageError(error); }
   }
 
@@ -532,6 +537,11 @@ class ProductionLocalControlService implements LocalControlService {
       }
       execution.stop(bigTaskId, execution.remainingMilliseconds(bigTaskId) === 0 ? "TIME_LIMIT_REACHED" : "LOCAL_OPERATION_FAILED");
     }
+  }
+
+  async closeExecution(input: unknown): Promise<BigTaskExecutionStatus> {
+    try { return new BigTaskExecutionStore(this.#storage).close(input); }
+    catch (error) { throw sanitizeStorageError(error); }
   }
 
   async inspectGovernedBigTask(bigTaskId: BigTaskId): Promise<object> {

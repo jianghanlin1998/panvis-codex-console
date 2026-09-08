@@ -49,6 +49,9 @@ export const makePlanningFixture = (clock: () => Date = fixedClock) => {
   const intake = BigTaskPlanningIntakeSchema.parse({
     bigTask: makeBigTask("bt_live_plan", project.id), approved: true,
     productDecisions: ["Use real public AI news with links to original sources."], planningTokenLimit: 120_000,
+    productDirection: { confirmed: true, summary: "A local board for meaningful AI technology progress.",
+      successCriteria: ["Surface substantive research or technical advances with original evidence."], scopeBoundaries: ["No deployment or unrelated marketing feed aggregation."] },
+    reviewIntensity: "STANDARD",
   });
   const proposal = {
     outcome: "PROPOSE", questions: [],

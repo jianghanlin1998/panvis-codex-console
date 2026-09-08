@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { cpSync, mkdirSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,24 +39,11 @@ const PREDECESSOR_MIGRATIONS = [
   "20260902135340_material_master_chief",
   "20260902152406_simple_exodus",
 ] as const;
-const ALL_MIGRATIONS = [
-  ...PREDECESSOR_MIGRATIONS,
-  "20260902171242_grey_toad",
-  "20260903034830_stormy_marvel_apes",
-  "20260903063931_big_reavers",
-  "20260903095250_old_gressill",
-  "20260903130845_equal_proteus",
-  "20260903184138_omniscient_lyja",
-  "20260905045319_governed_hardening",
-  "20260905050930_governed_gate_sources",
-  "20260905103249_governed_occurrence_provenance",
-  "20260906172802_big_task_live_planning",
-  "20260907073800_big_task_execution",
-  "20260907082500_two_repair_cycles",
-  "20260907152456_board_recovery",
-  "20260908054500_qa_recovery",
-  "20260908081800_retained_stage_recovery",
-] as const;
+// Exercise every on-disk generation; the independent count and pinned prior
+// prefix below ensure discovery cannot silently shrink historical coverage.
+const ALL_MIGRATIONS = readdirSync(MIGRATIONS_ROOT, { withFileTypes: true })
+  .filter(entry => entry.isDirectory() && existsSync(join(MIGRATIONS_ROOT, entry.name, "migration.sql")))
+  .map(entry => entry.name).sort();
 const REQUIRED_TASK_CONTRACT_TRIGGERS = [
   "candidate_task_contract_bindings_immutable_delete",
   "candidate_task_contract_bindings_immutable_insert_conflict",
@@ -98,6 +85,10 @@ const plan = (projectId: string, bigTaskId: string, subtaskId: string): PlanCand
 });
 
 describe("Immutable Task Contract authority migration", () => {
+  it("keeps the complete migration matrix and pinned predecessor prefix", () => {
+    expect(ALL_MIGRATIONS).toHaveLength(EXPECTED_CURRENT_MIGRATION_COUNT);
+    expect(ALL_MIGRATIONS.slice(0, PREDECESSOR_MIGRATIONS.length)).toEqual(PREDECESSOR_MIGRATIONS);
+  });
   it.each(
     ALL_MIGRATIONS.map((migration, index) => [migration, index] as const),
   )("migrates generation %s through current authority", (_migration, index) => {

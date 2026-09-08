@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { BigTaskIdSchema, SubtaskIdSchema, ExecutionRunIdSchema } from "./identifiers.js";
 import { RepositoryCommitShaSchema } from "./implementation-checkpoint.js";
+import { ExecutionProgressSchema, ExecutionUsageBreakdownSchema } from "./execution-progress.js";
 
 export const BigTaskExecutionLimitsSchema = z.object({
   durationMilliseconds: z.number().int().min(1).max(10_800_000),
@@ -98,14 +99,22 @@ export const executionTokenLimitReached = (state: { knownTokens: number; limits:
   state.totalBudgetMode !== "WARNING_ONLY" && state.knownTokens >= state.limits.totalTokenLimit;
 
 export const BigTaskExecutionAcceptanceSchema = z.object({ bigTaskId: BigTaskIdSchema, headSha: RepositoryCommitShaSchema }).strict();
+export const BigTaskExecutionCloseoutSchema = BigTaskExecutionAcceptanceSchema.extend({
+  reason: z.string().trim().min(1).max(2_000),
+}).strict();
+export type BigTaskExecutionCloseout = z.infer<typeof BigTaskExecutionCloseoutSchema>;
 const timestamp = z.string().datetime({ precision: 3 });
 const integration = z.object({ subtaskId: SubtaskIdSchema.nullable(), fromSha: RepositoryCommitShaSchema, toSha: RepositoryCommitShaSchema }).strict();
 export const BigTaskExecutionStatusSchema = z.object({
   bigTaskId: BigTaskIdSchema, planDigest: z.string().regex(/^[a-f0-9]{64}$/u),
-  phase: z.enum(["APPROVED", "RUNNING", "PAUSED", "HUMAN_REQUIRED", "AWAITING_ACCEPTANCE", "ACCEPTED"]),
+  phase: z.enum(["APPROVED", "RUNNING", "PAUSED", "HUMAN_REQUIRED", "AWAITING_ACCEPTANCE", "ACCEPTED", "CLOSED"]),
+  closeout: z.object({ at: timestamp, reason: z.string().trim().min(1).max(2_000), productAccepted: z.literal(false) }).strict().optional(),
   stopReason: z.enum(["USER_PAUSED", "DAEMON_STOPPING", "CHECKPOINT_RECOVERED", "INTERRUPTED", "TIME_LIMIT_REACHED", "TOKEN_LIMIT_REACHED", "ROLE_LIMIT_REACHED", "USAGE_UNKNOWN", "GOVERNED_BLOCKED", "LOCAL_OPERATION_FAILED"]).nullable(),
   startedAt: timestamp.nullable(), expiresAt: timestamp.nullable(), limits: BigTaskExecutionLimitsSchema,
   roleCalls: z.number().int().nonnegative().max(192), knownTokens: z.number().int().nonnegative(), usageComplete: z.boolean(), activeRoleCount: z.number().int().min(0).max(1), unknownCompletedUsage: z.boolean(),
+  usageBreakdown: ExecutionUsageBreakdownSchema.optional(),
+  activeRole: z.object({ runId: ExecutionRunIdSchema, subtaskId: SubtaskIdSchema,
+    role: z.string().min(1).max(32), usageState: z.literal("IN_PROGRESS"), progress: ExecutionProgressSchema.nullable() }).strict().optional(),
   recovery: recovery.optional(),
   totalBudgetMode: z.literal("WARNING_ONLY").optional(),
   additionalRecoveries: z.array(recovery).min(1).max(23).optional(),
@@ -117,6 +126,8 @@ export const BigTaskExecutionStatusSchema = z.object({
   resultRef: z.string().regex(/^refs\/heads\/codex\/execution\/[a-f0-9]{32}$/u), resultHeadSha: RepositoryCommitShaSchema,
   integratedSubtaskIds: z.array(SubtaskIdSchema).max(24), pendingIntegration: integration.nullable(), resultRefCreated: z.boolean(),
 }).strict().refine(v => v.roleCalls <= v.limits.roleCallLimit && v.usageComplete === (v.activeRoleCount === 0 && !v.unknownCompletedUsage) && new Set(v.integratedSubtaskIds).size === v.integratedSubtaskIds.length &&
+  (v.activeRole === undefined || v.activeRoleCount === 1) &&
+  (v.usageBreakdown === undefined || v.usageBreakdown.completedRuns + v.activeRoleCount <= v.roleCalls) &&
   (v.totalBudgetMode === "WARNING_ONLY") === [v.recovery, ...(v.additionalRecoveries ?? [])].some(r => r?.totalBudgetMode === "WARNING_ONLY") &&
   (v.additionalRecoveries === undefined || v.recovery !== undefined &&
     new Set([v.recovery, ...v.additionalRecoveries].map(r => r.failedAuthorizationId)).size === v.additionalRecoveries.length + 1) &&
@@ -141,4 +152,5 @@ export const BigTaskExecutionStatusSchema = z.object({
     return Date.parse(v.expiresAt) === expiry;
   })() &&
   (v.phase === "PAUSED" || v.phase === "HUMAN_REQUIRED" ? v.stopReason !== null : v.stopReason === null) &&
-  (!["AWAITING_ACCEPTANCE", "ACCEPTED"].includes(v.phase) || v.resultRefCreated && v.pendingIntegration === null && executionUsageSettled(v)));
+  ((v.phase === "CLOSED") === (v.closeout !== undefined)) &&
+  (!["AWAITING_ACCEPTANCE", "ACCEPTED", "CLOSED"].includes(v.phase) || v.resultRefCreated && v.pendingIntegration === null && executionUsageSettled(v)));

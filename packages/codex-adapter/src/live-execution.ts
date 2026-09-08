@@ -17,6 +17,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:p
 import { TextDecoder } from "node:util";
 
 import type {
+  ExecutionProgress,
   BigTaskId,
   ChatThreadId,
   ExecutionRunId,
@@ -562,12 +563,14 @@ class TurnEventTracker {
   #observedTurnId: string | null = null;
   #turnStartSent = false;
   #waiter: TerminalWaiter | undefined;
+  #activity: ExecutionProgress["activity"] = "STARTING";
 
   constructor(
     private readonly diagnostics: MutableDiagnostics,
     private readonly maxAgentResponseBytes: number,
     private readonly eventPolicy: TurnEventPolicy = { kind: "READ_ONLY" },
     private readonly onUsage?: (usage: NormalizedUsage) => void,
+    private readonly onActivity?: (progress: Omit<ExecutionProgress, "observedAt">) => void,
   ) {}
 
   fail(error: LiveExecutionError): void {
@@ -650,7 +653,7 @@ class TurnEventTracker {
         if (turn.status !== "inProgress") {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
-        this.#refreshIdleDeadline();
+        this.#refreshIdleDeadline("STARTING");
         return true;
       }
       case "item/started":
@@ -721,7 +724,7 @@ class TurnEventTracker {
             this.#appendAgentText(requireString(item.text));
           }
         }
-        this.#refreshIdleDeadline();
+        this.#refreshIdleDeadline(itemType === "commandExecution" ? "READING_OR_TESTING" : itemType === "fileChange" ? "EDITING" : itemType === "agentMessage" ? "RESPONDING" : "THINKING");
         return true;
       }
       case "item/commandExecution/outputDelta":
@@ -894,7 +897,14 @@ class TurnEventTracker {
     }, timeoutMs);
   }
 
-  #refreshIdleDeadline(): void {
+  #refreshIdleDeadline(activity = this.#activity): void {
+    this.#activity = activity;
+    // Display telemetry is best effort. Its absence/stale timestamp must never
+    // interrupt productive work; settled usage and authority remain mandatory.
+    try {
+      this.onActivity?.({ activity, toolActions: this.diagnostics.toolActionsObserved,
+        notifications: this.diagnostics.notificationsReceived, usage: this.normalizedUsage });
+    } catch { /* A missing or stale progress record remains visible as such. */ }
     const waiter = this.#waiter;
     if (waiter === undefined || this.#failure !== null || this.terminal !== null) {
       return;
@@ -1525,6 +1535,7 @@ async function executeGovernedRoleCodexWithDependencies(
           throw new LiveExecutionError("TURN_INTERRUPTED");
         }
       },
+      progress => governed.recordRoleProgress(authorizationId, progress),
     );
     events = eventTracker;
 
@@ -1698,7 +1709,8 @@ async function executeGovernedRoleCodexWithDependencies(
 
     const terminal = await eventTracker.waitForTerminal(
       dependencies.limits.turnIdleTimeoutMs,
-      withinDeadline(dependencies.limits.turnAbsoluteTimeoutMs),
+      // Progress may continue for the approved parent window; silence still has its own deadline.
+      withinDeadline(governed.approvedRoleBounds(authorizationId)?.remainingMilliseconds ?? dependencies.limits.turnAbsoluteTimeoutMs),
     );
     if (client.failure !== null) {
       throw client.failure;

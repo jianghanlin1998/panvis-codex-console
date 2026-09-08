@@ -24,12 +24,14 @@ export function planningProviderFixture(
     configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean;
     delayedReply?: { method: string; milliseconds: number };
     streamResponse?: boolean; agentChunks?: readonly string[]; deltaThreadId?: string;
+    governed?: boolean; onTurnStarted?: () => void;
   } = {},
 ) {
   const packets: PlanningMockPacket[] = [];
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const launches: Array<{ args: readonly string[]; options: Parameters<Dependencies["spawnAppServer"]>[2] }> = [];
   const workspaces: string[] = [];
+  const peers: Array<{ send: (message: unknown) => void; threadId: string; turnId: string }> = [];
   const dependencies: Dependencies = {
     resolveRuntime: () => ({
       canonicalExecutablePath: "/owned/codex/0.153.3-aarch64-apple-darwin/bin/codex",
@@ -58,6 +60,7 @@ export function planningProviderFixture(
       const stderr = new PassThrough();
       Object.assign(child, { pid: sequence, exitCode: null, signalCode: null, stdout, stderr });
       const send = (message: unknown) => stdout.write(`${JSON.stringify(message)}\n`, "utf8");
+      peers.push({ send, threadId, turnId });
       child.stdin = new Writable({
         write(chunk: Buffer, _encoding, done) {
           const message = JSON.parse(chunk.toString("utf8")) as { id?: number; method: string; params: Record<string, unknown> };
@@ -73,15 +76,18 @@ export function planningProviderFixture(
             if (message.method === "config/read") reply(options.configReadResult === undefined ? { config: { mcp_servers: {} }, origins: {} } : options.configReadResult);
             if (message.method === "thread/start") reply({
               thread: { id: threadId, ephemeral: true, cwd: spawnOptions.cwd }, cwd: spawnOptions.cwd,
-              model: "fixture-model", approvalPolicy: "never", approvalsReviewer: "user",
-              sandbox: { type: "readOnly", networkAccess: false },
+              model: message.params.model ?? "fixture-model", approvalPolicy: "never", approvalsReviewer: "user",
+              sandbox: options.governed && message.params.sandbox === "workspace-write"
+                ? { type: "workspaceWrite", writableRoots: [], networkAccess: false, excludeSlashTmp: false, excludeTmpdirEnvVar: false }
+                : { type: "readOnly", networkAccess: false },
             });
             if (message.method === "turn/start") {
               const input = message.params.input as Array<{ text: string }>;
-              const packet = JSON.parse(input[0]!.text) as PlanningMockPacket;
+              const packet = JSON.parse(options.governed ? input[0]!.text.slice("CODEX_TASK_CONSOLE_GOVERNED_ROLE_V0\n".length) : input[0]!.text) as PlanningMockPacket;
               packets.push(packet);
               reply({ turn: { id: turnId, status: "inProgress" } });
               queueMicrotask(() => {
+                options.onTurnStarted?.();
                 if (options.silentTurn) return;
                 for (let i = 0; i < (options.extraNotifications ?? 0); i += 1) {
                   send({ method: "fixture/unknown", params: { message: "private-provider-canary" } });
@@ -119,5 +125,5 @@ export function planningProviderFixture(
       return child;
     },
   };
-  return { dependencies, packets, requests, launches, workspaces };
+  return { dependencies, packets, requests, launches, workspaces, peers };
 }

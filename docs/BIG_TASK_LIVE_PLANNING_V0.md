@@ -6,6 +6,18 @@ Status: ACCEPTED after fresh independent re-QA round 1 on
 accepted Step 9A main at `d4fae592b3b4213d99506489c7d5e08ca267762b`.
 Hanlin approved this bounded slice on 2026-09-07.
 
+## Product direction and approval amendment (2026-09-08)
+
+Before a new product or material direction change, confirm in plain language what Hanlin wants, concrete examples of useful output, success criteria, scope boundaries and material assumptions. A list of feeds, vendors or tools is not confirmation of the product. For example, a board of substantive AI technology advances needs agreement on what qualifies as an advance; silently replacing it with vendor announcements is a product change.
+
+New `planning-intake` requests record `productDirection: {confirmed: true, summary, successCriteria, scopeBoundaries}` and optional `reviewIntensity: LIGHT | STANDARD | THOROUGH`. Missing confirmation is rejected before any model call or task write; it is a product-alignment boundary, not another tool-permission question. Already confirmed information should be recorded from the conversation without asking again. Immutable historical intakes remain readable with their original review contract. Planner and Reviewer receive the same confirmed brief, must escalate unresolved product choices, and can make routine engineering choices autonomously. The reviewed execution preview includes this brief and review preference; execution approval binds both with the plan.
+
+Once Hanlin approves the resulting plan and limits, ordinary tools, provider calls, implementation, engineering review and agreed repairs proceed under that authorization. Review intensity can be chosen for each new task according to difficulty; changing an already approved task requires an explicit scope amendment, never a silent rewrite. STANDARD now supports independent QA and bounded repair without a separate hardening role for new confirmed-product intakes; HIGH_RISK_FOUNDATION retains deeper hardening. Final engineering QA is not human product acceptance.
+
+When `planning-run` exhausts the operator's wait, it performs one read-only `planning-status` lookup and returns `operatorNotice.code: WAIT_ENDED`. The saved phase remains authoritative. If status cannot be obtained, it returns `STATUS_UNAVAILABLE`, not an invented model failure or completion. It never repeats `planning-run`; the original daemon work may still finish. Query status before deciding whether any recovery is needed.
+
+External sandbox and managed automatic approval are separate from this Console policy. [Official automatic-review documentation](https://learn.chatgpt.com/docs/sandboxing/auto-review) distinguishes sandbox access from its reviewer and retains managed policy precedence. Console code does not disable managed review or grant broad host access. When a boundary blocks already authorized work, provide the existing authorization and narrow action evidence; explain any remaining rejection instead of inventing a new product approval step.
+
 ## Approved 100 KiB planning capacity follow-up
 
 Hanlin approved raising the planning reply limit to 100 KB, implemented as
