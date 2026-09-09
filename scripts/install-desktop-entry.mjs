@@ -5,14 +5,13 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writ
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { desktopLaunchCommand } from '../packages/local-control/dist/desktop-launch-command.js';
 
 if (process.platform !== 'darwin' || process.argv.length !== 2) throw new Error('This installer supports macOS only.');
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(repository, 'packages/local-control/dist/ui-cli.js');
 if (!existsSync(entry)) throw new Error('Build the Console before installing its desktop entry.');
 const destination = join(homedir(), 'Desktop', 'Codex Task Console.app');
-const previous = `${destination}.previous`;
-if (existsSync(destination) && existsSync(previous)) throw new Error('A previous desktop entry is already retained; inspect it before replacing.');
 const logs = join(homedir(), 'Library', 'Logs', 'Codex Task Console');
 mkdirSync(logs, { recursive: true, mode: 0o700 }); chmodSync(logs, 0o700);
 const staging = mkdtempSync(join(tmpdir(), 'ctc-desktop-install-'));
@@ -22,7 +21,7 @@ try {
   const log = join(logs, 'launcher.log');
   writeFileSync(log, '', { encoding: 'utf8', mode: 0o600, flag: 'a' }); chmodSync(log, 0o600);
   const searchPath = `${dirname(process.execPath)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
-  const command = `cd ${quote(repository)} && /usr/bin/nohup /usr/bin/env PATH=${quote(searchPath)} ${quote(process.execPath)} ${quote(entry)} >>${quote(log)} 2>&1 </dev/null &`;
+  const command = desktopLaunchCommand({ repository, runtime: process.execPath, entry, log, searchPath });
   const probe = `/usr/bin/head -c 1 ${quote(entry)} >/dev/null`;
   const source = join(staging, 'entry.applescript');
   // This app launches a local process only. It requires no browser automation permission.
@@ -55,7 +54,14 @@ end idle
   // Sign only this locally built app after its metadata is final; no system policy changes.
   execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'local.codex-task-console.launcher', app], { stdio: 'pipe' });
   execFileSync('/usr/bin/codesign', ['--verify', '--strict', app], { stdio: 'pipe' });
-  if (existsSync(destination)) renameSync(destination, previous);
+  if (existsSync(destination)) {
+    // Keep rollback copies away from the clickable Desktop entry. A second app
+    // with the same name/identifier can accidentally launch the obsolete script.
+    const backups = join(homedir(), 'Library', 'Application Support', 'Codex Task Console', 'desktop-entry-backups');
+    mkdirSync(backups, { recursive: true, mode: 0o700 }); chmodSync(backups, 0o700);
+    const previous = join(mkdtempSync(join(backups, 'entry-')), 'Codex Task Console.app');
+    renameSync(destination, previous);
+  }
   renameSync(app, destination);
   process.stdout.write('Desktop entry installed: Codex Task Console.app\n');
 } finally { rmSync(staging, { recursive: true, force: true }); }
