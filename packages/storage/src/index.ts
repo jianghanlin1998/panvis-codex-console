@@ -164,3 +164,5 @@ export type { BigTaskExecutionStatus, ExecutionPhase, ExecutionStopReason } from
 export { readExecutionProgress, recordExecutionProgress } from "./execution-progress.js";
 
 export { ConsoleWorkspaceStore } from "./console-workspace.js";
+
+export { ConsoleContextEntries } from "./console-context-entries.js";

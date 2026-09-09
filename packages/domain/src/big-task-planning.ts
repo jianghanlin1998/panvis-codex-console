@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ConsoleWorkflowPreferencesSchema } from "./console-workspace.js";
 
 import { ContextItemSchema } from "./context.js";
 import { BigTaskIdSchema } from "./identifiers.js";
@@ -63,10 +64,11 @@ export const BigTaskPlanningIntakeSchema = z.object({
   reviewIntensity: z.enum(["LIGHT", "STANDARD", "THOROUGH"]).optional(),
   taskSize: z.literal("SMALL").optional(),
   consoleReviewPolicy: z.literal(true).optional(),
+  consoleWorkflow: ConsoleWorkflowPreferencesSchema.optional(),
   planningRevisionOf: BigTaskIdSchema.optional(),
   consoleTaskReviewLevels: z.array(z.object({ title: text, reviewLevel: z.enum(["LIGHT", "STANDARD", "THOROUGH"]) }).strict()).max(24).optional(),
   suggestedSubtasks: z.array(z.object({ title: text, goal: text, scopeIn: texts.min(1), scopeOut: texts, successCriteria: texts.min(1) }).strict()).max(24).optional(),
-  planningTokenLimit: z.number().int().min(1).max(120_000),
+  planningTokenLimit: z.number().int().min(1).max(10_000_000),
   budgetException: PlanningBudgetExceptionSchema.optional(),
 }).strict();
 export type BigTaskPlanningIntake = z.infer<typeof BigTaskPlanningIntakeSchema>;
@@ -137,7 +139,7 @@ export const PlanningRunRecordSchema = z.object({
   model: ProviderModelReferenceSchema.nullable(),
   normalizedUsage: NormalizedUsageSchema.nullable(),
   providerDiagnostics: PlanningProviderDiagnosticsSchema.optional(),
-  stopReason: z.enum(["PRODUCT_QUESTION", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "TIME_LIMIT_REACHED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"]).nullable(),
+  stopReason: z.enum(["PRODUCT_QUESTION", "ENGINEERING_PREPARATION", "USER_PAUSED", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "TIME_LIMIT_REACHED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"]).nullable(),
   questions: texts,
 }).strict().superRefine((value, context) => {
   if ((value.status === "RUNNING") !== (value.endedAt === null)

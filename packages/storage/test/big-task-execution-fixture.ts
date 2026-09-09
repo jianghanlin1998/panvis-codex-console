@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ProviderThreadReferenceSchema, ProviderRunReferenceSchema, ProviderModelReferenceSchema } from "@codex-task-console/domain";
+import type { BigTaskPlanningIntake } from "@codex-task-console/domain";
 import { BigTaskExecutionStore } from "../src/big-task-execution.js";
 import { makePlanningFixture } from "./live-planning-fixture.js";
 import { createWorktreeOwnershipManagerForTesting } from "../src/worktree-ownership.js";
@@ -14,14 +15,21 @@ import { executeGovernedRoleCodexWithDependenciesForTest } from "../../codex-ada
 import { validateOwnedWorktreeHardlinkSafety } from "../../codex-adapter/src/worktree-filesystem-safety.js";
 import { planningProviderFixture } from "../../codex-adapter/test/planning-provider-fixture.js";
 
-export function makeExecutionFixture(clock?: () => Date, scenario?: (role: string, occurrence: number) => string | undefined, profile: "STANDARD" | "HIGH_RISK_FOUNDATION" = "HIGH_RISK_FOUNDATION") {
+interface ExecutionFixtureOptions {
+  readonly consoleWorkflow?: BigTaskPlanningIntake["consoleWorkflow"];
+  readonly firstRoleGate?: (root: string) => string;
+  readonly onProviderRunStarted?: (authorizationId: string) => void;
+}
+
+export function makeExecutionFixture(clock?: () => Date, scenario?: (role: string, occurrence: number) => string | undefined, profile: "STANDARD" | "HIGH_RISK_FOUNDATION" = "HIGH_RISK_FOUNDATION", options: ExecutionFixtureOptions = {}) {
   let instant = Date.parse("2026-09-07T00:00:00.000Z");
   const now = clock ?? (() => new Date(instant++));
   const f = makePlanningFixture(now);
   f.git(["update-ref", "refs/remotes/origin/main", f.git(["rev-parse", "HEAD"]).toString().trim()]);
   f.git(["config", "branch.main.remote", "origin"]);
   f.git(["config", "branch.main.merge", "refs/heads/main"]);
-  f.planning.accept(f.intake);
+  const intake = { ...f.intake, ...(options.consoleWorkflow ? { consoleWorkflow: options.consoleWorkflow } : {}) };
+  f.planning.accept(intake);
   const finish = (output: unknown) => {
     const claim = f.planning.claim(f.intake.bigTask.id);
     const threadId = `execution-plan-${claim.sequence}`;
@@ -35,8 +43,10 @@ export function makeExecutionFixture(clock?: () => Date, scenario?: (role: strin
   f.proposal.tasks.forEach(task => { task.profile = profile; });
   finish(f.proposal);
   const bundle = f.storage.getDurablePlanningReviewBundle(f.intake.bigTask.id)!;
-  finish({ outcome: "APPROVE", planRevision: bundle.reviewState.candidate.revision,
-    candidateBinding: createHash("sha256").update(bundle.candidateBinding, "utf8").digest("hex"), revisionRequirements: [], questions: [] });
+  if (f.planning.inspect(intake.bigTask.id).nextRole === "REVIEWER") {
+    finish({ outcome: "APPROVE", planRevision: bundle.reviewState.candidate.revision,
+      candidateBinding: createHash("sha256").update(bundle.candidateBinding, "utf8").digest("hex"), revisionRequirements: [], questions: [] });
+  }
   const execution = new BigTaskExecutionStore(f.storage);
   const review = execution.review(f.intake.bigTask.id);
   const approval = { bigTaskId: review.bigTaskId, planDigest: review.planDigest, repositoryHeadSha: review.repositoryHeadSha,
@@ -48,6 +58,11 @@ export function makeExecutionFixture(clock?: () => Date, scenario?: (role: strin
   const governed = createGovernedExecutionStoreForTest(f.storage, manager);
   const decisions: unknown[] = [];
   const bridge = getGovernedProviderBridge(governed);
+  const firstRoleGate = options.firstRoleGate?.(f.root);
+  if (options.onProviderRunStarted) {
+    const startRun = bridge.startRoleProviderRun.bind(bridge);
+    bridge.startRoleProviderRun = (...args) => { startRun(...args); options.onProviderRunStarted!(args[0]); };
+  }
   const prepare = bridge.prepareNextRole.bind(bridge);
   bridge.prepareNextRole = (...args) => { const result = prepare(...args); decisions.push(result.kind === "ROLE_AUTHORIZED" ? { kind: result.kind, role: result.authorization.role } : result); return result; };
   const starts: string[] = [];
@@ -68,10 +83,11 @@ export function makeExecutionFixture(clock?: () => Date, scenario?: (role: strin
       removeWorkspace: path => rmSync(path, { recursive: true, force: true }),
       spawnAppServer: (_file, _args, options) => spawn(process.execPath,
         [fileURLToPath(new URL("../../../fixtures/mock-governed-app-server.ts", import.meta.url)), `--role=${role.role}`,
-          `--occurrence=${id}`, "--write-candidate", ...(selected === undefined ? [] : [`--scenario=${selected}`]), ...(role.writeEnabled ? [] : ["--readonly-role"])], options),
+          `--occurrence=${id}`, "--write-candidate", ...(selected === undefined ? [] : [`--scenario=${selected}`]), ...(role.writeEnabled ? [] : ["--readonly-role"]),
+          ...(firstRoleGate && starts.length === 1 ? [`--pause-after-start=${firstRoleGate}`] : [])], options),
     });
     outcomes.push({ code: result.failureCode, success: result.success });
     return result;
   };
-  return { ...f, execution, approval, manager, governed, starts, outcomes, decisions, execute, get storage() { return f.storage; } };
+  return { ...f, intake, execution, approval, manager, governed, starts, outcomes, decisions, execute, get storage() { return f.storage; } };
 }

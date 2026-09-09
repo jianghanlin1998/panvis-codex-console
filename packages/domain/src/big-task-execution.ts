@@ -4,11 +4,12 @@ import { RepositoryCommitShaSchema } from "./implementation-checkpoint.js";
 import { ExecutionProgressSchema, ExecutionUsageBreakdownSchema } from "./execution-progress.js";
 
 export const BigTaskExecutionLimitsSchema = z.object({
-  durationMilliseconds: z.number().int().min(1).max(10_800_000),
-  totalTokenLimit: z.number().int().min(1).max(2_880_000),
-  roleCallLimit: z.number().int().min(1).max(192),
+  durationMilliseconds: z.number().int().min(1).max(86_400_000),
+  totalTokenLimit: z.number().int().min(1).max(100_000_000),
+  roleCallLimit: z.number().int().min(1).max(10_000),
+  budgetMode: z.enum(["MEASURE", "HARD"]).optional(),
   repairCycleLimit: z.union([z.literal(1), z.literal(2)]),
-}).strict();
+}).strict().refine(value => value.budgetMode !== undefined || value.durationMilliseconds <= 10_800_000 && value.totalTokenLimit <= 2_880_000 && value.roleCallLimit <= 192);
 export const BigTaskExecutionApprovalSchema = z.object({
   bigTaskId: BigTaskIdSchema,
   planDigest: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -111,7 +112,7 @@ export const BigTaskExecutionStatusSchema = z.object({
   closeout: z.object({ at: timestamp, reason: z.string().trim().min(1).max(2_000), productAccepted: z.literal(false) }).strict().optional(),
   stopReason: z.enum(["USER_PAUSED", "DAEMON_STOPPING", "CHECKPOINT_RECOVERED", "INTERRUPTED", "TIME_LIMIT_REACHED", "TOKEN_LIMIT_REACHED", "ROLE_LIMIT_REACHED", "USAGE_UNKNOWN", "GOVERNED_BLOCKED", "LOCAL_OPERATION_FAILED"]).nullable(),
   startedAt: timestamp.nullable(), expiresAt: timestamp.nullable(), limits: BigTaskExecutionLimitsSchema,
-  roleCalls: z.number().int().nonnegative().max(192), knownTokens: z.number().int().nonnegative(), usageComplete: z.boolean(), activeRoleCount: z.number().int().min(0).max(1), unknownCompletedUsage: z.boolean(),
+  roleCalls: z.number().int().nonnegative().max(10_000), knownTokens: z.number().int().nonnegative(), usageComplete: z.boolean(), activeRoleCount: z.number().int().min(0).max(1), unknownCompletedUsage: z.boolean(),
   usageBreakdown: ExecutionUsageBreakdownSchema.optional(),
   activeRole: z.object({ runId: ExecutionRunIdSchema, subtaskId: SubtaskIdSchema,
     role: z.string().min(1).max(32), usageState: z.literal("IN_PROGRESS"), progress: ExecutionProgressSchema.nullable() }).strict().optional(),
@@ -128,10 +129,10 @@ export const BigTaskExecutionStatusSchema = z.object({
 }).strict().refine(v => v.roleCalls <= v.limits.roleCallLimit && v.usageComplete === (v.activeRoleCount === 0 && !v.unknownCompletedUsage) && new Set(v.integratedSubtaskIds).size === v.integratedSubtaskIds.length &&
   (v.activeRole === undefined || v.activeRoleCount === 1) &&
   (v.usageBreakdown === undefined || v.usageBreakdown.completedRuns + v.activeRoleCount <= v.roleCalls) &&
-  (v.totalBudgetMode === "WARNING_ONLY") === [v.recovery, ...(v.additionalRecoveries ?? [])].some(r => r?.totalBudgetMode === "WARNING_ONLY") &&
+  (v.totalBudgetMode === "WARNING_ONLY") === (v.limits.budgetMode === "MEASURE" || [v.recovery, ...(v.additionalRecoveries ?? [])].some(r => r?.totalBudgetMode === "WARNING_ONLY")) &&
   (v.additionalRecoveries === undefined || v.recovery !== undefined &&
     new Set([v.recovery, ...v.additionalRecoveries].map(r => r.failedAuthorizationId)).size === v.additionalRecoveries.length + 1) &&
-  (v.qaRecovery === undefined ? v.unacknowledgedUnknownUsage === undefined : v.recovery !== undefined && v.unknownCompletedUsage &&
+  (v.qaRecovery === undefined ? (v.limits.budgetMode === "MEASURE" ? v.unacknowledgedUnknownUsage !== undefined : v.unacknowledgedUnknownUsage === undefined) : v.recovery !== undefined && v.unknownCompletedUsage &&
     v.unacknowledgedUnknownUsage !== undefined && v.limits.totalTokenLimit === v.qaRecovery.knownTokenLimit) &&
   (() => {
     if (v.phase === "APPROVED") return v.startedAt === null && v.expiresAt === null && v.roleCalls === 0 &&

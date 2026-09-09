@@ -13,6 +13,7 @@ import type {
 import { validatePlanCandidateGraph } from "@codex-task-console/orchestration";
 import type { PlanCandidate } from "@codex-task-console/orchestration";
 
+import { ConsoleWorkspaceStore } from "./console-workspace.js";
 import { TaskStorageError } from "./errors.js";
 import { getTaskStorageWorktreeAccess } from "./task-storage-internals.js";
 import { TaskStorage } from "./task-storage.js";
@@ -118,7 +119,7 @@ export class LivePlanningStore {
     else if (this.remainingTimeMs(input) === 0) {
       phase = "HUMAN_REQUIRED";
       stopReason = "TIME_LIMIT_REACHED";
-    } else if (accountedRuns.length >= 6 || (intake.budgetException === undefined && totalTokens >= intake.planningTokenLimit) || !usageComplete) {
+    } else if ((intake.consoleWorkflow === undefined && accountedRuns.length >= 6) || (intake.consoleWorkflow?.budgetMode !== "MEASURE" && (intake.budgetException === undefined && totalTokens >= intake.planningTokenLimit || !usageComplete))) {
       phase = "HUMAN_REQUIRED";
       stopReason = usageComplete ? "BUDGET_BLOCKED" : "USAGE_UNKNOWN";
     }
@@ -137,7 +138,12 @@ export class LivePlanningStore {
 
   /** Uses the injected storage clock; zero prevents another provider turn. */
   remainingTimeMs(input: BigTaskId): number | null {
-    const exception = this.#intake(input).intake.budgetException;
+    const source = this.#intake(input);
+    const exception = source.intake.budgetException;
+    if (!exception && source.intake.consoleWorkflow) {
+      const row = this.#access.sqlite.prepare("SELECT created_at FROM live_planning_intakes WHERE big_task_id = ?").get(input)!;
+      return Math.max(0, Date.parse(String(row.created_at)) + source.intake.consoleWorkflow.durationMinutes * 60_000 - Date.parse(this.#now()));
+    }
     return exception === undefined ? null : Math.max(0, Date.parse(exception.expiresAt) - Date.parse(this.#now()));
   }
 
@@ -147,6 +153,7 @@ export class LivePlanningStore {
       if (status.phase !== "READY" || status.nextRole === null || this.successor(input)) fail();
       const source = this.#intake(input);
       const contextMatches = this.#contextMatches(input, source);
+      const paused = new ConsoleWorkspaceStore(this.#storage).lifecycle({ kind: "BIG_TASK", id: input }) !== "ACTIVE";
       const bundle = this.#storage.getDurablePlanningReviewBundle(input);
       const role = status.nextRole;
       // Only the current proposal enters fresh review. No transcripts, old runs or private notes.
@@ -164,6 +171,7 @@ export class LivePlanningStore {
             ? " If a complete plan cannot fit, return HUMAN_REQUIRED with a concise scope question instead of truncating or omitting required work."
             : " If a complete review cannot fit, use ESCALATE with a concise question instead of truncating or omitting blocking findings."),
         approvedIntent: source.intake,
+        ...(source.intake.consoleWorkflow ? { humanContext: new ConsoleWorkspaceStore(this.#storage).roleContext({ kind: "BIG_TASK", id: input }, { includeSubtasks: true }) } : {}),
         ...(source.intake.taskSize === "SMALL" ? { taskSizeInstruction: "This is a direct small-task intake. Propose exactly one bounded task and no dependencies. If the goal cannot fit one task, ask a product question rather than silently expanding it." } : {}),
         reviewPolicy: source.intake.consoleReviewPolicy ? "Owner-selected review levels are binding: LIGHT maps to LOW and basic verification; STANDARD maps to independent QA with at most two failed QA attempts; THOROUGH maps to hardening plus QA with at most three failed QA attempts. Apply consoleTaskReviewLevels by exact task title, otherwise reviewIntensity. Preserve each listed title exactly once during engineering revision; renaming or dropping a human-selected task requires a product question. Do not silently alter selected levels; ask if a genuine requirement conflicts. A LIGHT upstream uses VERIFIED dependency gate: implementation alone never satisfies it, trusted completion of VERIFY is required. UI tasks under STANDARD/THOROUGH require real visual evidence; unavailable visual verification is a blocker, never an invented PASS." : null,
         productAuthority: "The confirmed product direction defines what to build. A tool, feed, vendor or implementation choice is not a substitute for product alignment. Do not silently narrow the audience, coverage, content-selection criteria or meaning of success. Ask a product question when any such decision is unresolved; engineering choices within the confirmed direction need no additional human tool approval. Treat reviewIntensity as the owner's preferred review depth; use the lightest sufficient per-task review and explain material deviations in a product question.",
@@ -177,8 +185,13 @@ export class LivePlanningStore {
         ...(role === "PLANNER" && bundle?.reviewState.phase === "AWAITING_REVISION"
           ? { revisionRequirements: bundle.reviewState.revisionRequirements } : {}),
       };
+      if (source.intake.consoleWorkflow) {
+        packet.instruction = packet.instruction.replace("No tools, edits, execution, self-approval or invented evidence.", "Use console_read to investigate the actual repository, retained delivery, task context and available capabilities before writing the plan. No edits, task execution or invented evidence. Engineering investigation is your job and does not require another owner approval.")
+          .replace("No tools or edits.", "Use console_read when evidence is missing; no edits.")
+          + " Check that each selected QA level agrees with all acceptance prose. Under SELF review, include a complete self-checked plan for owner approval; no independent plan review will be claimed. Do not put prerequisite read-only investigation inside a task that requires this plan to be approved first. If capabilities are missing, describe the engineering work to connect and validate them; only ask the owner for consequential product choices.";
+      }
       const packetText = canonical(packet);
-      const stopReason = !contextMatches ? "CONTEXT_CHANGED" : Buffer.byteLength(packetText, "utf8") > BIG_TASK_PLANNING_LIMITS.maxInputBytes ? "CONTEXT_LIMIT" : null;
+      const stopReason = paused ? "USER_PAUSED" : !contextMatches ? "CONTEXT_CHANGED" : Buffer.byteLength(packetText, "utf8") > BIG_TASK_PLANNING_LIMITS.maxInputBytes ? "CONTEXT_LIMIT" : null;
       const inputText = stopReason === null ? packetText : canonical({ role, stopReason, attemptedInputBinding: digest(packetText) });
       const timestamp = this.#now();
       const run = PlanningRunRecordSchema.parse({
@@ -221,9 +234,9 @@ export class LivePlanningStore {
       const captured = JSON.parse(run.inputText) as { proposal?: unknown };
       if (!this.#contextMatches(input, this.#intake(input)) || canonical(currentProposal) !== canonical(captured.proposal)) stopReason = "CONTEXT_CHANGED";
       else if (this.remainingTimeMs(input) === 0) stopReason = "TIME_LIMIT_REACHED";
-      else if (before.budgetException === undefined && before.totalTokens >= before.tokenLimit) stopReason = "BUDGET_BLOCKED";
+      else if (this.#intake(input).intake.consoleWorkflow?.budgetMode !== "MEASURE" && before.budgetException === undefined && before.totalTokens >= before.tokenLimit) stopReason = "BUDGET_BLOCKED";
       else if (!success) stopReason = "PROVIDER_FAILED";
-      else if (!before.usageComplete) stopReason = "USAGE_UNKNOWN";
+      else if (!before.usageComplete && this.#intake(input).intake.consoleWorkflow?.budgetMode !== "MEASURE") stopReason = "USAGE_UNKNOWN";
       else if (run.providerThread === null || run.providerRun === null || run.model === null) stopReason = "PROVIDER_FAILED";
       else {
         try {
@@ -268,6 +281,11 @@ export class LivePlanningStore {
               if (!validatePlanCandidateGraph(candidate).valid) fail("INVALID_INPUT");
               if (current === null) this.#storage.beginDurablePlanningBundle(candidate, contracts);
               else this.#storage.submitDurablePlannerRevisionBundle(candidate, contracts);
+              if (intake.consoleWorkflow?.planReview === "SELF") {
+                const saved = this.#storage.getDurablePlanningReviewBundle(input)!;
+                this.#storage.recordDurableReviewerDecision(input, { outcome: "APPROVE", planRevision: candidate.revision, candidateBinding: saved.candidateBinding });
+                new ConsoleWorkspaceStore(this.#storage).entries.put(intake.bigTask.projectId, { kind: "BIG_TASK", id: input }, `plan_check_${input}_${candidate.revision}`, "NOTE", { title: "计划自检", body: "规划者已提交自检计划，等待所有者确认实施。没有运行独立计划审核。", authority: "SYSTEM", planReview: "SELF" });
+              }
             }
           } else {
             const review = PlannerReviewResponseSchema.parse(value);

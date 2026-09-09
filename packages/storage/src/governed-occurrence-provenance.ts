@@ -143,21 +143,21 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
           const approval = BigTaskExecutionApprovalSchema.parse(JSON.parse(String(approvalRow?.payload)).request);
           const parsedEvents = events.map(row => JSON.parse(String(row.payload)) as {kind: string; request?: unknown});
           const recoveries = parsedEvents.filter(event => event.kind === "RECOVERY");
-          if (recoveries.length < 1 || recoveries.length > 24) malformed();
+          if (approval.limits.budgetMode === undefined && recoveries.length < 1 || recoveries.length > 24) malformed();
           for (const event of recoveries) {
             const value = BigTaskExecutionRecoverySchema.parse(event.request);
             if (value.bigTaskId !== owner.bigTaskId || value.planDigest !== approval.planDigest || value.repositoryHeadSha !== approval.repositoryHeadSha) malformed();
           }
-          const recovery = BigTaskExecutionRecoverySchema.parse(recoveries[0]!.request);
+          const recovery = recoveries.length ? BigTaskExecutionRecoverySchema.parse(recoveries[0]!.request) : approval;
           if (recovery.bigTaskId !== owner.bigTaskId || recovery.planDigest !== approval.planDigest || recovery.repositoryHeadSha !== approval.repositoryHeadSha ||
             extensionAuthorityId !== null || budget.extensionApplied) malformed();
           if (budget.totalBudgetMode !== undefined) {
-            if (budget.totalBudgetMode !== "WARNING_ONLY" || !recoveries.some(event => BigTaskExecutionRecoverySchema.parse(event.request).totalBudgetMode === "WARNING_ONLY")) malformed();
+            if (budget.totalBudgetMode !== "WARNING_ONLY" || approval.limits.budgetMode !== "MEASURE" && !recoveries.some(event => BigTaskExecutionRecoverySchema.parse(event.request).totalBudgetMode === "WARNING_ONLY")) malformed();
             warningOnly = true;
           }
           const warningTokens = budget.subtaskKnownTokens ?? budget.totalTokens;
           if (!Number.isSafeInteger(warningTokens) || warningTokens === null || warningTokens < 0 ||
-            warningTokens > (budget.totalTokens ?? -1) || budget.warning !== (warningTokens >= 120_000 || warningOnly && (budget.totalTokens ?? 0) >= budget.effectiveLimitTokens)) malformed();
+            warningTokens > (budget.totalTokens ?? -1) || budget.warning !== (approval.limits.budgetMode !== undefined ? (budget.totalTokens ?? 0) >= budget.effectiveLimitTokens : warningTokens >= 120_000 || warningOnly && (budget.totalTokens ?? 0) >= budget.effectiveLimitTokens)) malformed();
           approvedAggregateLimit = approval.limits.totalTokenLimit;
           // Historical observations retain their original ceiling. A raised
           // ceiling must be backed by the immutable, exact-task QA recovery.

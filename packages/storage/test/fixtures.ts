@@ -31,7 +31,7 @@ import { openTaskDatabase, TaskStorageError } from "../src/index.js";
 import type { TaskStorage } from "../src/index.js";
 
 // Current-schema assertions only. Historical and failed-migration counts stay pinned separately.
-export const EXPECTED_CURRENT_MIGRATION_COUNT = 30;
+export const EXPECTED_CURRENT_MIGRATION_COUNT = 31;
 
 // Explicit current table inventory, independent from generated/runtime schema.
 export const EXPECTED_CURRENT_TABLES = [
@@ -43,6 +43,7 @@ export const EXPECTED_CURRENT_TABLES = [
   "candidate_task_contract_bindings",
   "canonical_task_materializations",
   "chat_threads",
+  "console_context_entries",
   "console_discussion_turns",
   "console_drafts",
   "console_scope_settings",

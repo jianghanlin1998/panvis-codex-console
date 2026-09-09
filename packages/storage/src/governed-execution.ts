@@ -1,3 +1,4 @@
+import { ConsoleWorkspaceStore } from "./console-workspace.js";
 import { LivePlanningStore } from "./live-planning.js";
 import { recordExecutionProgress } from "./execution-progress.js";
 import type { ExecutionProgress } from "@codex-task-console/domain";
@@ -175,6 +176,7 @@ export interface GovernedRoleExecutionAttempt {
 }
 
 export interface GovernedRoleExecutionInput {
+  readonly images?: readonly string[];
   readonly authorization: GovernedRoleAuthorization;
   readonly attempt: GovernedRoleExecutionAttempt;
   readonly worktree: ResolvedActiveOwnedWorktree;
@@ -1226,6 +1228,7 @@ export class GovernedExecutionStore {
       if (view.currentStage === "COMPLETE") {
         continue;
       }
+      if (new ConsoleWorkspaceStore(this.#storage).lifecycle({ kind: "SUBTASK", id: view.subtaskId }) !== "ACTIVE") continue;
       const readiness = this.#storage.evaluateStoredSubtaskDependencyReadiness(
         view.subtaskId,
       );
@@ -1398,11 +1401,11 @@ export class GovernedExecutionStore {
     if (!preflight.allowed) {
       throw conflict("The governed role context exceeds the hard cap.");
     }
-    return freeze({
-      authorization,
-      attempt,
-      worktree,
-      preflight,
+    const packet = JSON.parse(preflight.text.slice(ROLE_INPUT_MARKER.length)) as { consoleContext?: ReturnType<ConsoleWorkspaceStore["roleContext"]> };
+    const assets = [...new Map((packet.consoleContext?.turns ?? []).flatMap(turn => turn.attachments).map(asset => [asset.id, asset])).values()].slice(0, 6);
+    const workspace = new ConsoleWorkspaceStore(this.#storage);
+    return freeze({ authorization, attempt, worktree, preflight,
+      ...(assets.length ? { images: assets.map(asset => workspace.entries.asset(authorization.projectId, asset.id).dataUrl) } : {}),
     });
   }
 
@@ -1551,7 +1554,7 @@ export class GovernedExecutionStore {
     const subtaskBudget = this.#deriveAggregateBudget(authorization.subtaskId, true,
       link === undefined ? undefined : String(link.execution_run_id));
     return { remainingMilliseconds: execution.remainingMilliseconds(id),
-      remainingTokens: hasUnacknowledgedExecutionUsage(state) ? 0 : state.totalBudgetMode === "WARNING_ONLY" ? null : state.recovery !== undefined ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
+      remainingTokens: hasUnacknowledgedExecutionUsage(state) ? 0 : state.totalBudgetMode === "WARNING_ONLY" ? null : (state.recovery !== undefined || state.limits.budgetMode !== undefined) ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
         subtaskBudget.effectiveLimitTokens - (subtaskBudget.totalTokens ?? subtaskBudget.effectiveLimitTokens)) };
   }
 
@@ -1604,8 +1607,10 @@ export class GovernedExecutionStore {
       }
       this.#requireProviderClaim(authorization);
       assertProviderTurnSource(this.#access().sqlite, authorizationId);
+      const measured = normalizedUsage?.totalTokens === undefined && isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId) && new BigTaskExecutionStore(this.#storage).inspect(authorization.bigTaskId as BigTaskId).limits.budgetMode === "MEASURE";
+      if (measured && normalizedUsage === undefined) normalizedUsage = {};
       const usage = NormalizedUsageSchema.safeParse(normalizedUsage);
-      if (!usage.success || usage.data.totalTokens === undefined || providerModel === undefined ||
+      if (!usage.success || !measured && usage.data.totalTokens === undefined || providerModel === undefined ||
           run.providerRun === undefined || run.providerRun === null ||
           run.providerModel?.providerModelId !== providerModel.providerModelId ||
           providerModel.providerId !== "codex-app-server") {
@@ -2842,6 +2847,14 @@ export class GovernedExecutionStore {
   ): AggregateSubtaskUsageBudget {
     const task = this.#storage.getSubtaskById(subtaskId);
     const executionState = task !== null && isLivePlannedTask(this.#storage, task.bigTaskId) ? new BigTaskExecutionStore(this.#storage).inspect(task.bigTaskId) : null;
+    if (executionState?.limits.budgetMode !== undefined) {
+      const state = executionState;
+      const allowed = !hasUnacknowledgedExecutionUsage(state) && !executionTokenLimitReached(state);
+      const warning = state.knownTokens >= state.limits.totalTokenLimit;
+      return freeze({ scope: "BIG_TASK" as const, ...(state.totalBudgetMode ? { totalBudgetMode: state.totalBudgetMode } : {}),
+        status: !allowed ? "ABSOLUTE_CEILING" : warning ? "AVAILABLE_WARNING" : "AVAILABLE", allowed,
+        totalTokens: state.knownTokens, warning, extensionApplied: false, effectiveLimitTokens: state.limits.totalTokenLimit });
+    }
     if (executionState?.recovery !== undefined && hasUnacknowledgedExecutionUsage(executionState)) {
       return freeze({ status: "UNKNOWN_USAGE", allowed: false, totalTokens: null, warning: false,
         extensionApplied: false, effectiveLimitTokens: 120_000 });
@@ -2957,7 +2970,13 @@ export class GovernedExecutionStore {
           authorization.role === "FRESH_QA" || authorization.role === "REPAIR"
             ? "FRESH_INDEPENDENT_QA" : "STANDARD_SUBTASK_EXECUTION",
         );
+    const consoleWorkflow = isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId) && new LivePlanningStore(this.#storage).readIntake(authorization.bigTaskId as BigTaskId).intake.consoleWorkflow;
+    const saved = consoleWorkflow ? this.#access().sqlite.prepare("SELECT payload FROM governed_provider_input_observations WHERE authorization_id = ?").get(authorization.authorizationId) : null;
+    const consoleContext = !consoleWorkflow ? undefined : saved
+      ? (JSON.parse((JSON.parse(String(saved.payload)) as { text: string }).text.slice(ROLE_INPUT_MARKER.length)) as { consoleContext: ReturnType<ConsoleWorkspaceStore["roleContext"]> }).consoleContext
+      : new ConsoleWorkspaceStore(this.#storage).roleContext({ kind: "SUBTASK", id: authorization.subtaskId });
     const payload = base.allowed ? JSON.stringify({
+      ...(consoleContext ? { consoleContext } : {}),
       schemaVersion: 1,
       authorizationId: authorization.authorizationId,
       role: authorization.role,
@@ -3158,7 +3177,7 @@ export class GovernedExecutionStore {
     try {
       parsed = parseGovernedRoleResult(result.role, provenance.structured_result);
       const usage = NormalizedUsageSchema.parse(JSON.parse(provenance.normalized_usage));
-      if (usage.totalTokens === undefined || JSON.stringify(usage) !== JSON.stringify(run.normalizedUsage)) throw malformed();
+      if (usage.totalTokens === undefined && !(isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId) && new BigTaskExecutionStore(this.#storage).inspect(authorization.bigTaskId as BigTaskId).limits.budgetMode === "MEASURE") || JSON.stringify(usage) !== JSON.stringify(run.normalizedUsage)) throw malformed();
     } catch { throw malformed(); }
     if (parsed.outcome !== result.outcome || parsed.summary !== result.summary || parsed.findings.length !== findings.length ||
         findings.some((finding, index) => {

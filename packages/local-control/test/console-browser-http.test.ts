@@ -60,6 +60,21 @@ describe("full browser control-plane boundary", () => {
     expect((await f.send("/ui/session", ticket.body, { origin: `http://${f.authority}` })).status).toBe(200);
     expect((await f.send("/ui/session", ticket.body, { origin: `http://${f.authority}` })).status).toBe(401);
   });
+  it("isolates attachment and native-folder routes without weakening session, origin or normal payload limits", async () => {
+    const service = stub(), f = await server(service), cookie = await f.login();
+    const own = { origin: `http://${f.authority}`, cookie };
+    for (const [path, action] of [["/ui/attachment", "asset-save"], ["/ui/folder", "folder-choose"]]) {
+      const body = JSON.stringify({ action, input: {} });
+      expect((await f.send(path!, body, { origin: own.origin })).status).toBe(401);
+      expect((await f.send(path!, body, { ...own, origin: "https://foreign.invalid" })).status).toBe(403);
+      expect((await f.send(path!, JSON.stringify({ action: "execution-start", input: {} }), own)).status).toBe(400);
+      expect((await f.send(path!, body, own)).status).toBe(200);
+    }
+    const image = JSON.stringify({ action: "asset-save", input: { dataUrl: "x".repeat(300_000) } });
+    expect((await f.send("/ui/api", image, own)).status).toBe(413);
+    expect((await f.send("/ui/attachment", image, own)).status).toBe(200);
+    expect(service.consoleRequest).toHaveBeenCalledTimes(3);
+  });
   it("executes a reviewed plan through browser operations and keeps final product acceptance human-owned", async () => {
     const fixture = makeExecutionFixture(undefined, undefined, "STANDARD");
     let progress = (): void => {};

@@ -24,7 +24,7 @@ export function planningProviderFixture(
     configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean; failedCodexErrorInfo?: unknown;
     delayedReply?: { method: string; milliseconds: number };
     streamResponse?: boolean; agentChunks?: readonly string[]; deltaThreadId?: string;
-    governed?: boolean; onTurnStarted?: () => void;
+    governed?: boolean; onTurnStarted?: () => void; researchCall?: object; onResearchResult?: (result: unknown) => void;
   } = {},
 ) {
   const packets: PlanningMockPacket[] = [];
@@ -61,9 +61,15 @@ export function planningProviderFixture(
       Object.assign(child, { pid: sequence, exitCode: null, signalCode: null, stdout, stderr });
       const send = (message: unknown) => stdout.write(`${JSON.stringify(message)}\n`, "utf8");
       peers.push({ send, threadId, turnId });
+      let researchFinished = false;
+      let finishAfterResearch: (() => void) | undefined;
       child.stdin = new Writable({
         write(chunk: Buffer, _encoding, done) {
           const message = JSON.parse(chunk.toString("utf8")) as { id?: number; method: string; params: Record<string, unknown> };
+          if (!message.method && message.id === 910) {
+            options.onResearchResult?.((message as unknown as { result: unknown }).result);
+            researchFinished = true; queueMicrotask(() => finishAfterResearch?.()); done(); return;
+          }
           requests.push({ method: message.method, params: message.params });
           queueMicrotask(() => {
             const reply = (result: unknown) => {
@@ -86,7 +92,14 @@ export function planningProviderFixture(
               const packet = JSON.parse(options.governed ? input[0]!.text.slice("CODEX_TASK_CONSOLE_GOVERNED_ROLE_V0\n".length) : input[0]!.text) as PlanningMockPacket;
               packets.push(packet);
               reply({ turn: { id: turnId, status: "inProgress" } });
-              queueMicrotask(() => {
+              const finish = () => {
+                if (options.researchCall && !researchFinished) {
+                  finishAfterResearch = finish;
+                  send({ method: "item/started", params: { threadId, turnId, item: { id: "research", type: "dynamicToolCall", status: "inProgress" } } });
+                  send({ id: 910, method: "item/tool/call", params: { threadId, turnId, callId: "research", namespace: null, tool: "console_read", arguments: options.researchCall } });
+                  return;
+                }
+                if (options.researchCall) send({ method: "item/completed", params: { threadId, turnId, item: { id: "research", type: "dynamicToolCall", status: "completed" } } });
                 options.onTurnStarted?.();
                 if (options.silentTurn) return;
                 if (options.failedCodexErrorInfo !== undefined) {
@@ -115,7 +128,8 @@ export function planningProviderFixture(
                   send({ method: "item/completed", params: { threadId, turnId, item: { id: "answer", type: "agentMessage", text } } });
                 }
                 send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed", items: [], error: null } } });
-              });
+              };
+              queueMicrotask(finish);
             }
             if (message.method === "turn/interrupt") reply({});
           });

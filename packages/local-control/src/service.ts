@@ -313,6 +313,7 @@ class ProductionLocalControlService implements LocalControlService {
       let state = planning.inspect(bigTaskId);
       // Initial proposal/review plus at most two revisions and fresh reviews.
       for (let count = 0; count < 6 && state.phase === "READY"; count += 1) {
+        if (this.#console.store.lifecycle({ kind: "BIG_TASK", id: bigTaskId }) !== "ACTIVE") break;
         state = await this.executePlanning(this.#storage, bigTaskId);
       }
       return state;
@@ -478,7 +479,12 @@ class ProductionLocalControlService implements LocalControlService {
 
   async pauseExecution(bigTaskId: BigTaskId): Promise<BigTaskExecutionStatus> {
     try {
-      const result = new BigTaskExecutionStore(this.#storage).stop(bigTaskId, "USER_PAUSED");
+      const execution = new BigTaskExecutionStore(this.#storage);
+      const current = execution.inspect(bigTaskId);
+      // UI lifecycle pause stops at the current role boundary: preserve a valid
+      // in-flight result instead of manufacturing an interrupted failure.
+      if (current.activeRole && this.#jobs.has(bigTaskId) && this.#console.store.lifecycle({ kind: "SUBTASK", id: current.activeRole.subtaskId }) !== "ACTIVE") return current;
+      const result = execution.stop(bigTaskId, "USER_PAUSED");
       this.#jobs.get(bigTaskId)?.controller.abort();
       return result;
     } catch (error) { throw sanitizeStorageError(error); }
@@ -512,6 +518,7 @@ class ProductionLocalControlService implements LocalControlService {
         phase = "CHECK_LIMITS";
         const state = execution.inspect(bigTaskId);
         if (state.phase !== "RUNNING" || signal.aborted) return;
+        if (this.#console.store.lifecycle({ kind: "BIG_TASK", id: bigTaskId }) !== "ACTIVE") { execution.stop(bigTaskId, "USER_PAUSED"); return; }
         if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
         if (!executionUsageSettled(state)) { execution.stop(bigTaskId, "USAGE_UNKNOWN"); return; }
         if (executionTokenLimitReached(state)) { execution.stop(bigTaskId, "TOKEN_LIMIT_REACHED"); return; }
@@ -519,8 +526,12 @@ class ProductionLocalControlService implements LocalControlService {
         const prepared = this.#governed.prepareNextRole(bigTaskId);
         if (execution.remainingMilliseconds(bigTaskId) === 0) { execution.stop(bigTaskId, "TIME_LIMIT_REACHED"); return; }
         if (prepared.kind === "BIG_TASK_COMPLETE") { phase = "DELIVER"; execution.deliver(bigTaskId); return; }
-        if (prepared.kind !== "ROLE_AUTHORIZED") { execution.stop(bigTaskId, "GOVERNED_BLOCKED"); return; }
+        if (prepared.kind !== "ROLE_AUTHORIZED") {
+          const lifecycleWait = prepared.kind === "BLOCKED" && prepared.reason === "DEPENDENCY_BLOCKED" && this.#storage.listSubtasksByBigTask(bigTaskId).some(task => task.status !== "DONE" && this.#console.store.lifecycle({ kind: "SUBTASK", id: task.id }) !== "ACTIVE");
+          execution.stop(bigTaskId, lifecycleWait ? "USER_PAUSED" : "GOVERNED_BLOCKED"); return;
+        }
         if (state.roleCalls >= state.limits.roleCallLimit) { execution.stop(bigTaskId, "ROLE_LIMIT_REACHED"); return; }
+        if (this.#console.store.lifecycle({ kind: "SUBTASK", id: prepared.authorization.subtaskId }) !== "ACTIVE") { execution.stop(bigTaskId, "USER_PAUSED"); return; }
         phase = "EXECUTE_ROLE";
         const result = await this.#executeGoverned(this.#governed, prepared.authorization.authorizationId, signal);
         if (!result.success) {

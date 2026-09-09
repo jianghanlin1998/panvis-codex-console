@@ -601,14 +601,14 @@ export const createLocalControlHttpServer = (
             throw new HttpBoundaryError("REQUEST_BOUNDARY_FAILED", 403);
           }
           if (request.method === "GET" && serveBrowserAsset(url, response)) return;
-          if (url === "/ui/session" || url === "/ui/api") {
+          if (url === "/ui/session" || (url === "/ui/api" || url === "/ui/attachment" || url === "/ui/folder")) {
             if (request.method !== "POST") throw new HttpBoundaryError("METHOD_NOT_ALLOWED", 405);
             requireMutationHeaders(request);
             if (request.headers.origin !== `http://${authority}` || (request.headers["sec-fetch-site"] !== undefined && request.headers["sec-fetch-site"] !== "same-origin")) {
               throw new HttpBoundaryError("REQUEST_BOUNDARY_FAILED", 403);
             }
-            if (url === "/ui/api" && !browserSessions.accepts(request.headers.cookie)) throw new HttpBoundaryError("SESSION_AUTH_FAILED", 401);
-            const body = await readBoundedBody(request, 128 * 1024);
+            if ((url === "/ui/api" || url === "/ui/attachment" || url === "/ui/folder") && !browserSessions.accepts(request.headers.cookie)) throw new HttpBoundaryError("SESSION_AUTH_FAILED", 401);
+            const body = await readBoundedBody(request, url === "/ui/attachment" ? 8 * 1024 * 1024 : 256 * 1024);
             if (!hasUnambiguousJsonStructure(body)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
             let value: unknown;
             try { value = JSON.parse(body); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
@@ -622,8 +622,10 @@ export const createLocalControlHttpServer = (
             }
             let envelope: ReturnType<typeof parseConsoleEnvelope>;
             try { envelope = parseConsoleEnvelope(value); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
+            if (url === "/ui/folder" && envelope.action !== "folder-choose") throw new HttpBoundaryError("INVALID_REQUEST", 400);
+            if (url === "/ui/attachment" && !["asset-save", "asset-get"].includes(envelope.action)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
             const result = await requireGovernedMethod(service.consoleRequest).call(service, envelope.action, envelope.input);
-            writeJson(response, 200, result, 1024 * 1024);
+            writeJson(response, 200, result, url === "/ui/attachment" ? 8 * 1024 * 1024 : 1024 * 1024);
             return;
           }
           requireBoundary(request, authority, sessionToken);

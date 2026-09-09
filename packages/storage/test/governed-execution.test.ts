@@ -1735,10 +1735,7 @@ describe("Step 8D final candidate completion matrix",()=>{
 });
 
 
-it("rejects a changed bounded Repair target after claim",()=>{
-  const scenario=createScenario();
-  try{
-    const {bigTaskId,governed,fresh}=freshRole(scenario);
+withFreshRoleTest("rejects a changed bounded Repair target after claim",({scenario,bigTaskId,governed,fresh})=>{
     completeRole(governed,fresh,"BLOCKING_FAIL",[hardeningFinding("original-target")]);
     const a=authorized(governed.prepareNextRole(bigTaskId)).authorization;
     governed.reserveRoleExecutionAttempt(a.authorizationId);const input=governed.claimRoleProviderExecution(a.authorizationId);
@@ -1746,7 +1743,6 @@ it("rejects a changed bounded Repair target after claim",()=>{
     corrupt(scenario,"governed_findings","reproduction='A different bounded target.'");
     expect(()=>governed.validateRoleProviderTurnStart(a.authorizationId,input.preflight.text)).toThrow();
     const db=new DatabaseSync(scenario.databasePath);expect(db.prepare("SELECT count(*) AS count FROM governed_provider_turn_starts WHERE authorization_id=?").get(a.authorizationId)).toEqual({count:0});db.close();
-  }finally{cleanupScenario(scenario);}
 });
 
 
@@ -1796,6 +1792,13 @@ it("upgrades predecessor-format claims without inventing input or gate provenanc
       db.exec(`DROP TABLE ${table}`);
     }
     db.exec("DELETE FROM __drizzle_migrations WHERE id >= 20");
+    // Later migrations may replace triggers on predecessor tables. Restore the
+    // pinned predecessor definition as well as removing later additive tables.
+    db.exec("DROP TRIGGER governed_success_provenance_guard");
+    const hardeningSql = readFileSync(new URL("../drizzle/20260905045319_governed_hardening/migration.sql", import.meta.url), "utf8");
+    const priorSuccessGuard = hardeningSql.split("--> statement-breakpoint").find(sql => sql.includes("CREATE TRIGGER governed_success_provenance_guard"));
+    expect(priorSuccessGuard).toBeDefined();
+    db.exec(priorSuccessGuard!);
     expect(db.prepare("SELECT count(*) AS count FROM __drizzle_migrations").get()).toEqual({ count: 19 });
     db.close();
     for(let i=0;i<2;i++){

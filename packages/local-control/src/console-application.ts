@@ -1,3 +1,5 @@
+import { LivePlanningStore } from "@codex-task-console/storage";
+import { chooseProjectFolder, inspectProjectFolder } from "./project-folder.js";
 import { ResultPreviews } from "./result-preview.js";
 import { execFile } from "node:child_process";
 import { devNull } from "node:os";
@@ -12,7 +14,7 @@ import { BigTaskExecutionStore, ConsoleWorkspaceStore, TaskStorageError } from "
 import type { TaskStorage } from "@codex-task-console/storage";
 import type { LocalControlService } from "./service.js";
 
-export interface ConsoleApplicationDependencies { readonly discuss: typeof executeConsoleDiscussionCodex; readonly previews?: ResultPreviews; }
+export interface ConsoleApplicationDependencies { readonly discuss: typeof executeConsoleDiscussionCodex; readonly previews?: ResultPreviews; readonly chooseFolder?: typeof chooseProjectFolder; }
 const invalid = (): never => { throw new TaskStorageError("INVALID_INPUT", "Invalid Console request."); };
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : invalid();
 const exact = (value: unknown, keys: readonly string[]) => {
@@ -53,9 +55,9 @@ export class ConsoleApplication {
       exact(input, []);
       const projects = this.storage.listProjects();
       const directory = projects.slice(0, 200).map(project => ({ ...project, settings: this.store.settings({ kind: "PROJECT", id: project.id }),
-        tasks: this.store.navigation(project.id).map(task => ({ id: task.id, title: task.title.slice(0, 200), status: task.status, closed: task.closed, taskKind: task.taskKind, presentation: task.presentation,
-          subtasks: task.subtasks.map(subtask => ({ id: subtask.id, title: subtask.title.slice(0, 200), status: subtask.status, stage: subtask.stage, materialized: subtask.materialized })) })),
-        drafts: this.store.listDrafts(project.id).filter(draft => !draft.confirmedBigTaskId).map(draft => ({ id: draft.id, title: draft.title, confirmedBigTaskId: null })), directoryTruncated: false }));
+        tasks: this.store.navigation(project.id).map(task => ({ id: task.id, title: task.title.slice(0, 200), status: task.status, lifecycle: task.lifecycle, closed: task.closed, taskKind: task.taskKind, presentation: task.presentation,
+          subtasks: task.subtasks.map(subtask => ({ id: subtask.id, title: subtask.title.slice(0, 200), status: subtask.status, lifecycle: subtask.lifecycle, stage: subtask.stage, materialized: subtask.materialized })) })),
+        drafts: this.store.listDrafts(project.id).filter(draft => !draft.confirmedBigTaskId && !draft.parentDraftId).map(draft => ({ id: draft.id, title: draft.title, confirmedBigTaskId: null, children: this.store.childDrafts(draft).map(child => ({ id: child.id, title: child.title })) })), directoryTruncated: false }));
       // The bootstrap directory never includes task bodies or provider/planning transcripts.
       while (Buffer.byteLength(JSON.stringify(directory), "utf8") > 850_000) {
         const largest = [...directory].sort((a, b) => b.tasks.length + b.drafts.length - a.tasks.length - a.drafts.length)[0];
@@ -70,7 +72,56 @@ export class ConsoleApplication {
       const id = ProjectIdSchema.parse(data.projectId);
       const project = this.storage.getProjectById(id);
       if (!project) throw new TaskStorageError("PARENT_NOT_FOUND", "Project unavailable.");
-      return { project, drafts: this.store.listDrafts(id), settings: this.store.settings({ kind: "PROJECT", id }), bigTasks: this.store.navigation(id).slice(0, 200) };
+      return { project, drafts: this.store.listDrafts(id).filter(draft => !draft.parentDraftId).map(draft => ({ ...draft, settings: this.store.settings({ kind: "DRAFT", id: draft.id }), children: this.store.childDrafts(draft).map(child => ({ id: child.id, title: child.title })) })), settings: this.store.settings({ kind: "PROJECT", id }), bigTasks: this.store.navigation(id).slice(0, 200) };
+    }
+    if (action === "folder-choose") {
+      exact(input, []);
+      const path = await (this.dependencies.chooseFolder ?? chooseProjectFolder)();
+      return path ? inspectProjectFolder(path) : { cancelled: true };
+    }
+    if (action === "folder-inspect") {
+      exact(input, ["path"]); if (typeof data.path !== "string") invalid();
+      return inspectProjectFolder(String(data.path));
+    }
+    if (action === "asset-save" || action === "asset-get") {
+      exact(input, action === "asset-save" ? ["scope", "name", "dataUrl"] : ["scope", "id"]);
+      const { scope, projectId } = this.store.resolveScope(data.scope);
+      if (action === "asset-get") { if (typeof data.id !== "string") invalid(); return this.store.entries.asset(projectId, String(data.id)); }
+      if (typeof data.name !== "string" || typeof data.dataUrl !== "string") invalid();
+      return this.store.entries.saveAsset(projectId, scope, String(data.name), String(data.dataUrl));
+    }
+    if (action === "lifecycle-change") {
+      exact(input, ["requestId", "scope", "expectedRevision", "lifecycle", "endOutcome"]);
+      const result = this.store.changeSettings(input);
+      const { scope, projectId } = this.store.resolveScope(data.scope);
+      const affected = scope.kind === "PROJECT" ? this.store.navigation(projectId).map(task => task.id)
+        : scope.kind === "BIG_TASK" ? [BigTaskIdSchema.parse(scope.id)] : scope.kind === "SUBTASK" ? [this.store.subtaskRecord(scope.id)!.task.bigTaskId] : [];
+      if (data.lifecycle !== "ACTIVE") for (const id of affected) {
+        this.#queued.delete(`planning:${id}`);
+        if (this.store.taskPresence(id).execution) {
+          const running = await this.service.inspectExecution!(id);
+          if (running.phase === "RUNNING" && (scope.kind !== "SUBTASK" || !running.activeRole || running.activeRole.subtaskId === scope.id)) await this.service.pauseExecution!(id);
+        }
+      }
+      if (data.lifecycle === "ACTIVE" && scope.kind !== "PROJECT" && this.store.lifecycle(scope) === "ACTIVE") {
+        for (const id of affected) {
+          if (this.store.taskPresence(id).execution) {
+            const current = await this.service.inspectExecution!(id);
+            if (current.activeRoleCount === 0 && ["APPROVED", "PAUSED"].includes(current.phase) && (current.expiresAt === null || Date.parse(current.expiresAt) > Date.parse(this.store.now())) && executionUsageSettled(current) && !executionTokenLimitReached(current)) await this.service.startExecution!(id);
+          } else if (this.store.taskPresence(id).planning) {
+            const current = await this.service.inspectPlanning!(id);
+            if (current.phase === "READY") this.#schedule(`planning:${id}`, () => this.service.runPlanning!(id));
+          }
+        }
+      }
+      return result;
+    }
+    if (action === "planning-retry") {
+      exact(input, ["bigTaskId", "requestId"]);
+      if (typeof data.bigTaskId !== "string" || typeof data.requestId !== "string") invalid();
+      const result = this.store.prepareAgain(String(data.bigTaskId), String(data.requestId));
+      this.#schedule(`planning:${result.bigTaskId}`, () => this.service.runPlanning!(result.bigTaskId));
+      return result;
     }
     if (action === "project-create") {
       const parsed = ConsoleProjectCreateSchema.parse(input);
@@ -93,7 +144,7 @@ export class ConsoleApplication {
       if (typeof data.draftId !== "string") return invalid();
       const draft = this.store.getDraft(data.draftId);
       if (!draft) throw new TaskStorageError("PARENT_NOT_FOUND", "Draft unavailable.");
-      return draft;
+      return { ...draft, children: this.store.childDrafts(draft), settings: this.store.settings({ kind: "DRAFT", id: draft.id }) };
     }
     if (action === "plan-review-change") {
       const result = this.store.amendPlanReview(input);
@@ -116,7 +167,7 @@ export class ConsoleApplication {
       const claim = this.store.claimDiscussion(parsed);
       if (claim.claimed) this.#schedule(`discussion:${claim.turn.id}`, async () => {
         try {
-          const remaining = () => this.#stopping ? 0 : Math.max(0, 300_000 - (Date.parse(this.store.now()) - Date.parse(claim.turn.createdAt)));
+          const remaining = () => this.#stopping ? 0 : Math.max(0, 1_200_000 - (Date.parse(this.store.now()) - Date.parse(claim.turn.createdAt)));
           const result = await this.dependencies.discuss(this.storage, claim.inputText, CONSOLE_DISCUSSION_OUTPUT_SCHEMA as Parameters<typeof executeConsoleDiscussionCodex>[2], remaining);
           let answer: unknown = null;
           if (result.success && result.agentResponseText) { try { answer = JSON.parse(result.agentResponseText); } catch { /* Persist invalid output. */ } }
@@ -133,10 +184,14 @@ export class ConsoleApplication {
     if (action === "subtask") {
       exact(input, ["subtaskId"]);
       const id = SubtaskIdSchema.parse(data.subtaskId);
-      const task = this.storage.getSubtaskById(id);
+      const record = this.store.subtaskRecord(id);
+      const task = record?.task;
       if (!task) throw new TaskStorageError("PARENT_NOT_FOUND", "Task unavailable.");
-      return { task, parent: this.storage.getBigTaskById(task.bigTaskId), settings: this.store.settings({ kind: "SUBTASK", id }), inspection: await this.service.inspectSubtask(id), workflow: this.storage.getDurableWorkflowControlView(id),
-        checkpoints: this.storage.listSubtaskImplementationCheckpoints(id).slice(-20) };
+      const parentPlan = this.storage.getDurablePlanningReviewBundle(task.bigTaskId);
+      return { task, planningBinding: this.store.planningBinding(task.bigTaskId), plannedProfile: parentPlan?.reviewState.candidate.subtasks.find(item => item.id === id)?.profile ?? null,
+        canAmendPlan: !this.store.taskPresence(task.bigTaskId).execution && !this.store.presentation(task.bigTaskId).historyOf && this.store.taskPresence(task.bigTaskId).planning && new LivePlanningStore(this.storage).inspect(task.bigTaskId).phase !== "RUNNING",
+        materialized: record!.materialized, parent: this.storage.getBigTaskById(task.bigTaskId), context: this.store.context({ kind: "SUBTASK", id }), settings: this.store.settings({ kind: "SUBTASK", id }), inspection: record!.materialized ? await this.service.inspectSubtask(id) : null, workflow: record!.materialized ? this.storage.getDurableWorkflowControlView(id) : null,
+        checkpoints: record!.materialized ? this.storage.listSubtaskImplementationCheckpoints(id).slice(-20) : [] };
     }
     if (action === "execution-approve") return this.service.approveExecution!(input);
     if (action === "execution-recover") return this.service.recoverExecution!(input);
@@ -158,7 +213,7 @@ export class ConsoleApplication {
       const planning = presence.planning ? await this.service.inspectPlanning!(id) : null;
       const execution = presence.execution ? await this.service.inspectExecution!(id) : null;
       const windowExpired = execution?.expiresAt !== null && execution?.expiresAt !== undefined && Date.parse(execution.expiresAt) <= Date.parse(this.store.now());
-      const canResume = execution !== null && !windowExpired && (["APPROVED", "PAUSED"].includes(execution.phase)
+      const canResume = execution !== null && execution.activeRoleCount === 0 && this.store.lifecycle({ kind: "BIG_TASK", id }) === "ACTIVE" && !windowExpired && (["APPROVED", "PAUSED"].includes(execution.phase)
         || execution.phase === "HUMAN_REQUIRED" && execution.stopReason === "TIME_LIMIT_REACHED");
       const canRenewWindow = execution !== null && windowExpired && ["PAUSED", "HUMAN_REQUIRED"].includes(execution.phase)
         && executionUsageSettled(execution) && !executionTokenLimitReached(execution)
@@ -166,16 +221,18 @@ export class ConsoleApplication {
       return { task, planningBinding: this.store.planningBinding(id), presentation: this.store.presentation(id), settings: this.store.settings({ kind: "BIG_TASK", id }), navigation: this.store.navigation(task.projectId).find(item => item.id === id), sourceDraft: this.store.sourceDraft(id), planning, execution, canResume, canRenewWindow,
         subtasks: this.storage.listSubtasksByBigTask(id), plan: this.storage.getDurablePlanningSnapshot(id),
         contracts: this.storage.getDurablePlanningReviewBundle(id)?.taskContracts ?? [],
+        planReviewMode: presence.planning ? new LivePlanningStore(this.storage).readIntake(id).intake.consoleWorkflow?.planReview ?? "INDEPENDENT" : null,
         planningActive: this.#jobs.has(`planning:${id}`) || this.#queued.has(`planning:${id}`) };
     }
     if (action === "planning-start") {
+      if (this.store.lifecycle({ kind: "BIG_TASK", id }) !== "ACTIVE") throw new TaskStorageError("CONFLICT", "This task is paused or ended.");
       const before = await this.service.inspectPlanning!(id);
       if (before.phase !== "READY" || this.#jobs.has(`planning:${id}`)) return before;
       this.#schedule(`planning:${id}`, () => this.service.runPlanning!(id));
       return { ...before, planningActive: true };
     }
     if (action === "execution-review") return this.service.reviewExecution!(id);
-    if (action === "execution-start") return this.service.startExecution!(id);
+    if (action === "execution-start") { if (this.store.lifecycle({ kind: "BIG_TASK", id }) !== "ACTIVE") throw new TaskStorageError("CONFLICT", "This task is paused or ended."); return this.service.startExecution!(id); }
     if (action === "execution-pause") return this.service.pauseExecution!(id);
     if (action === "execution-recovery-review") return this.service.reviewExecutionRecovery!(id);
     if (action === "execution-qa-recovery-review") return this.service.reviewQaExecutionRecovery!(id);

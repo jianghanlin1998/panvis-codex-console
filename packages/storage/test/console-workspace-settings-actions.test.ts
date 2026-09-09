@@ -116,7 +116,10 @@ describe("Console review settings and discussion effects", () => {
       const other = f.storage.createProject(makeProject("prj_settings_other", "settings-other"));
       const foreign = f.ui.claimDiscussion({ requestId: "draft-source-other", scope: { kind: "PROJECT", id: other.id }, message: "Another project" }).turn;
       expect(() => f.ui.createDraft({ ...input, requestId: "foreign-source-draft", sourceTurnId: foreign.id })).toThrow();
-      expect(f.ui.listDrafts(f.intake.bigTask.projectId)).toEqual([draft]);
+      const drafts = f.ui.listDrafts(f.intake.bigTask.projectId);
+      expect(drafts.filter(item => !item.parentDraftId)).toEqual([draft]);
+      expect(drafts.filter(item => item.parentDraftId === draft.id)).toEqual(f.ui.childDrafts(draft));
+      expect(f.ui.childDrafts(draft)).toHaveLength(1);
       expect(f.ui.listDrafts(other.id)).toEqual([]);
     } finally { f.close(); }
   });

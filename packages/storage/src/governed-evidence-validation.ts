@@ -60,12 +60,13 @@ export function assertGovernedEvidenceSource(sqlite: DatabaseSync, evidence: Dur
     JOIN governed_result_provenance p ON p.result_id = r.result_id AND p.authorization_id = a.authorization_id
     JOIN governed_provider_claims claim ON claim.authorization_id = a.authorization_id
     WHERE r.result_id = ?`).get(resultId);
+  const measureOnly = row?.total_tokens === null && sqlite.prepare("SELECT 1 FROM big_task_execution_approvals WHERE big_task_id = ? AND json_extract(payload, '$.request.limits.budgetMode') = 'MEASURE'").get(String(row.big_task_id)) !== undefined;
   if (row === undefined || row.run_status !== "SUCCEEDED" || row.claimed_run !== row.execution_run_id ||
       row.subtask_id !== evidence.subtaskId || row.project_id !== evidence.projectId || row.big_task_id !== evidence.bigTaskId ||
       row.plan_revision !== evidence.planRevision || row.candidate_binding !== evidence.candidateBinding ||
       row.workflow_sequence !== evidence.expectedSequence || row.repair_cycles_used !== evidence.observedRepairCyclesUsed ||
       row.role !== evidence.observedStage || row.proven_sha !== row.candidate_sha || row.recorded_at !== row.occurred_at ||
-      row.occurred_at !== evidence.occurredAt || row.usage_present !== 1 || row.total_tokens === null ||
+      row.occurred_at !== evidence.occurredAt || row.usage_present !== 1 || row.total_tokens === null && !measureOnly ||
       row.actual_thread_id !== row.provider_thread_id || row.actual_run_id !== row.provider_run_id ||
       row.actual_model_id !== row.provider_model_id) malformed();
   const resultAuthorization = sqlite.prepare("SELECT authorization_id FROM governed_role_results WHERE result_id = ?").get(resultId);
@@ -75,7 +76,7 @@ export function assertGovernedEvidenceSource(sqlite: DatabaseSync, evidence: Dur
   try {
     const source = JSON.parse(String(row.structured_result)) as {outcome: unknown; summary: unknown; findings: unknown[]};
     const usage = JSON.parse(String(row.normalized_usage)) as {totalTokens: unknown};
-    if (source.outcome !== row.outcome || source.summary !== row.summary || usage.totalTokens !== row.total_tokens) malformed();
+    if (source.outcome !== row.outcome || source.summary !== row.summary || (usage.totalTokens !== row.total_tokens && !(measureOnly && usage.totalTokens === undefined && row.total_tokens === null))) malformed();
     const findings = sqlite.prepare("SELECT * FROM governed_findings WHERE result_id = ? ORDER BY ordinal").all(resultId);
     if (findings.length !== source.findings.length || findings.some((f, index) => {
       const expected = source.findings[index] as Record<string, unknown>;

@@ -2230,3 +2230,11 @@ export const consoleSettingsChangesTable = sqliteTable("console_settings_changes
 export const consoleTaskPresentationTable = sqliteTable("console_task_presentation", {
   bigTaskId: text("big_task_id").primaryKey().references(() => bigTasksTable.id), payload: text("payload").notNull(),
 }, table => [check("console_task_presentation_json", sql`json_valid(${table.payload})`)]);
+
+export const consoleContextEntriesTable = sqliteTable("console_context_entries", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull().references(() => projectsTable.id),
+  scopeKey: text("scope_key").notNull(),
+  kind: text("kind").notNull(),
+  payload: text("payload").notNull(),
+}, table => [check("console_context_entry_json", sql`json_valid(${table.payload})`)]);

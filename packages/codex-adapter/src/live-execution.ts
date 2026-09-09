@@ -72,6 +72,9 @@ import type {
 import type { JsonObject, JsonValue, TokenUsageBreakdown } from "./protocol.js";
 import { validateOwnedWorktreeHardlinkSafety } from "./worktree-filesystem-safety.js";
 import { resolveRuntimeHttpsProxy } from "./runtime-network.js";
+import { consoleResearch, CONSOLE_RESEARCH_TOOL } from "./console-research.js";
+import { ConsoleWorkspaceStore } from "@codex-task-console/storage";
+import { ConsoleScopeSchema } from "@codex-task-console/domain";
 import { providerFailureCode } from "./provider-failure.js";
 
 const EXPECTED_RELEASE_VERSION = TESTED_CODEX_VERSION.replace("codex-cli ", "");
@@ -542,6 +545,7 @@ interface WriteToolItemState {
 
 type TurnEventPolicy =
   | Readonly<{ readonly kind: "READ_ONLY" }>
+  | Readonly<{ readonly kind: "CONSOLE_RESEARCH"; readonly worktreePath: string }>
   | Readonly<{ readonly kind: "READ_ONLY_WORKTREE"; readonly worktreePath: string }>
   | Readonly<{
       readonly kind: "WORKSPACE_WRITE";
@@ -673,7 +677,7 @@ class TurnEventTracker {
         const item = requireRecord(record.item);
         const itemType = requireBoundedString(item.type, 64);
         if (itemType === "commandExecution" || itemType === "fileChange") {
-          if (this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && itemType === "fileChange") {
+          if ((this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "CONSOLE_RESEARCH") || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && itemType === "fileChange") {
             this.diagnostics.toolActionsObserved += 1;
             throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
           }
@@ -684,6 +688,7 @@ class TurnEventTracker {
             this.eventPolicy.worktreePath,
           );
         } else if (
+          !(this.eventPolicy.kind === "CONSOLE_RESEARCH" && itemType === "dynamicToolCall") &&
           itemType !== "userMessage" &&
           itemType !== "agentMessage" &&
           itemType !== "plan" &&
@@ -743,7 +748,7 @@ class TurnEventTracker {
           requireBoundedString(record.turnId, 512),
         );
         const itemId = requireBoundedString(record.itemId, 512);
-        if (this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && method !== "item/commandExecution/outputDelta") {
+        if ((this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "CONSOLE_RESEARCH") || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && method !== "item/commandExecution/outputDelta") {
           this.diagnostics.toolActionsObserved += 1;
           throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
         }
@@ -1053,6 +1058,7 @@ class JsonlAppServerClient {
     private readonly diagnostics: MutableDiagnostics,
     private readonly events: TurnEventTracker,
     private readonly byteMeteredAgentDeltas = false,
+    private readonly research?: (input: unknown) => object,
   ) {
     child.stdout.on("data", (chunk: Buffer | string) => {
       this.#receiveStdout(chunk);
@@ -1285,7 +1291,7 @@ class JsonlAppServerClient {
         if (typeof record.id !== "number" && typeof record.id !== "string") {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
         }
-        this.#handleServerRequest(record.id, record.method);
+        this.#handleServerRequest(record.id, record.method, record.params);
         return;
       }
       const handled = this.events.handleNotification(record.method, record.params ?? {});
@@ -1328,8 +1334,16 @@ class JsonlAppServerClient {
     throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
   }
 
-  #handleServerRequest(id: number | string, method: string): void {
+  #handleServerRequest(id: number | string, method: string, params?: JsonValue): void {
     this.diagnostics.serverRequestsReceived += 1;
+    if (method === "item/tool/call" && this.research) {
+      const request = requireRecord(params);
+      if (request.tool !== "console_read" || request.threadId !== this.events.threadId || request.turnId !== this.events.turnId || request.namespace != null) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      const result = this.research(request.arguments);
+      const text = JSON.stringify(result);
+      this.#send({ id, result: { success: true, contentItems: [{ type: "inputText", text: text.length <= 120_000 ? text : JSON.stringify({ error: "READ_TOO_LARGE", message: "Read a specific task or a smaller page." }) }] } });
+      return;
+    }
     if (
       method === "item/commandExecution/requestApproval" ||
       method === "item/fileChange/requestApproval"
@@ -1443,6 +1457,7 @@ async function executeGovernedRoleCodexWithDependencies(
   let planType: string | null = null;
   let preflightSummary: GovernedRoleCodexExecutionResultBase["preflight"] = null;
   let promptText: string | null = null;
+  let imageInputs: readonly string[] = [];
   let chatThreadId: ChatThreadId | null = null;
   let executionRunId: ExecutionRunId | null = null;
   let providerThread: ProviderThreadReference | null = null;
@@ -1494,6 +1509,7 @@ async function executeGovernedRoleCodexWithDependencies(
         utf8Bytes: input.preflight.utf8Bytes,
       };
       promptText = input.preflight.text;
+      imageInputs = input.images ?? [];
       assertActiveOwnedWorktree(input.worktree, input.authorization.subtaskId);
       validateWorktreeFilesystem(
         dependencies,
@@ -1571,7 +1587,7 @@ async function executeGovernedRoleCodexWithDependencies(
     }
     client = new JsonlAppServerClient(
       child,
-      dependencies.limits,
+      imageInputs.length ? { ...dependencies.limits, maxJsonlLineBytes: 36 * 1024 * 1024 } : dependencies.limits,
       diagnostics,
       eventTracker,
       true,
@@ -1669,7 +1685,7 @@ async function executeGovernedRoleCodexWithDependencies(
       "turn/start",
       {
         threadId: thread.threadId,
-        input: [{ type: "text", text: promptText, text_elements: [] }],
+        input: [{ type: "text", text: promptText, text_elements: [] }, ...imageInputs.map(url => ({ type: "image", url }))],
         ...(selectedModel === null ? {} : { model: selectedModel.model, effort: selectedModel.reasoningEffort }),
         cwd: worktreePath,
         approvalPolicy: "never",
@@ -2382,6 +2398,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   planning?: {
     readonly text: string; readonly outputSchema: JsonValue; readonly tokenLimit: number | null;
     readonly discussion?: true;
+    readonly research?: (input: unknown) => object; readonly images?: readonly string[];
     readonly remainingTimeMs: () => number | null;
     readonly observe: (evidence: ReturnType<typeof emptyEvidence>) => void;
   },
@@ -2451,7 +2468,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     const eventTracker = new TurnEventTracker(
       diagnostics,
       planning === undefined ? dependencies.limits.maxAgentResponseBytes : BIG_TASK_PLANNING_LIMITS.maxResponseBytes,
-      { kind: "READ_ONLY" },
+      planning?.research ? { kind: "CONSOLE_RESEARCH", worktreePath: executionWorkspace } : { kind: "READ_ONLY" },
       planning === undefined ? undefined : (usage) => {
         evidence.normalizedUsage = usage;
         planning.observe(evidence);
@@ -2485,10 +2502,11 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     }
     client = new JsonlAppServerClient(
       child,
-      dependencies.limits,
+      planning?.research ? { ...dependencies.limits, maxJsonlLineBytes: 36 * 1024 * 1024 } : dependencies.limits,
       diagnostics,
       eventTracker,
       planning !== undefined,
+      planning?.research,
     );
     await client.waitForSpawn(withinDeadline(dependencies.limits.startupTimeoutMs));
 
@@ -2497,7 +2515,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       "initialize",
       {
         clientInfo: CLIENT_INFO,
-        capabilities: null,
+        capabilities: planning?.research ? { experimentalApi: true } : null,
       },
       withinDeadline(dependencies.limits.requestTimeoutMs),
     );
@@ -2535,6 +2553,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         ephemeral: true,
         sandbox: "read-only",
         serviceName: CLIENT_INFO.name,
+        ...(planning?.research ? { dynamicTools: [{ type: "function", ...CONSOLE_RESEARCH_TOOL }] } : {}),
       },
       withinDeadline(dependencies.limits.requestTimeoutMs),
       {
@@ -2572,6 +2591,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
             text: planning?.text ?? (preflight?.allowed ? preflight.text : ""),
             text_elements: [],
           },
+          ...(planning?.images ?? []).map(url => ({ type: "image", url })),
         ],
         cwd: executionWorkspace,
         approvalPolicy: "never",
@@ -2700,7 +2720,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   });
 }
 
-/** A discussion uses the existing tool-free read-only transport; it cannot start task execution. */
+/** Discussion may investigate its project with bounded read-only tools; it cannot execute a task. */
 export async function executeConsoleDiscussionCodex(
   storage: TaskStorage, text: string, outputSchema: JsonValue, remainingTimeMs: () => number,
 ): Promise<LiveCodexExecutionResult> {
@@ -2718,8 +2738,27 @@ function executeConsoleDiscussion(
   storage: TaskStorage, text: string, outputSchema: JsonValue, remainingTimeMs: () => number, dependencies: LiveExecutionDependencies,
 ): Promise<LiveCodexExecutionResult> {
   return executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", dependencies, {
-    text, outputSchema, tokenLimit: 40_000, remainingTimeMs, observe: () => undefined, discussion: true,
+    text, outputSchema, tokenLimit: null, remainingTimeMs, observe: () => undefined, discussion: true,
+    ...discussionResearch(storage, text),
   });
+}
+
+function discussionResearch(storage: TaskStorage, text: string) {
+  const packet = JSON.parse(text) as { scope?: unknown; projectId?: string };
+  if (!packet.scope || !packet.projectId) return {};
+  const scope = ConsoleScopeSchema.parse(packet.scope);
+  const workspace = new ConsoleWorkspaceStore(storage);
+  if (workspace.resolveScope(scope).projectId !== packet.projectId) throw new Error("INVALID_INPUT");
+  const turns = workspace.turns(scope).turns;
+  const assets = [...new Map(turns.flatMap(turn => turn.attachments ?? []).map(asset => [asset.id, asset])).values()].slice(-6);
+  return { research: consoleResearch(storage, packet.projectId, scope), images: assets.map(asset => workspace.entries.asset(packet.projectId!, asset.id).dataUrl) };
+}
+
+function consolePlanningImages(storage: TaskStorage, bigTaskId: BigTaskId) {
+  const workspace = new ConsoleWorkspaceStore(storage), scope = { kind: "BIG_TASK" as const, id: bigTaskId };
+  const projectId = workspace.resolveScope(scope).projectId;
+  const assets = [...new Map(workspace.roleContext(scope, { includeSubtasks: true }).turns.flatMap(turn => turn.attachments).map(asset => [asset.id, asset])).values()].slice(0, 6);
+  return assets.map(asset => workspace.entries.asset(projectId, asset.id).dataUrl);
 }
 
 function productionDependencies(): LiveExecutionDependencies {
@@ -2735,7 +2774,7 @@ function productionDependencies(): LiveExecutionDependencies {
   };
 }
 
-/** One fresh, tool-free Planner or Reviewer turn. No execution/materialization authority. */
+/** A fresh Planner or Reviewer turn; new Console policies allow read-only research. */
 export async function executeBigTaskPlanningCodex(storage: TaskStorage, bigTaskId: BigTaskId): Promise<LivePlanningStatus> {
   return executeBigTaskPlanningWithDependencies(storage, bigTaskId, productionDependencies());
 }
@@ -2758,7 +2797,8 @@ async function executeBigTaskPlanningWithDependencies(
     const result = await executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", dependencies, {
       text: run.inputText,
       outputSchema: (run.role === "PLANNER" ? PLANNER_OUTPUT_SCHEMA : PLANNER_REVIEW_OUTPUT_SCHEMA) as JsonValue,
-      tokenLimit: before.budgetException === undefined ? before.tokenLimit - before.totalTokens : null,
+      tokenLimit: before.budgetException === undefined && planning.readIntake(bigTaskId).intake.consoleWorkflow?.budgetMode !== "MEASURE" ? before.tokenLimit - before.totalTokens : null,
+      ...(planning.readIntake(bigTaskId).intake.consoleWorkflow ? { research: consoleResearch(storage, planning.readIntake(bigTaskId).intake.bigTask.projectId, { kind: "BIG_TASK", id: bigTaskId }), images: consolePlanningImages(storage, bigTaskId) } : {}),
       remainingTimeMs: () => planning.remainingTimeMs(bigTaskId),
       observe: (evidence) => planning.observe(bigTaskId, run.sequence, {
         providerThread: evidence.providerThread, providerRun: evidence.providerRun,

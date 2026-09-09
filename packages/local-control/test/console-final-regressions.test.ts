@@ -116,7 +116,10 @@ describe("Console final QA regression boundaries", () => {
       expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThan(850_100);
       expect(JSON.stringify(result)).not.toContain("BODY_ONLY_");
       expect(result).toMatchObject({ projects: [{ drafts: expect.arrayContaining([expect.objectContaining({ title: "Draft 11" })]), directoryTruncated: false }] });
-      expect(ui.store.listDrafts(f.intake.bigTask.projectId)).toHaveLength(12);
+      const retained = ui.store.listDrafts(f.intake.bigTask.projectId);
+      expect(retained).toHaveLength(36);
+      expect(retained.filter(draft => !draft.parentDraftId)).toHaveLength(12);
+      expect(retained.filter(draft => draft.parentDraftId)).toHaveLength(24);
     } finally { await ui.stop(); f.close(); }
   });
 

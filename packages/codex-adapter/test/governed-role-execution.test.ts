@@ -242,9 +242,16 @@ const dependencies = (
 });
 
 describe("governed Codex role execution", () => {
-  it("runs write and read roles with exact candidate policies and no transcript output", async () => {
-    const fixture = createFixture();
-    try {
+  describe("write/read candidate policies", () => {
+    const fixtures = new WeakMap<object, Fixture>();
+    beforeEach(context => { fixtures.set(context, createFixture()); });
+    afterEach(context => {
+      const fixture = fixtures.get(context);
+      if (fixture) cleanup(fixture);
+    });
+
+    it("runs write and read roles with exact candidate policies and no transcript output", async context => {
+      const fixture = fixtures.get(context)!;
       const execute = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
       const executeResult = await executeGovernedRoleCodexWithDependenciesForTest(
         fixture.governed,
@@ -286,9 +293,7 @@ describe("governed Codex role execution", () => {
       expect(fixture.governed.prepareNextRole(BIG_TASK_ID).kind).toBe(
         "BIG_TASK_COMPLETE",
       );
-    } finally {
-      cleanup(fixture);
-    }
+    });
   });
 
   it("fails malformed provider output without persisting a successful result", async () => {

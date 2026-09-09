@@ -124,5 +124,5 @@ export const governedSchemaManifest: Readonly<Record<string, string>> = Object.f
   "governed_role_run_unique": "2370fa5b2fd9dde06f1539b69594835b92d3d61c05608f665885e047009f6ae2",
   "governed_role_stage_unique": "66a5d9feedc9a08afcac2ec6df003f8ecab1c2efc290848af4461e9009c936e9",
   "governed_role_thread_unique": "99e6eaf14af68c931d342755f8bf0e702dcc979ddaac9eeec8914787acf3a020",
-  "governed_success_provenance_guard": "918fe75aa0f47e5b0b4eb9622d3c0ea4e97a342366a0eeccd96da9da14310308"
+  "governed_success_provenance_guard": "437edf8f0dec4e3113532305e04881f01b5825059e0a7e192502fa039ca38b22"
 });

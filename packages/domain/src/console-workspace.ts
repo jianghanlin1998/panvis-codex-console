@@ -15,11 +15,21 @@ export const ConsoleScopeSchema = z.discriminatedUnion("kind", [
 export type ConsoleScope = z.infer<typeof ConsoleScopeSchema>;
 export const ConsoleReviewLevelSchema = z.enum(["LIGHT", "STANDARD", "THOROUGH"]);
 export type ConsoleReviewLevel = z.infer<typeof ConsoleReviewLevelSchema>;
+export const ConsoleLifecycleSchema = z.enum(["ACTIVE", "PAUSED", "ENDED"]);
+export const ConsoleAssetSchema = z.object({ id: z.string().regex(/^asset_[a-f0-9]{32}$/), name: text(200), mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]), bytes: z.number().int().positive().max(4 * 1024 * 1024) }).strict();
+export const ConsoleWorkflowPreferencesSchema = z.object({
+  planReview: z.enum(["SELF", "INDEPENDENT"]), budgetMode: z.enum(["MEASURE", "HARD"]),
+  planningTokenLimit: z.number().int().min(1000).max(10_000_000),
+  executionTokenLimit: z.number().int().min(1000).max(100_000_000),
+  durationMinutes: z.number().int().min(1).max(1440),
+}).strict();
 export const ConsoleSettingsChangeSchema = z.object({
   requestId: ConsoleRequestIdSchema, scope: ConsoleScopeSchema,
   expectedRevision: z.number().int().nonnegative(),
   reviewLevel: ConsoleReviewLevelSchema.nullable().optional(), projectClosed: z.boolean().optional(),
-}).strict().refine(value => value.reviewLevel !== undefined || value.projectClosed !== undefined);
+  lifecycle: ConsoleLifecycleSchema.optional(), endOutcome: z.enum(["COMPLETED", "STOPPED"]).optional(),
+  preferences: ConsoleWorkflowPreferencesSchema.optional(),
+}).strict().refine(value => value.reviewLevel !== undefined || value.projectClosed !== undefined || value.lifecycle !== undefined || value.preferences !== undefined);
 export const ConsolePlanReviewChangeSchema = z.object({
   requestId: ConsoleRequestIdSchema, bigTaskId: BigTaskIdSchema,
   expectedBinding: z.string().regex(/^[a-f0-9]{32}$/),
@@ -27,7 +37,7 @@ export const ConsolePlanReviewChangeSchema = z.object({
 }).strict();
 export const ConsoleScopeSettingsSchema = z.object({
   scope: ConsoleScopeSchema, revision: z.number().int().nonnegative(),
-  reviewLevel: ConsoleReviewLevelSchema.nullable(), projectClosed: z.boolean(), updatedAt: z.iso.datetime().nullable(),
+  reviewLevel: ConsoleReviewLevelSchema.nullable(), projectClosed: z.boolean(), lifecycle: ConsoleLifecycleSchema.optional(), endOutcome: z.enum(["COMPLETED", "STOPPED"]).optional(), preferences: ConsoleWorkflowPreferencesSchema.optional(), updatedAt: z.iso.datetime().nullable(),
 }).strict();
 export const ConsoleBriefSchema = z.object({
   title: text(200), goal: text(1000),
@@ -38,14 +48,15 @@ export const ConsoleBriefSchema = z.object({
 export const ConsoleDraftCreateSchema = z.object({
   requestId: ConsoleRequestIdSchema, projectId: ProjectIdSchema,
   kind: z.enum(["BIG_TASK", "SMALL_TASK"]), title: text(200), goal: text(1000),
-  relatedBigTaskId: BigTaskIdSchema.optional(),
+  relatedBigTaskId: BigTaskIdSchema.optional(), parentDraftId: z.string().optional(),
   sourceTurnId: ConsoleRequestIdSchema.optional(), suggestedBrief: ConsoleBriefSchema.optional(),
   suggestedSubtasks: z.array(ConsoleBriefSchema).max(24).optional(), reviewLevel: ConsoleReviewLevelSchema.optional(),
 }).strict();
 export const ConsoleDirectionConfirmSchema = z.object({
   draftId: z.string(), revision: z.number().int().nonnegative(), brief: ConsoleBriefSchema,
   reviewIntensity: z.enum(["LIGHT", "STANDARD", "THOROUGH"]),
-  planningTokenLimit: z.number().int().min(1000).max(120_000),
+  planningTokenLimit: z.number().int().min(1000).max(10_000_000),
+  workflow: ConsoleWorkflowPreferencesSchema.optional(),
   planningMeasureOnlyMinutes: z.number().int().min(1).max(180).optional(),
 }).strict();
 export const ConsoleDraftSchema = ConsoleDraftCreateSchema.omit({ requestId: true }).extend({
@@ -55,7 +66,7 @@ export const ConsoleDraftSchema = ConsoleDraftCreateSchema.omit({ requestId: tru
 }).strict();
 export type ConsoleDraft = z.infer<typeof ConsoleDraftSchema>;
 export const ConsoleDiscussionInputSchema = z.object({
-  requestId: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, message: text(8000),
+  requestId: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, message: text(32_000), attachments: z.array(ConsoleAssetSchema).max(6).optional(),
 }).strict();
 const discussionAction = z.discriminatedUnion("kind", [
   ConsolePlanReviewChangeSchema.omit({ requestId: true }).extend({ kind: z.literal("AMEND_PLAN_REVIEW") }).strict(),
@@ -68,11 +79,11 @@ const discussionAction = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 export const ConsoleDiscussionAnswerSchema = z.object({
-  reply: text(12_000), proposal: ConsoleBriefSchema.nullable(),
+  reply: text(32_000), contextSummary: text(12_000).optional(), proposal: ConsoleBriefSchema.nullable(),
   actions: z.array(discussionAction).max(12).optional(),
 }).strict();
 export type ConsoleDiscussionAnswer = z.infer<typeof ConsoleDiscussionAnswerSchema>;
-export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussionAnswerSchema.extend({ actions: z.array(discussionAction).max(12) }), {
+export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussionAnswerSchema.extend({ actions: z.array(discussionAction).max(12), contextSummary: text(12_000) }), {
   override: ({ zodSchema, jsonSchema }) => {
     // The provider's structured-output subset accepts anyOf, not oneOf.
     // Distinct required kind literals keep these branches mutually exclusive.
@@ -84,7 +95,7 @@ export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussion
 });
 export const ConsoleDiscussionTurnSchema = z.object({
   id: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, sequence: z.number().int().positive(),
-  message: text(8000), status: z.enum(["RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]),
+  message: text(32_000), attachments: z.array(ConsoleAssetSchema).max(6).optional(), status: z.enum(["RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]),
   answer: ConsoleDiscussionAnswerSchema.nullable(), usage: NormalizedUsageSchema.nullable(),
   failureCode: z.string().regex(/^[A-Z_]{1,80}$/).nullable(),
   createdAt: z.iso.datetime(), endedAt: z.iso.datetime().nullable(),

@@ -39,13 +39,13 @@ describe("Console render contracts", () => {
       const ui = views((action, input) => service.consoleRequest!(action, input));
       const plan = await ui.taskPage(f.approval.bigTaskId, "plan");
       expect(plan).toContain("具体实施计划"); expect(plan).toContain("检查深度：标准");
-      expect(plan).toContain("核对计划并批准实施"); expect(plan).toContain("Verify collect");
+      expect(plan).toContain("确认计划并开工"); expect(plan).toContain("Verify collect");
       await service.approveExecution!(f.approval);
       const overview = await ui.taskPage(f.approval.bigTaskId, "overview"); expect(overview).toContain("开始执行");
       f.execution.start(f.approval.bigTaskId);
       expect(f.governed.prepareNextRole(f.approval.bigTaskId).kind).toBe("ROLE_AUTHORIZED");
       const tasks = f.storage.listSubtasksByBigTask(f.approval.bigTaskId); expect(tasks).toHaveLength(2);
-      const own = await ui.subtaskPage(tasks[0]!.id, "overview"); expect(own).toContain("执行历史");
+      const own = await ui.subtaskPage(tasks[0]!.id, "overview"); expect(own).toContain("执行记录");
       expect(own).toContain("未实施"); expect(own).not.toContain("undefined");
     } finally { await service.stopAndDrain!(); f.close(); }
   }, 15_000); // Includes isolated Git/worktree provisioning, not just HTML rendering.
@@ -77,12 +77,12 @@ describe("Console render contracts", () => {
     expect(ui.state.modalContext.scope).toEqual(scope);
     await expect(ui.confirmModal()).rejects.toMatchObject({ code: "STALE_VIEW" }); expect(calls).toBe(0);
   });
-  it("preserves chosen planning limits and the explicit exception when a draft is redrawn", () => {
+  it("preserves the chosen review mode, budget mode and duration when a draft is redrawn", () => {
     const ui = views(forbidden);
-    ui.state.drafts.set("brief:draft_budget", { title: "Task", goal: "Result", planningTokenLimit: "5000", measureOnly: "on", planningMinutes: "20" });
+    ui.state.drafts.set("brief:draft_budget", { title: "Task", goal: "Result", planningTokenLimit: "5000", budgetMode: "HARD", durationMinutes: "20", planReview: "INDEPENDENT" });
     const html = ui.briefForm({}, { id: "draft_budget" });
     expect(html).toContain('name="planningTokenLimit" value="5000"');
-    expect(html).toContain('name="measureOnly" checked'); expect(html).toContain('name="planningMinutes" value="20"');
+    expect(html).toContain('value="HARD" selected'); expect(html).toContain('value="INDEPENDENT" selected'); expect(html).toContain('name="durationMinutes" value="20"');
   });
   it("renders user and model text as text, including markup-looking content", () => {
     const ui = views(forbidden);
