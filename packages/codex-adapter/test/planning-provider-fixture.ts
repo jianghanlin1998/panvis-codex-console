@@ -21,7 +21,7 @@ export function planningProviderFixture(
   answer: (packet: PlanningMockPacket, sequence: number) => unknown,
   options: {
     omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; duplicateThread?: boolean;
-    configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean;
+    configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean; failedCodexErrorInfo?: unknown;
     delayedReply?: { method: string; milliseconds: number };
     streamResponse?: boolean; agentChunks?: readonly string[]; deltaThreadId?: string;
     governed?: boolean; onTurnStarted?: () => void;
@@ -89,6 +89,11 @@ export function planningProviderFixture(
               queueMicrotask(() => {
                 options.onTurnStarted?.();
                 if (options.silentTurn) return;
+                if (options.failedCodexErrorInfo !== undefined) {
+                  send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "failed", items: [],
+                    error: { message: "private-provider-canary", additionalDetails: "private-provider-canary", codexErrorInfo: options.failedCodexErrorInfo } } } });
+                  return;
+                }
                 for (let i = 0; i < (options.extraNotifications ?? 0); i += 1) {
                   send({ method: "fixture/unknown", params: { message: "private-provider-canary" } });
                 }

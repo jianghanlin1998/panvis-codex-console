@@ -72,7 +72,16 @@ export const ConsoleDiscussionAnswerSchema = z.object({
   actions: z.array(discussionAction).max(12).optional(),
 }).strict();
 export type ConsoleDiscussionAnswer = z.infer<typeof ConsoleDiscussionAnswerSchema>;
-export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussionAnswerSchema.extend({ actions: z.array(discussionAction).max(12) }));
+export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussionAnswerSchema.extend({ actions: z.array(discussionAction).max(12) }), {
+  override: ({ zodSchema, jsonSchema }) => {
+    // The provider's structured-output subset accepts anyOf, not oneOf.
+    // Distinct required kind literals keep these branches mutually exclusive.
+    if (zodSchema instanceof z.ZodDiscriminatedUnion && jsonSchema.oneOf) {
+      jsonSchema.anyOf = jsonSchema.oneOf;
+      delete jsonSchema.oneOf;
+    }
+  },
+});
 export const ConsoleDiscussionTurnSchema = z.object({
   id: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, sequence: z.number().int().positive(),
   message: text(8000), status: z.enum(["RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]),

@@ -7,6 +7,26 @@ import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js
 const forbidden = async (): Promise<never> => { throw new Error("Unexpected execution"); };
 const service: LocalControlService = { inspectSubtask: forbidden, provisionOwnedWorktree: forbidden, runOwnedWorktreeExecution: forbidden, releaseOwnedWorktree: forbidden };
 describe("Console discussion orchestration", () => {
+  it("persists the classified connection failure and permits a later discussion without inventing past usage", async () => {
+    const f = makePlanningFixture();
+    const discuss = vi.fn<typeof executeConsoleDiscussionCodex>()
+      .mockResolvedValueOnce({ success: false, normalizedUsage: null, failureCode: "TURN_FAILED", diagnostics: { providerFailureCode: "MODEL_CONNECTION_FAILED" } } as Awaited<ReturnType<typeof executeConsoleDiscussionCodex>>)
+      .mockResolvedValueOnce({ success: true, agentResponseText: JSON.stringify({ reply: "Direction recovered", proposal: null }), normalizedUsage: null, failureCode: null } as Awaited<ReturnType<typeof executeConsoleDiscussionCodex>>);
+    let ui = new ConsoleApplication(f.storage, service, { discuss });
+    const scope = { kind: "PROJECT", id: f.intake.bigTask.projectId };
+    try {
+      await ui.request("discuss", { requestId: "network-failed-chat", scope, message: "My original request" }); await ui.stop();
+      expect(ui.store.turns(scope).turns[0]).toMatchObject({ status: "FAILED", failureCode: "MODEL_CONNECTION_FAILED", usage: null });
+      f.reopen(); ui = new ConsoleApplication(f.storage, service, { discuss });
+      await ui.request("discuss", { requestId: "network-recovery-chat", scope, message: "Continue my original request" }); await ui.stop();
+      expect(discuss).toHaveBeenCalledTimes(2);
+      expect(discuss.mock.calls[1]![1]).toContain("My original request");
+      expect(ui.store.turns(scope).turns).toMatchObject([
+        { status: "FAILED", failureCode: "MODEL_CONNECTION_FAILED", usage: null },
+        { status: "SUCCEEDED", answer: { reply: "Direction recovered" }, usage: null },
+      ]);
+    } finally { await ui.stop(); f.close(); }
+  });
   it("persists before calling once, returns without waiting, and treats model suggestions as non-authoritative", async () => {
     const f = makePlanningFixture();
     let complete!: (value: Awaited<ReturnType<typeof executeConsoleDiscussionCodex>>) => void;

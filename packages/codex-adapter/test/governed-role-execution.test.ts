@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ChatThreadIdSchema, ExecutionProviderIdSchema, ExecutionRunIdSchema, ProviderThreadReferenceSchema, ProviderRunReferenceSchema,
   BigTaskIdSchema,
+  BigTaskRoleFailureSchema,
   ProjectIdSchema,
   ProjectSchema,
   SubtaskIdSchema,
@@ -361,6 +362,21 @@ describe("governed Codex role execution", () => {
 });
 
 describe("Step 8D governed provider hardening", () => {
+  it("retains the original governed failure persistence contract after a classified provider connection failure", async () => {
+    const fixture = createFixture();
+    try {
+      const prepared = authorization(fixture.governed.prepareNextRole(BIG_TASK_ID));
+      const result = await executeGovernedRoleCodexWithDependenciesForTest(fixture.governed,
+        prepared.authorization.authorizationId, dependencies("EXECUTE", false, "connection-failed"));
+      expect(result).toMatchObject({ success: false, failureCode: "TURN_FAILED", roleResult: null });
+      const failure = { authorizationId: prepared.authorization.authorizationId, failureCode: result.failureCode, phase: "TURN",
+        diagnostics: result.diagnostics, appServerChildCleaned: result.appServerChildCleaned, transientRuntimeCleaned: result.transientRuntimeCleaned };
+      expect(BigTaskRoleFailureSchema.safeParse(failure).success).toBe(true);
+      expect(Object.keys(result.diagnostics)).toHaveLength(7);
+      expect(JSON.stringify(result)).not.toContain("private-provider-canary");
+      expect(fixture.storage.getSubtaskById(SUBTASK_ID)?.maturity).toBe("NOT_STARTED");
+    } finally { cleanup(fixture); }
+  });
   it.each(["phased-completed", "phased-stream", "phased-missing-final", "phased-two-finals", "legacy-progress"])("uses the authoritative final answer independently of commentary (%s)", async scenario => {
     const fixture = createFixture();
     try {

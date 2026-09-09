@@ -283,7 +283,8 @@ lines.on("line", (line) => {
     });
     send({
       method: "turn/completed",
-      params: { threadId, turn: { id: turnId, status: "completed" } },
+      params: { threadId, turn: { id: turnId, status: scenario === "connection-failed" ? "failed" : "completed",
+        ...(scenario === "connection-failed" ? { error: { message: "private-provider-canary", codexErrorInfo: { responseStreamConnectionFailed: { httpStatusCode: null } } } } : {}) } },
     });
     if (scenario === "post-terminal") send({method: "item/started", params: {threadId, turnId, item: {id:"late",type:"reasoning"}}});
     return;

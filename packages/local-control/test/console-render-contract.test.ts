@@ -25,6 +25,13 @@ function views(call: (action: string, input: unknown) => Promise<object>) {
 }
 const forbidden = async (): Promise<never> => { throw new Error("No provider in render contracts"); };
 describe("Console render contracts", () => {
+  it("explains connection failures in the discussion body without claiming a budget or approval stop", () => {
+    const html = views(forbidden).messagesHtml([{ message: "Discuss", status: "FAILED", failureCode: "MODEL_CONNECTION_FAILED", usage: null }]);
+    expect(html).toContain("这次没有连通模型服务，或连接中途断开。");
+    expect(html).toContain("原消息已保存");
+    expect(html).not.toContain("审批");
+    expect(html).not.toContain("预算已达上限");
+  });
   it("renders the real reviewed candidate, dependency profiles, task overview and canonical subtask inspection", async () => {
     const f = makeExecutionFixture(undefined, undefined, "STANDARD");
     const service = createLocalControlServiceForTesting(f.storage, f.manager, forbidden, forbidden, forbidden, f.governed);

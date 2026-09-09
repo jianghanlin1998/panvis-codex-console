@@ -71,6 +71,8 @@ import type {
 } from "./runtime-ownership.js";
 import type { JsonObject, JsonValue, TokenUsageBreakdown } from "./protocol.js";
 import { validateOwnedWorktreeHardlinkSafety } from "./worktree-filesystem-safety.js";
+import { resolveRuntimeHttpsProxy } from "./runtime-network.js";
+import { providerFailureCode } from "./provider-failure.js";
 
 const EXPECTED_RELEASE_VERSION = TESTED_CODEX_VERSION.replace("codex-cli ", "");
 const CLIENT_INFO = Object.freeze({
@@ -205,6 +207,7 @@ export type OwnedWorktreeCodexExecutionFailureCode =
 type CodexExecutionFailureCode = OwnedWorktreeCodexExecutionFailureCode;
 
 export interface LiveCodexExecutionDiagnostics {
+  readonly providerFailureCode?: string;
   readonly approvalRequestsDeclined: number;
   readonly interruptRequests: number;
   readonly notificationsReceived: number;
@@ -378,6 +381,7 @@ export type GovernedRoleCodexExecutionResult =
   | GovernedRoleCodexExecutionFailure;
 
 interface MutableDiagnostics {
+  providerFailureCode?: string;
   approvalRequestsDeclined: number;
   interruptRequests: number;
   notificationsReceived: number;
@@ -545,6 +549,7 @@ type TurnEventPolicy =
     }>;
 
 class TurnEventTracker {
+  providerFailureCode: string | undefined;
   threadId: string | null = null;
   turnId: string | null = null;
   terminal: TerminalEvent | null = null;
@@ -810,6 +815,10 @@ class TurnEventTracker {
           status !== "interrupted"
         ) {
           throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+        }
+        if (status === "failed") {
+          const code = providerFailureCode(turn.error);
+          if (code !== undefined) this.providerFailureCode = code;
         }
         this.terminal = { status };
         const waiter = this.#takeWaiter();
@@ -2372,6 +2381,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   dependencies: LiveExecutionDependencies,
   planning?: {
     readonly text: string; readonly outputSchema: JsonValue; readonly tokenLimit: number | null;
+    readonly discussion?: true;
     readonly remainingTimeMs: () => number | null;
     readonly observe: (evidence: ReturnType<typeof emptyEvidence>) => void;
   },
@@ -2662,6 +2672,9 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     }
   }
 
+  // Legacy execution/planning persistence accepts exactly seven diagnostic counters.
+  // Only the Console discussion response carries this additive classification.
+  if (planning?.discussion && events?.providerFailureCode) diagnostics.providerFailureCode = events.providerFailureCode;
   const common = resultBase(evidence, diagnostics);
   if (failureCode !== null) {
     return Object.freeze({
@@ -2691,8 +2704,21 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
 export async function executeConsoleDiscussionCodex(
   storage: TaskStorage, text: string, outputSchema: JsonValue, remainingTimeMs: () => number,
 ): Promise<LiveCodexExecutionResult> {
-  return executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", productionDependencies(), {
-    text, outputSchema, tokenLimit: 40_000, remainingTimeMs, observe: () => undefined,
+  return executeConsoleDiscussion(storage, text, outputSchema, remainingTimeMs, productionDependencies());
+}
+
+export async function executeConsoleDiscussionCodexForTest(
+  storage: TaskStorage, text: string, outputSchema: JsonValue, remainingTimeMs: () => number, dependencies: LiveExecutionDependencies,
+): Promise<LiveCodexExecutionResult> {
+  if (process.env.NODE_ENV !== "test") throw new Error("INVALID_INPUT");
+  return executeConsoleDiscussion(storage, text, outputSchema, remainingTimeMs, dependencies);
+}
+
+function executeConsoleDiscussion(
+  storage: TaskStorage, text: string, outputSchema: JsonValue, remainingTimeMs: () => number, dependencies: LiveExecutionDependencies,
+): Promise<LiveCodexExecutionResult> {
+  return executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", dependencies, {
+    text, outputSchema, tokenLimit: 40_000, remainingTimeMs, observe: () => undefined, discussion: true,
   });
 }
 
@@ -2861,16 +2887,12 @@ function buildLiveCodexChildEnvironment(
   ) {
     childEnvironment.CODEX_HOME = codexHome;
   }
-  const httpsProxy = sourceEnvironment.CTC_CODEX_HTTPS_PROXY;
-  if (httpsProxy !== undefined) {
-    // Explicit local CONNECT transport only; keep ambient proxies and credentials out.
-    const match = isBoundedEnvironmentValue(httpsProxy)
-      ? /^http:\/\/(?:127\.0\.0\.1|\[::1\]):([1-9][0-9]{0,4})$/.exec(httpsProxy)
-      : null;
-    if (match === null || Number(match[1]) > 65_535) {
-      throw new LiveExecutionError("APP_SERVER_START_FAILED");
-    }
-    childEnvironment.HTTPS_PROXY = httpsProxy;
+  try {
+    const httpsProxy = resolveRuntimeHttpsProxy(sourceEnvironment.CTC_CODEX_HTTPS_PROXY,
+      join(normalHomeDirectory, "Library", "Application Support", "Codex Task Console", "codex-runtime", "network.json"));
+    if (httpsProxy !== undefined) childEnvironment.HTTPS_PROXY = httpsProxy;
+  } catch {
+    throw new LiveExecutionError("APP_SERVER_START_FAILED");
   }
   return childEnvironment;
 }

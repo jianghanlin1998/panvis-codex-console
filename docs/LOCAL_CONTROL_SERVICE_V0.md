@@ -48,12 +48,33 @@ CTC_CODEX_HTTPS_PROXY=http://127.0.0.1:10808 pnpm ctc:daemon
 The live adapter passes this explicit setting as `HTTPS_PROXY` to its owned
 Codex child for all execution roles. Only literal `127.0.0.1` or `[::1]` with
 an explicit port from 1 to 65535 is accepted; credentials, paths, queries,
-fragments and other schemes or hosts fail before child launch. An unset value
-preserves existing behavior. Ambient proxy and secret variables remain excluded.
+fragments and other schemes or hosts fail before child launch. When the variable
+is unset, the adapter reads the optional owner-private `codex-runtime/network.json`
+under the Console Application Support directory. Its exact shape is
+`{"schemaVersion":1,"httpsProxy":"http://127.0.0.1:10808"}` (use the user's
+already configured local port, not this example blindly). A `null` proxy selects
+direct mode. The file must be a regular, non-symlink, owner-only file no larger
+than 4 KiB. Missing settings preserve direct mode; malformed settings report a
+local start failure instead of silently changing routes. The explicit environment
+variable takes precedence. Saved settings survive Finder/desktop launches and
+are reread for each new model child. Ambient proxy and secret variables remain excluded.
 TLS verification, provider identity, ChatGPT authentication, tool network
 permissions and task stop/retry rules are unchanged. No proxy is discovered,
-installed, enabled or reconfigured by Console. Remove the setting to roll back
-the transport selection; a daemon restart is required to change it.
+installed, enabled or reconfigured by Console. Remove the saved file or set its
+proxy to `null` to return to direct mode, and unset any environment override
+(changing a daemon environment requires restart). This does not bypass TLS checks.
+
+Console discussions retain allowlisted categories from structured failed-turn
+errors when supplied: connection, rejected request, account limit, context size,
+and login. Unknown errors retain the generic failure code; raw provider text and
+details are never stored. The legacy planning/execution diagnostic shapes remain
+unchanged. Classification adds no approval, retry, or usage gate, and a valid
+discussion answer may be saved with unknown usage. A later user-authorized
+continuation is a new turn; the original failed message and unknown usage remain.
+The discussion output schema uses discriminated `anyOf` branches, matching the
+[provider's supported structured-output subset](https://developers.openai.com/api/docs/guides/structured-outputs#supported-schemas),
+while the local Zod action validation remains strict. Do not assume a mock
+provider accepting a JSON object proves the real service accepts its schema.
 
 An exclusive owner-private lock prevents two production daemons from becoming authoritative over the canonical state store. The daemon never kills another process and removes lock/session files only after matching the original filesystem identity and daemon instance ID.
 

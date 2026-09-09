@@ -120,7 +120,8 @@ export class ConsoleApplication {
           const result = await this.dependencies.discuss(this.storage, claim.inputText, CONSOLE_DISCUSSION_OUTPUT_SCHEMA as Parameters<typeof executeConsoleDiscussionCodex>[2], remaining);
           let answer: unknown = null;
           if (result.success && result.agentResponseText) { try { answer = JSON.parse(result.agentResponseText); } catch { /* Persist invalid output. */ } }
-          const finished = this.store.finishDiscussion(claim.turn.id, answer, result.normalizedUsage, result.failureCode);
+          const failureCode = result.failureCode === "TURN_FAILED" ? result.diagnostics?.providerFailureCode ?? result.failureCode : result.failureCode;
+          const finished = this.store.finishDiscussion(claim.turn.id, answer, result.normalizedUsage, failureCode);
           for (const effect of finished.effects ?? []) if (effect.kind === "PLAN_REVIEW_CHANGED") {
             const id = BigTaskIdSchema.parse(effect.targetId);
             this.#schedule(`planning:${id}`, () => this.service.runPlanning!(id));
