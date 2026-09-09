@@ -39,4 +39,4 @@ it("keeps partial activity separate from settled cost, throttles unchanged updat
     expect(new BigTaskExecutionStore(f.storage).inspect(f.approval.bigTaskId)).toMatchObject({ knownTokens: 0, activeRoleCount: 1,
       unknownCompletedUsage: false, activeRole: { progress: null, usageState: "IN_PROGRESS" } });
   } finally { f.close(); }
-});
+}, 15_000); // Includes real Git fixture setup; progress timing remains injected above.

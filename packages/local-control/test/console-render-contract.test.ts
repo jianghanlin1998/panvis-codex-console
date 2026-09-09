@@ -41,7 +41,7 @@ describe("Console render contracts", () => {
       const own = await ui.subtaskPage(tasks[0]!.id, "overview"); expect(own).toContain("执行历史");
       expect(own).toContain("未实施"); expect(own).not.toContain("undefined");
     } finally { await service.stopAndDrain!(); f.close(); }
-  });
+  }, 15_000); // Includes isolated Git/worktree provisioning, not just HTML rendering.
   it.each(["TIME_LIMIT_REACHED", "USER_PAUSED", "DAEMON_STOPPING"] as const)("offers continuation after a %s task window is renewed", async reason => {
     let instant = Date.parse("2026-09-07T00:00:00.000Z");
     const f = makeExecutionFixture(() => new Date(instant), undefined, "STANDARD");

@@ -41,4 +41,4 @@ it("stops candidate traversal and every subsequent Git mutation immediately afte
     expect(probe.expired).toBe(true);
     expect(probe.mutations.filter(command => /hash-object|update-index|write-tree|commit-tree|update-ref/u.test(command))).toEqual([]);
   } finally { probe.armed = false; probe.expired = false; probe.mutations = []; f.close(); }
-});
+}, 15_000); // Includes real Git fixture setup; the expiry assertion uses the injected clock.
