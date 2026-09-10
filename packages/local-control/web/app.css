@@ -323,3 +323,7 @@ body { margin: 0; background: light-dark(#fbfbf9,#171b1b); }
 .ctc-stage-done { color: var(--ctc-accent); }
 .ctc-stage-current { color: var(--ctc-text); border-color: var(--ctc-accent); font-weight: 600; }
 @media (max-width: 640px) { .ctc-task-progress { padding: 14px; } .ctc-task-progress .ctc-subtitle { align-items: flex-start; flex-direction: column; gap: 6px; } }
+
+#modal .ctc-facts { display: grid; gap: 18px; margin: 18px 0; }
+#modal .ctc-fact { display: grid; gap: 6px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+#modal .ctc-fact .ctc-label { font-size: 12px; font-weight: 600; color: light-dark(#5e6c66, #a3b4ab); }

@@ -238,6 +238,7 @@ lines.on("line", (line) => {
       result.outcome = "BLOCKING_FAIL";
       result.findings = scenario === "sixteen-blockers" ? Array.from({ length: 16 }, (_, index) => finding(`bulk-${index}`)) : scenario === "two-blockers" ? [finding("A"), finding("B"), finding("defer", false)] : [finding("A"), finding("NEW")];
     }
+    if (scenario === "blocked-after-edit") { result.outcome = "BLOCKED"; result.summary = "Edits preserved; external verification remains unavailable."; }
     if (scenario === "wrong-outcome") result.outcome = "ACCEPTED";
     if (scenario === "nonblocking") result.findings = [finding("defer", false)];
     let resultText = JSON.stringify(result);

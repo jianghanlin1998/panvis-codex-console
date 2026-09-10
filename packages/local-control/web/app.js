@@ -211,7 +211,7 @@ async function contextHtml() {
   return `<section class="ctc-surface ctc-reading"><div class="ctc-subtitle"><h2>${scopeName}上下文</h2>${button('保存已确认结论', 'context-dialog', true)}</div>${facts([['目标', brief.goal ?? intent.name ?? '尚未单独记录'], ...(context.intent.parentGoal ? [['来自大任务的目标', context.intent.parentGoal]] : []), ['本次范围', (brief.scopeIn ?? []).join('；') || '见项目约定'], ['成功标准', (brief.acceptanceCriteria ?? brief.successCriteria ?? []).join('；') || '方向讨论中确认'], ['留到后续', (brief.scopeOut ?? []).join('；') || '未单独记录']])}<p class="ctc-small ctc-spaced">来源：保存的任务资料${context.confirmedDirection ? '与已确认方向' : ''}。旧 Codex 聊天未自动导入；这里不会补造对话记录。</p></section>${context.inherited?.length ? `<section class="ctc-surface ctc-spaced"><h3>继承的背景</h3>${context.inherited.map(item => `<p class="ctc-spaced">${escape(item.scope.scopeType === 'PROJECT' ? '项目' : '大任务')} · ${escape(item.title)}</p>`).join('')}</section>` : ''}<section class="ctc-surface ctc-spaced"><h2>已保存的决定与材料</h2>${(context.notes ?? []).map(note => `<article class="ctc-contextitem"><h3>${escape(note.title)}</h3><p>${escape(note.body)}</p></article>`).join('')}${context.items.length ? context.items.map(item => `<article class="ctc-contextitem"><h3>${escape(item.title)}</h3><p>${escape(item.body)}</p><span>${item.subtaskId ? '小任务' : item.bigTaskId ? '大任务' : '项目'} · ${item.authority === 'HUMAN' ? '你确认的决定' : '参考材料'} · 来源：${escape(item.provenance.sourceReference)}</span></article>`).join('') : '<p class="ctc-label ctc-spaced">尚未另外保存决定。上面的目标与范围仍然有效。</p>'}${Array.isArray(context.productDecisions) ? context.productDecisions.map(item => `<article class="ctc-contextitem"><p>${escape(typeof item === 'string' ? item : item.decision ?? item.answer ?? item.summary ?? '')}</p><span>来源：原始规划的产品决定</span></article>`).join('') : ''}</section>`;
 }
 async function taskPage(id, tab) {
-  const record = await api('task', { bigTaskId: id }); state.task = record; state.scope = { kind: 'BIG_TASK', id };
+  const record = await api('task', { bigTaskId: id }); state.task = record; if (record.execution) record.execution.latestRole = record.latestRole; state.scope = { kind: 'BIG_TASK', id };
   const execution = record.execution; state.scopeSettings = record.settings;
   const head = `<div class="ctc-crumb">${link(projectName(record.task.projectId), `project/${encodeURIComponent(record.task.projectId)}`, 'ctc-link')} / ${record.sourceDraft?.kind === 'SMALL_TASK' ? '小任务' : '大任务'}</div>` + heading(record.presentation?.title ?? record.task.title, record.task.goal, `${link('后续改进', `new-task/${encodeURIComponent(record.task.projectId)}/${encodeURIComponent(id)}`)}${execution && record.canResume ? button(execution.phase === 'APPROVED' ? '开始执行' : '继续执行', 'start', true) : ''}`) + lifecycleHtml(record.settings, execution) + taskProgressHtml(record) + tabsHtml('task', id, tab, [['overview', '概览'], ['discussion', '讨论'], ['plan', '计划'], ['tasks', '小任务'], ['results', '成果'], ['context', '上下文']]);
   if (tab === 'discussion') return head + (record.sourceDraft ? `<div class="ctc-note">${link('查看开工前的方向讨论', `draft/${encodeURIComponent(record.sourceDraft.id)}`, 'ctc-link')}</div>` : '') + await discussionHtml();
@@ -231,14 +231,37 @@ function blockersHtml(record) {
   const title = engineering ? '计划准备遇到问题' : reason === 'USER_PAUSED' ? '任务已暂停' : execution ? '执行需要处理' : '准备下一步';
   const preparationFailure = execution?.stopReason === 'LOCAL_OPERATION_FAILED' && ['CHECK_LIMITS', 'PREPARE_ROLE'].includes(execution.lastControlFailure?.phase);
   const explanation = preparationFailure ? 'Console 在准备下一步时中断，已保留计划和完成的工作。修复后可从保存的进度重试；不会重新规划或重置用量。' : engineering ? '需要继续核对代码、现有成果或工具能力。实施尚未开始；这些调查由 Console 处理，你可以让它重新准备计划。' : execution ? executionFailureExplanation(execution) : reasons[reason] ?? '查看当前记录后继续。';
-  return `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>${title}</h2><p class="ctc-spaced">${escape(explanation)}</p>${!engineering ? (planning?.questions ?? []).map(question => `<p class="ctc-spaced">${escape(question)}</p>`).join('') : ''}<div class="ctc-actions ctc-spaced">${!execution && planning?.phase === 'HUMAN_REQUIRED' ? button('重新调查并准备计划', 'plan-retry', true) : ''}${link('在聊天里讨论', `task/${encodeURIComponent(record.task.id)}/discussion`)}${execution && record.canRenewWindow ? button('调整续跑时间', 'renew-dialog') : ''}${preparationFailure && record.canResume ? button('重试并继续执行', 'start', true) : execution?.lastRoleFailure && ['GOVERNED_BLOCKED','TOKEN_LIMIT_REACHED','TIME_LIMIT_REACHED','USAGE_UNKNOWN'].includes(execution.stopReason) ? button('处理执行中断', execution.stopReason === 'USAGE_UNKNOWN' ? 'qa-recovery-review' : 'recovery-review') : ''}</div><details class="ctc-spaced"><summary>查看工程记录</summary><p>${escape((planning?.questions ?? []).join('\n'))}</p>${execution?.lastRoleFailure ? `<p>${escape(execution.lastRoleFailure.phase)} · ${escape(execution.lastRoleFailure.failureCode)}</p>` : ''}${execution?.lastControlFailure ? `<p>${escape(execution.lastControlFailure.phase)} · ${escape(execution.lastControlFailure.failureCode)}</p>` : ''}</details></section>`;
+  return `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>${title}</h2>${execution?.lastRoleFailure ? executionProblemHtml(execution) : `<p class="ctc-spaced">${escape(explanation)}</p>`}${!engineering ? (planning?.questions ?? []).map(question => `<p class="ctc-spaced">${escape(question)}</p>`).join('') : ''}<div class="ctc-actions ctc-spaced">${!execution && planning?.phase === 'HUMAN_REQUIRED' ? button('重新调查并准备计划', 'plan-retry', true) : ''}${link('在聊天里讨论', `task/${encodeURIComponent(record.task.id)}/discussion`)}${execution && record.canRenewWindow ? button('调整续跑时间', 'renew-dialog') : ''}${preparationFailure && record.canResume ? button('重试并继续执行', 'start', true) : execution?.lastRoleFailure && ['GOVERNED_BLOCKED','TOKEN_LIMIT_REACHED','TIME_LIMIT_REACHED','USAGE_UNKNOWN'].includes(execution.stopReason) ? button('查看原因与处理方式', execution.stopReason === 'USAGE_UNKNOWN' ? 'qa-recovery-review' : 'recovery-review') : ''}</div><details class="ctc-spaced"><summary>查看工程记录</summary><p>${escape((planning?.questions ?? []).join('\n'))}</p>${execution?.lastRoleFailure ? `<p>${escape(execution.lastRoleFailure.phase)} · ${escape(execution.lastRoleFailure.failureCode)}</p>` : ''}${execution?.lastControlFailure ? `<p>${escape(execution.lastControlFailure.phase)} · ${escape(execution.lastControlFailure.failureCode)}</p>` : ''}</details></section>`;
 }
 function activityName(activity) {
   return { STARTING: '连接模型', THINKING: '分析与思考', READING_OR_TESTING: '读取资料或使用工具', EDITING: '修改文件', RESPONDING: '整理结果' }[activity] ?? '等待活动记录';
 }
+function executionRecoveryBlocker(execution) {
+  if (!execution) return '尚未取得执行状态。';
+  if (!execution.latestRole?.outcome && [execution.recovery, ...(execution.additionalRecoveries ?? []), execution.qaRecovery].some(item => item && item.authorizationId === execution.lastRoleFailure?.authorizationId)) return '这一步已经恢复过一次，恢复仍然失败。需要先修复失败原因；当前不能再次使用同一个恢复入口。';
+  if (execution.expiresAt && Date.parse(execution.expiresAt) <= Date.now()) return '本次执行时间窗口已经结束。请在任务页调整续跑时间后再检查恢复条件。';
+  return null;
+}
 function executionFailureExplanation(execution) {
-  if (execution?.lastRoleFailure?.failureCode === 'STRUCTURED_RESULT_INVALID') return '模型步骤已结束，但返回结果的格式未被 Console 接受；这不代表 QA 已通过，也不代表触及用量上限。';
+  if (['BLOCKED', 'BLOCKING_FAIL'].includes(execution?.latestRole?.outcome)) return execution.latestRole.summary || '本轮报告了尚未解决的问题。';
+  const code = execution?.lastRoleFailure?.failureCode;
+  const resultCauses = {
+    STRUCTURED_RESULT_INVALID: '模型步骤已结束，但返回结果的格式未被 Console 接受；这不代表 QA 已通过，也不代表触及用量上限。',
+    RESULT_CANDIDATE_REJECTED: '接收结果前，任务或代码工作区的状态校验未通过。需要核对当前任务与代码版本。',
+    RESULT_CHECKPOINT_FAILED: 'Console 未能把本轮代码改动保存为任务版本。需要检查工作区、Git 状态或剩余执行时间。',
+    RESULT_USAGE_INVALID: '结果附带的模型身份或用量记录不完整、或与本轮调用不匹配。这不等于用量超限。',
+    RESULT_SAVE_FAILED: '模型已返回结果，但 Console 未能保存本轮结果记录。需要检查结果与任务记录的一致性。',
+    RESULT_RECONCILIATION_FAILED: '本轮结果已保存，但 Console 推进后续任务状态时失败。应先核对已保存结果，避免重复执行。',
+  };
+  if (resultCauses[code]) return resultCauses[code];
+  if (code === 'GOVERNED_AUTHORITY_REQUIRED' && execution.lastRoleFailure.phase === 'RESULT') return '模型步骤已结束，但 Console 接收结果时内部校验或保存失败。旧记录没有保留具体检查项；这不是要求你重新批准工具。';
   return reasons[execution?.stopReason] ?? '执行已停下，需要处理。';
+}
+function executionProblemHtml(execution) {
+  const failure = execution?.latestRole?.outcome ? null : execution?.lastRoleFailure;
+  const stage = {BEFORE_TURN:'准备模型步骤', TURN:'模型执行中', RESULT:'模型结束后：接收结果'}[failure?.phase] ?? '任务协调';
+  const next = executionRecoveryBlocker(execution) ?? (failure?.phase === 'RESULT' ? '先核对结果接收错误；仅刷新不会恢复执行。确认失败原因已处理后，再使用恢复入口。' : '核对当前错误和执行记录，再选择对应的恢复操作。');
+  return facts([['为什么停下', executionFailureExplanation(execution)], ['错在哪一步', stage], ['已保留什么', '原计划、已有执行记录和工作区保留；失败步骤尚未作为通过结果交付。'], ['下一步', next]]) + (failure ? `<details class="ctc-spaced"><summary>诊断编号与时间</summary><p>${escape(failure.failureCode)} · ${escape(timestamp(failure.at))}</p><p>${escape(failure.authorizationId)}</p></details>` : '');
 }
 function taskProgressHtml(record) {
   const execution = record.execution;
@@ -260,14 +283,15 @@ function subtaskProgressHtml(record) {
   const stage = workflow?.currentStage;
   const complete = stage === 'COMPLETE';
   const repair = ['REPAIR', 'FOCUSED_RE_QA'].includes(stage);
-  const completed = complete ? stages.length : repair ? stages.length - 1 : Math.max(0, stages.indexOf(stage));
+  const progressStage = stage === 'FRESH_QA' && workflow?.profile === 'STANDARD' ? 'VERIFY' : stage;
+  const completed = complete ? stages.length : repair ? stages.length - 1 : Math.max(0, stages.indexOf(progressStage));
   const active = execution?.activeRole?.subtaskId === record.task.id ? execution.activeRole : null;
   const currentRun = record.inspection?.durableExecution?.recentChatThreads?.flatMap(thread => thread.runs).find(run => run.id === active?.runId);
   const blocked = execution?.phase === 'HUMAN_REQUIRED' || workflow?.unresolvedHumanRequired;
   const paused = record.settings?.lifecycle !== undefined && record.settings.lifecycle !== 'ACTIVE' || execution?.phase === 'PAUSED';
   const title = complete ? '小任务工程流程已完成' : active ? `正在${label(active.role)}` : paused ? '任务已暂停或结束' : blocked ? '执行已停下，需要处理' : !workflow ? '计划中，尚未实施' : !record.inspection?.dependencyReadiness?.ready ? '等待前置任务完成' : '等待调度执行';
   const detail = repair ? `当前：${label(stage)} · 已使用 ${workflow.repairCyclesUsed} 轮修复；QA 通过后才能完成。` : complete ? '检查与交付记录已保存。' : blocked ? executionFailureExplanation(execution) : `当前阶段：${label(stage ?? 'PLANNING')}。${active && paused ? '当前步骤完成后暂停。' : ''}`;
-  const chips = stages.map((item, index) => `<span class="ctc-stage ${index < completed ? 'ctc-stage-done' : item === stage || repair && index === stages.length - 1 ? 'ctc-stage-current' : ''}">${escape(item === 'VERIFY' ? '检查' : label(item))}</span>`).join('');
+  const chips = stages.map((item, index) => `<span class="ctc-stage ${index < completed ? 'ctc-stage-done' : item === progressStage || repair && index === stages.length - 1 ? 'ctc-stage-current' : ''}">${escape(item === 'VERIFY' ? '检查' : label(item))}</span>`).join('');
   return progressPanel(title, completed, stages.length, `已通过 ${completed} / ${stages.length} 个主流程阶段`, detail,
     `<div class="ctc-stages">${chips}</div>${active ? runningStatus(currentRun?.createdAt, active.progress) : ''}`);
 }
@@ -294,7 +318,7 @@ function subtasksHtml(record) {
 }
 async function subtaskPage(id, tab) {
   const record = await api('subtask', { subtaskId: id }); state.subtask = record; state.scope = { kind: 'SUBTASK', id }; state.scopeSettings = record.settings;
-  try { const parentRecord = await api('task', { bigTaskId: record.task.bigTaskId }); record.execution = parentRecord.execution; record.planning = parentRecord.planning; record.planningActive = parentRecord.planningActive; } catch { record.progressUnavailable = true; }
+  try { const parentRecord = await api('task', { bigTaskId: record.task.bigTaskId }); record.execution = parentRecord.execution; if (record.execution) record.execution.latestRole = parentRecord.latestRole; record.planning = parentRecord.planning; record.planningActive = parentRecord.planningActive; } catch { record.progressUnavailable = true; }
   const head = `<div class="ctc-crumb">${link(projectName(record.parent?.projectId), `project/${encodeURIComponent(record.parent?.projectId ?? '')}`, 'ctc-link')} / ${link(record.parent?.title ?? '大任务', `task/${encodeURIComponent(record.task.bigTaskId)}`, 'ctc-link')} / 小任务</div>` + heading(record.task.title, record.task.goal) + lifecycleHtml(record.settings, record.execution?.activeRole?.subtaskId === id ? record.execution : null) + subtaskProgressHtml(record) + tabsHtml('subtask', id, tab, [['overview', '任务概览'], ['discussion', '聊天'], ['context', '上下文'], ['history', '执行记录']]);
   if (tab === 'discussion') return head + await discussionHtml();
   if (tab === 'context') return head + await contextHtml();
@@ -421,7 +445,7 @@ async function act(action) {
     if (action === 'scope-end') { openModal('结束这项工作', '<p>保留聊天、成果与检查记录。结束不会把未通过的检查标为通过。</p><label class="ctc-field">结束方式<select name="endOutcome"><option value="STOPPED">不再继续</option><option value="COMPLETED">标记工作已完成</option></select></label>', 'scope-end', '结束并保留记录'); return; }
     await api('lifecycle-change', { requestId: requestId(action), scope: settings.scope, expectedRevision: settings.revision, lifecycle: action === 'scope-pause' ? 'PAUSED' : 'ACTIVE' }); state.requestIds.delete(action); await loadWorkspace(); await renderRoute(); return;
   }
-  if (action === 'refresh') { await loadWorkspace(); await renderRoute(); return; }
+  if (action === 'refresh') { await loadWorkspace(); await renderRoute(); notify(state.task?.execution?.phase === 'HUMAN_REQUIRED' ? '状态已更新：任务仍处于中断状态，请查看原因与处理方式。更新进度不会自动重跑任务。' : '已读取最新状态。'); return; }
   if (action === 'scroll-direction') { document.getElementById('direction')?.scrollIntoView({ behavior: 'smooth' }); return; }
   if (action === 'more-messages') {
     const result = await api('discussion', { scope: state.scope, after: state.after }); state.turns = [...new Map([...result.turns, ...state.turns].map(turn => [turn.sequence, turn])).values()].sort((a, b) => a.sequence - b.sequence); state.after = result.previousAfter; state.hasMore = result.hasPrevious;
@@ -438,7 +462,23 @@ async function act(action) {
     const prefs = state.review.consoleWorkflow;
     openModal('确认计划并开始实施', `<p>按刚才查看的计划实施，完成约定的检查与修复；最终产品验收仍由你决定。</p><details><summary>时长和用量安排</summary>${prefs ? `<label class="ctc-field">用量控制<select name="budgetMode"><option value="MEASURE" ${prefs.budgetMode === 'MEASURE' ? 'selected' : ''}>只统计和提醒</option><option value="HARD" ${prefs.budgetMode === 'HARD' ? 'selected' : ''}>达到预算后暂停</option></select></label>` : ''}${field('minutes', '本次运行窗口（分钟）', prefs?.durationMinutes ?? 180, { type: 'number', min: 1, max: prefs ? 1440 : 180 })}${field('tokens', state.review.consoleWorkflow ? '用量参考／预算' : '本次 token 上限', prefs?.executionTokenLimit ?? 2000000, { type: 'number', min: 1, max: prefs ? 100000000 : 2880000 })}${prefs ? '<input type="hidden" name="calls" value="10000">' : field('calls', '最多模型步骤', 96, { type: 'number', min: 1, max: 192 })}</details>${state.review.consoleReviewPolicy ? '<input type="hidden" name="repairs" value="2"><p>按各小任务选择执行：独立 QA 第 2 次失败停止；加固与 QA 第 3 次失败停止。</p>' : '<label class="ctc-field">QA 未通过后的修复轮数<select name="repairs"><option value="1">最多一轮</option><option value="2" selected>最多两轮</option></select></label>'}${state.review.executionIssues?.length ? `<p>当前计划仍有执行问题，请先处理：${escape(JSON.stringify(state.review.executionIssues))}</p>` : ''}`, 'execution-approve', '批准并开始');
   }
-  if (action === 'recovery-review') { state.review = await api('execution-recovery-review', { bigTaskId: id }); openModal('恢复已知失败的步骤', `<p>${escape(executionFailureExplanation(state.task?.execution))}</p><p>保留成果与失败记录，使用 Sol/xhigh 重试这个步骤。</p><p>${state.task?.execution?.recovery ? '小任务用量已采用提醒模式，本次不重复调整。' : '恢复时，小任务用量改为提醒模式。'}${state.review.request.totalBudgetMode === 'WARNING_ONLY' ? '总任务用量采用提醒模式。' : '总任务用量上限继续生效。'}时间窗口与修复轮数保持原约定。当前已知用量 ${num(state.review.knownTokens)} token。</p>`, 'execution-recover', '恢复并继续'); }
+  if (action === 'recovery-review') {
+    const execution = state.task?.execution;
+    state.review = null;
+    openModal('执行中断说明', executionProblemHtml(execution), 'image-close', '关闭');
+    if (executionRecoveryBlocker(execution)) return;
+    const generation = state.generation;
+    try {
+      const review = await api('execution-recovery-review', { bigTaskId: id });
+      if (!modal.open || state.generation !== generation || state.modalAction !== 'image-close') return;
+      state.review = review;
+      openModal('执行中断说明', executionProblemHtml(execution) + '<p class="ctc-spaced">恢复入口当前可用。点击后使用 Sol/xhigh 重试失败步骤；保留已有用量、代码和失败历史。</p>', 'execution-recover', '恢复并继续');
+    } catch (error) {
+      if (!modal.open || state.generation !== generation) return;
+      openModal('执行中断说明', executionProblemHtml(execution) + `<p class="ctc-note" role="alert">恢复入口当前不可用：${escape(error.message)} 原任务保留，没有启动新的模型调用。</p>`, 'image-close', '关闭');
+    }
+    return;
+  }
   if (action === 'qa-recovery-review') { state.review = await api('execution-qa-recovery-review', { bigTaskId: id }); openModal('处理审核用量未知', `<p>已有一轮最终用量没有返回，历史记录保留为未知。仅对这一次失败审核继续复验：已知用量上限 200 万 token，新增最多三小时。未知用量不会被写成零。</p><p>当前已知用量：${num(state.review.request.acknowledgedKnownTokens)} token。</p>`, 'execution-recover-qa', '确认本次例外并继续'); }
   if (action === 'renew-dialog') openModal('调整续跑窗口', `<p>从实际继续时按已批准的续跑规则计时；历史用量和修复次数保留。</p>${field('minutes', '新的窗口（分钟）', '180', { type: 'number', min: 1, max: 180 })}`, 'execution-renew-window', '确认新窗口');
   if (action === 'accept-dialog') openModal('确认产品验收', '<p>确认你已经亲自测试当前成果，且结果符合目标。此操作记录产品验收，不会自动部署或合并其他仓库。</p>', 'execution-accept', '确认验收');

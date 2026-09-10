@@ -5,7 +5,7 @@ const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").s
 function harness() {
   let details: { id: string; open: boolean; closest(): null; querySelector(): { textContent: string } }[] = [];
   const main = { querySelectorAll: () => details };
-  const view = runInNewContext(source + "\n({ state, rememberDisclosures, restoreDisclosures, composerKeydown, runningStatus, modelOptions, effortOptions, taskProgressHtml, subtaskProgressHtml, pageHasActiveWork, executionFailureExplanation, lifecycleHtml })", { document: { getElementById: (id: string) => id === "main" ? main : {} }, Date: class extends Date { static override now() { return Date.parse("2026-09-10T04:00:00Z"); } } });
+  const view = runInNewContext(source + "\n({ state, rememberDisclosures, restoreDisclosures, composerKeydown, runningStatus, modelOptions, effortOptions, taskProgressHtml, subtaskProgressHtml, pageHasActiveWork, executionFailureExplanation, executionRecoveryBlocker, executionProblemHtml, lifecycleHtml })", { document: { getElementById: (id: string) => id === "main" ? main : {} }, Date: class extends Date { static override now() { return Date.parse("2026-09-10T04:00:00Z"); } } });
   return { view, setDetails: (opened: boolean[]) => { details = opened.map((open, i) => ({ id: `panel-${i}`, open, closest: () => null, querySelector: () => ({ textContent: `Panel ${i}` }) })); return details; } };
 }
 describe("Console interaction continuity", () => {
@@ -45,6 +45,21 @@ describe("Console interaction continuity", () => {
 
 
 describe("Task progress visibility", () => {
+  it("counts standard independent QA as the second implementation stage", () => {
+    const {view} = harness();
+    const html = view.subtaskProgressHtml({task:{id:"st_a"},workflow:{profile:"STANDARD",currentStage:"FRESH_QA"}});
+    expect(html).toContain('max="2" value="1"'); expect(html).toContain('ctc-stage-current');
+  });
+  it("explains exhausted recovery and separates result errors from budget caps", () => {
+    const {view} = harness();
+    const execution={lastRoleFailure:{authorizationId:"retry",phase:"RESULT",failureCode:"GOVERNED_AUTHORITY_REQUIRED"},additionalRecoveries:[{authorizationId:"retry"}]};
+    expect(view.executionRecoveryBlocker(execution)).toContain("恢复仍然失败");
+    const html=view.executionProblemHtml(execution);
+    for(const title of ["为什么停下","错在哪一步","已保留什么","下一步"]) expect(html).toContain(title);
+    expect(html).toContain("旧记录没有保留具体检查项");
+    expect(view.executionFailureExplanation({lastRoleFailure:{failureCode:"RESULT_USAGE_INVALID"}})).toContain("不等于用量超限");
+    expect(view.executionFailureExplanation({lastRoleFailure:{failureCode:"RESULT_CHECKPOINT_FAILED"}})).toContain("保存为任务版本");
+  });
   it("allows cancelling a pending pause without disabling resume for the active role", () => {
     const { view } = harness();
     const html = view.lifecycleHtml({lifecycle: "PAUSED"}, {phase: "RUNNING", activeRoleCount: 1});

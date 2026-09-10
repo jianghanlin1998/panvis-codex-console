@@ -10,7 +10,7 @@ import {
   ConsoleProjectCreateSchema, CONSOLE_DISCUSSION_OUTPUT_SCHEMA, ProjectIdSchema, SubtaskIdSchema,
 } from "@codex-task-console/domain";
 import { readConsoleModelCatalog, executeConsoleDiscussionCodex } from "@codex-task-console/codex-adapter";
-import { BigTaskExecutionStore, ConsoleWorkspaceStore, TaskStorageError } from "@codex-task-console/storage";
+import { BigTaskExecutionStore, ConsoleWorkspaceStore, TaskStorageError, createGovernedExecutionStore } from "@codex-task-console/storage";
 import type { TaskStorage } from "@codex-task-console/storage";
 import type { LocalControlService } from "./service.js";
 
@@ -280,7 +280,7 @@ export class ConsoleApplication {
       const canRenewWindow = execution !== null && windowExpired && ["PAUSED", "HUMAN_REQUIRED"].includes(execution.phase)
         && executionUsageSettled(execution) && !executionTokenLimitReached(execution)
         && execution.roleCalls < execution.limits.roleCallLimit && execution.pendingIntegration === null;
-      return { task, planningBinding: this.store.planningBinding(id), presentation: this.store.presentation(id), settings: this.store.settings({ kind: "BIG_TASK", id }), navigation: this.store.navigation(task.projectId).find(item => item.id === id), sourceDraft: this.store.sourceDraft(id), planning, execution, canResume, canRenewWindow,
+      return { task, latestRole: execution ? createGovernedExecutionStore(this.storage).latestRoleSummary(id) : null, planningBinding: this.store.planningBinding(id), presentation: this.store.presentation(id), settings: this.store.settings({ kind: "BIG_TASK", id }), navigation: this.store.navigation(task.projectId).find(item => item.id === id), sourceDraft: this.store.sourceDraft(id), planning, execution, canResume, canRenewWindow,
         subtasks: this.storage.listSubtasksByBigTask(id), plan: this.storage.getDurablePlanningSnapshot(id),
         contracts: this.storage.getDurablePlanningReviewBundle(id)?.taskContracts ?? [],
         planReviewMode: presence.planning ? new LivePlanningStore(this.storage).readIntake(id).intake.consoleWorkflow?.planReview ?? "INDEPENDENT" : null,

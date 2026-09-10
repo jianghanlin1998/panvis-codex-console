@@ -1081,6 +1081,18 @@ export class GovernedExecutionStore {
     });
   }
 
+  latestRoleSummary(bigTaskId: BigTaskId) {
+    const row = this.#access().sqlite.prepare(`SELECT a.authorization_id, a.subtask_id, a.role, r.status,
+      v.outcome, v.summary FROM governed_role_authorizations a
+      JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id
+      JOIN execution_runs r ON r.id=l.execution_run_id
+      LEFT JOIN governed_role_results v ON v.authorization_id=a.authorization_id
+      WHERE a.big_task_id=? ORDER BY r.created_at DESC, r.id DESC LIMIT 1`).get(bigTaskId);
+    if (!row) return null;
+    return { authorizationId: String(row.authorization_id), subtaskId: String(row.subtask_id), role: String(row.role),
+      status: String(row.status), outcome: row.outcome === null ? null : String(row.outcome), summary: row.summary === null ? null : String(row.summary) };
+  }
+
   reviewExecutionRecovery(bigTaskId: BigTaskId) {
     const execution = new BigTaskExecutionStore(this.#storage);
     const state = execution.inspect(bigTaskId);
@@ -1614,16 +1626,18 @@ export class GovernedExecutionStore {
           run.providerRun === undefined || run.providerRun === null ||
           run.providerModel?.providerModelId !== providerModel.providerModelId ||
           providerModel.providerId !== "codex-app-server") {
-        throw conflict("Exact provider provenance and normalized usage are required.");
+        throw new TaskStorageError("CONFLICT", "Exact provider provenance and normalized usage are required.", ["RESULT_USAGE_INVALID"]);
       }
       let worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(
         authorization.subtaskId,
       );
-      if (authorization.writeEnabled && (parsed.outcome === "READY" || parsed.outcome === "PASS") &&
+      if (authorization.writeEnabled &&
         isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)) {
         if (worktree.ownership.id !== authorization.worktreeOwnershipId) throw conflict("The candidate ownership changed.");
-        commitApprovedExecutionCandidate(this.#storage, { bigTaskId: authorization.bigTaskId as BigTaskId,
-          authorizationId, parentSha: authorization.candidateSha, authorizedAt: authorization.authorizedAt, ownership: worktree.ownership });
+        try {
+          commitApprovedExecutionCandidate(this.#storage, { bigTaskId: authorization.bigTaskId as BigTaskId,
+            authorizationId, parentSha: authorization.candidateSha, authorizedAt: authorization.authorizedAt, ownership: worktree.ownership });
+        } catch { throw new TaskStorageError("CONFLICT", "The candidate checkpoint could not be saved.", ["RESULT_CHECKPOINT_FAILED"]); }
         worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
       }
       if (

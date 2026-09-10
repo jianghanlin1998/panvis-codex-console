@@ -74,7 +74,7 @@ import type { JsonObject, JsonValue, TokenUsageBreakdown } from "./protocol.js";
 import { validateOwnedWorktreeHardlinkSafety } from "./worktree-filesystem-safety.js";
 import { resolveRuntimeHttpsProxy } from "./runtime-network.js";
 import { consoleResearch, CONSOLE_RESEARCH_TOOL } from "./console-research.js";
-import { ConsoleWorkspaceStore } from "@codex-task-console/storage";
+import { ConsoleWorkspaceStore, TaskStorageError } from "@codex-task-console/storage";
 import { ConsoleScopeSchema } from "@codex-task-console/domain";
 import { providerFailureCode } from "./provider-failure.js";
 
@@ -325,6 +325,7 @@ export const GOVERNED_ROLE_CODEX_EXECUTION_FAILURE_CODES = Object.freeze([
   ...OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES,
   "GOVERNED_AUTHORITY_REQUIRED",
   "STRUCTURED_RESULT_INVALID",
+  "RESULT_CANDIDATE_REJECTED", "RESULT_CHECKPOINT_FAILED", "RESULT_USAGE_INVALID", "RESULT_SAVE_FAILED", "RESULT_RECONCILIATION_FAILED",
 ] as const);
 
 export type GovernedRoleCodexExecutionFailureCode =
@@ -1815,12 +1816,14 @@ async function executeGovernedRoleCodexWithDependencies(
     authorization !== null &&
     events !== undefined
   ) {
+    let resultFailure: GovernedRoleCodexExecutionFailureCode = "RESULT_CANDIDATE_REJECTED";
     try {
       const candidate = governed.revalidateRoleCandidate(authorizationId, true);
       validateWorktreeFilesystem(
         dependencies,
         candidate.ownership.worktreePath,
       );
+      resultFailure = "RESULT_SAVE_FAILED";
       roleResult = governed.persistSuccessfulRoleResult(
         authorizationId,
         events.responseText,
@@ -1828,6 +1831,7 @@ async function executeGovernedRoleCodexWithDependencies(
         normalizedUsage ?? undefined,
       );
       durableRunState = "TERMINAL";
+      resultFailure = "RESULT_RECONCILIATION_FAILED";
       reconciliation = governed.reconcileRoleResult(authorizationId);
     } catch (error: unknown) {
       failureCode =
@@ -1836,7 +1840,9 @@ async function executeGovernedRoleCodexWithDependencies(
         "code" in error &&
         error.code === "INVALID_INPUT"
           ? "STRUCTURED_RESULT_INVALID"
-          : "GOVERNED_AUTHORITY_REQUIRED";
+          : error instanceof TaskStorageError && error.validationCodes.includes("RESULT_CHECKPOINT_FAILED") ? "RESULT_CHECKPOINT_FAILED"
+          : error instanceof TaskStorageError && error.validationCodes.includes("RESULT_USAGE_INVALID") ? "RESULT_USAGE_INVALID"
+          : resultFailure;
     }
   }
 
