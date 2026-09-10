@@ -260,7 +260,7 @@ export class BigTaskExecutionStore {
       switch (event.kind) {
         case "START":
           if (Object.keys(event).length !== 2 || (phase !== "APPROVED" && phase !== "PAUSED" &&
-            !(phase === "HUMAN_REQUIRED" && stopReason === "TIME_LIMIT_REACHED" && expiresAt !== null && event.at < expiresAt))) fail("MALFORMED_STORED_DATA");
+            !(phase === "HUMAN_REQUIRED" && (stopReason === "TIME_LIMIT_REACHED" || stopReason === "LOCAL_OPERATION_FAILED" && ["CHECK_LIMITS", "PREPARE_ROLE"].includes(lastControlFailure?.phase ?? "")) && expiresAt !== null && event.at < expiresAt))) fail("MALFORMED_STORED_DATA");
           if (startedAt === null) { startedAt = event.at; expiresAt = new Date(Date.parse(event.at) + approval.request.limits.durationMilliseconds).toISOString(); }
           phase = "RUNNING"; stopReason = null; break;
         case "RECOVERY": {
@@ -517,12 +517,20 @@ export class BigTaskExecutionStore {
     });
   }
 
+  /** Only preparation failures with no uncertain provider work can reuse the existing approval. */
+  canRetryPreparation(bigTaskId: BigTaskId): boolean {
+    const state = this.inspect(bigTaskId);
+    return state.phase === "HUMAN_REQUIRED" && state.stopReason === "LOCAL_OPERATION_FAILED" &&
+      ["CHECK_LIMITS", "PREPARE_ROLE"].includes(state.lastControlFailure?.phase ?? "") &&
+      state.pendingIntegration === null && executionUsageSettled(state) && this.#safeCheckpoint(bigTaskId);
+  }
+
   start(bigTaskId: BigTaskId): { claimed: boolean; status: BigTaskExecutionStatus } {
     return this.storage.runInTransaction(() => {
       if (new ConsoleWorkspaceStore(this.storage).lifecycle({ kind: "BIG_TASK", id: bigTaskId }) !== "ACTIVE") fail();
       const state = this.inspect(bigTaskId);
       if (state.phase === "RUNNING" || state.phase === "AWAITING_ACCEPTANCE" || state.phase === "ACCEPTED" || state.phase === "CLOSED") return { claimed: false, status: state };
-      if (state.phase !== "APPROVED" && state.phase !== "PAUSED" && !(state.phase === "HUMAN_REQUIRED" && state.stopReason === "TIME_LIMIT_REACHED")) fail();
+      if (state.phase !== "APPROVED" && state.phase !== "PAUSED" && !(state.phase === "HUMAN_REQUIRED" && (state.stopReason === "TIME_LIMIT_REACHED" || this.canRetryPreparation(bigTaskId)))) fail();
       this.assertCurrent(bigTaskId);
       if (state.expiresAt !== null && Date.parse(state.expiresAt) <= Date.parse(timestamp(this.storage))) fail();
       if (!this.#safeCheckpoint(bigTaskId) || !executionUsageSettled(state) || executionTokenLimitReached(state) || state.roleCalls >= state.limits.roleCallLimit) fail();

@@ -16,6 +16,7 @@ import { validateOwnedWorktreeHardlinkSafety } from "../../codex-adapter/src/wor
 import { planningProviderFixture } from "../../codex-adapter/test/planning-provider-fixture.js";
 
 interface ExecutionFixtureOptions {
+  readonly taskCount?: number;
   readonly consoleWorkflow?: BigTaskPlanningIntake["consoleWorkflow"];
   readonly firstRoleGate?: (root: string) => string;
   readonly onProviderRunStarted?: (authorizationId: string) => void;
@@ -40,6 +41,11 @@ export function makeExecutionFixture(clock?: () => Date, scenario?: (role: strin
     });
     f.planning.finish(f.intake.bigTask.id, claim.sequence, true, JSON.stringify(output));
   };
+  for (let index = f.proposal.tasks.length; index < (options.taskCount ?? 2); index++) {
+    const key = `extra_${index}`;
+    f.proposal.dependencies.push({ upstreamKey: f.proposal.tasks.at(-1)!.key, downstreamKey: key, requiredGate: "ACCEPTED", reason: "使用上一步已核对的接口、数据格式和交付结果。".repeat(4) });
+    f.proposal.tasks.push({ ...f.proposal.tasks[0]!, key, title: `Extra ${index}`, goal: `Implement ${key}`, scopeIn: [key], acceptanceCriteria: [`Verify ${key}`], promptSeed: `Implement ${key}` });
+  }
   f.proposal.tasks.forEach(task => { task.profile = profile; });
   finish(f.proposal);
   const bundle = f.storage.getDurablePlanningReviewBundle(f.intake.bigTask.id)!;

@@ -67,7 +67,7 @@ export class ConsoleApplication {
     const presence = this.store.taskPresence(id);
     if (presence.execution) {
       const state = await this.service.inspectExecution!(id);
-      if (["APPROVED", "PAUSED"].includes(state.phase)) await this.request("execution-start", { bigTaskId: id });
+      if (["APPROVED", "PAUSED"].includes(state.phase) || new BigTaskExecutionStore(this.storage).canRetryPreparation(id)) await this.request("execution-start", { bigTaskId: id });
       else if (state.phase !== "RUNNING") throw new TaskStorageError("CONFLICT", "This execution needs its current recovery or acceptance action.");
       return { kind: "TASK_ADVANCED" as const, targetId: scope.id, description: scope.kind === "SUBTASK" ? "已继续此小任务；按原计划的依赖和检查安排执行。" : "已继续已获批准的任务。" };
     }
@@ -276,7 +276,7 @@ export class ConsoleApplication {
       const execution = presence.execution ? await this.service.inspectExecution!(id) : null;
       const windowExpired = execution?.expiresAt !== null && execution?.expiresAt !== undefined && Date.parse(execution.expiresAt) <= Date.parse(this.store.now());
       const canResume = execution !== null && execution.activeRoleCount === 0 && this.store.lifecycle({ kind: "BIG_TASK", id }) === "ACTIVE" && !windowExpired && (["APPROVED", "PAUSED"].includes(execution.phase)
-        || execution.phase === "HUMAN_REQUIRED" && execution.stopReason === "TIME_LIMIT_REACHED");
+        || execution.phase === "HUMAN_REQUIRED" && (execution.stopReason === "TIME_LIMIT_REACHED" || new BigTaskExecutionStore(this.storage).canRetryPreparation(id)));
       const canRenewWindow = execution !== null && windowExpired && ["PAUSED", "HUMAN_REQUIRED"].includes(execution.phase)
         && executionUsageSettled(execution) && !executionTokenLimitReached(execution)
         && execution.roleCalls < execution.limits.roleCallLimit && execution.pendingIntegration === null;

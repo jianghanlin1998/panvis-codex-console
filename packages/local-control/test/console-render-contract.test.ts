@@ -49,13 +49,21 @@ describe("Console render contracts", () => {
       expect(own).toContain("未实施"); expect(own).not.toContain("undefined");
     } finally { await service.stopAndDrain!(); f.close(); }
   }, 15_000); // Includes isolated Git/worktree provisioning, not just HTML rendering.
-  it.each(["TIME_LIMIT_REACHED", "USER_PAUSED", "DAEMON_STOPPING"] as const)("offers continuation after a %s task window is renewed", async reason => {
+  it.each(["TIME_LIMIT_REACHED", "USER_PAUSED", "DAEMON_STOPPING", "LOCAL_OPERATION_FAILED"] as const)("offers continuation after a %s task window is renewed", async reason => {
     let instant = Date.parse("2026-09-07T00:00:00.000Z");
     const f = makeExecutionFixture(() => new Date(instant), undefined, "STANDARD");
     const service = createLocalControlServiceForTesting(f.storage, f.manager, forbidden, forbidden, forbidden, f.governed);
     try {
       const ui = views((action, input) => service.consoleRequest!(action, input));
       f.execution.approve(f.approval); f.execution.start(f.approval.bigTaskId);
+      if (reason === "LOCAL_OPERATION_FAILED") {
+        f.execution.recordControlFailure(f.approval.bigTaskId, { phase: "PREPARE_ROLE", failureCode: "INVALID_INPUT" });
+        f.execution.stop(f.approval.bigTaskId, reason);
+        const retry = await ui.taskPage(f.approval.bigTaskId, "overview");
+        expect(retry).toContain("重试并继续执行");
+        expect(retry).not.toContain('data-action="recovery-review"');
+        f.execution.start(f.approval.bigTaskId);
+      }
       instant += f.approval.limits.durationMilliseconds + 1;
       const stopped = f.execution.stop(f.approval.bigTaskId, reason);
       const expired = await ui.taskPage(f.approval.bigTaskId, "overview");

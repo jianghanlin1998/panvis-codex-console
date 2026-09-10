@@ -59,6 +59,22 @@ describe("Task chat and retry share actual workflow operations", () => {
       expect(store.turns(scope).turns[0]?.message).toBe("开始这个小任务");
     } finally { await ui.stop(); f.close(); }
   });
+  it("continues a preparation interruption through task chat without another approval", async () => {
+    const f = makeExecutionFixture();
+    const scope = { kind: "BIG_TASK", id: f.approval.bigTaskId } as const;
+    const startExecution = vi.fn(async () => f.execution.start(f.approval.bigTaskId).status);
+    const ui = new ConsoleApplication(f.storage, { ...base, inspectExecution: async () => f.execution.inspect(f.approval.bigTaskId), startExecution }, { discuss: model(scope) });
+    try {
+      f.execution.approve(f.approval); f.execution.start(f.approval.bigTaskId);
+      f.execution.recordControlFailure(f.approval.bigTaskId, { phase: "PREPARE_ROLE", failureCode: "INVALID_INPUT" });
+      f.execution.stop(f.approval.bigTaskId, "LOCAL_OPERATION_FAILED");
+      await ui.request("discuss", { requestId: "resume-preparation-chat", scope, message: "继续这个任务" });
+      await settle(() => ui.store.turns(scope).turns[0]?.effects?.[0]?.kind === "TASK_ADVANCED");
+      expect(startExecution).toHaveBeenCalledTimes(1);
+      expect(f.execution.inspect(f.approval.bigTaskId)).toMatchObject({ phase: "RUNNING", roleCalls: 0 });
+      expect(ui.store.listDrafts(f.intake.bigTask.projectId)).toHaveLength(0);
+    } finally { await ui.stop(); f.close(); }
+  });
   it("pauses from chat without reopening an ended task and reports a failed action honestly", async () => {
     const f = makePlanningFixture();
     const scope = { kind: "BIG_TASK", id: f.intake.bigTask.id } as const;

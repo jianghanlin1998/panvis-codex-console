@@ -479,7 +479,7 @@ describe("route, body, and authentication boundary matrices", () => {
     expect(server.service.provisionOwnedWorktree).not.toHaveBeenCalled();
   });
 
-  it("distinguishes the exact 1 MiB body boundary from one byte over", async () => {
+  it("reads the exact 1 MiB body and rejects one byte over from its declared length", async () => {
     const server = await startServer();
     const bodyAtLimit = `{"padding":"${"x".repeat(
       LOCAL_CONTROL_BODY_LIMIT_BYTES - Buffer.byteLength('{"padding":""}'),
@@ -490,9 +490,13 @@ describe("route, body, and authentication boundary matrices", () => {
     );
     const bodyOver = `${bodyAtLimit}x`;
     expect(Buffer.byteLength(bodyOver)).toBe(LOCAL_CONTROL_BODY_LIMIT_BYTES + 1);
-    expect((await rawExchange(server.port, rawPost(server, bodyOver))).status).toBe(
-      413,
-    );
+    // The server rejects the oversized Content-Length before reading a body.
+    // Do not race that deliberate connection close with a 1 MiB socket write:
+    // prove that rejection arrives even when the oversized body is withheld.
+    const rejected = await rawExchange(server.port, rawPost(server, "", [], String(Buffer.byteLength(bodyOver))));
+    expect(rejected.status).toBe(413);
+    expect(rejected.body).toEqual({ error: { code: "REQUEST_TOO_LARGE" } });
+    expect(server.service.provisionOwnedWorktree).not.toHaveBeenCalled();
   });
 
   it.each([

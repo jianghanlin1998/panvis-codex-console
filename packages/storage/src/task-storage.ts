@@ -1128,7 +1128,7 @@ const parseWorkflowIdentity = (
     bigTaskId.data !== record.bigTaskId ||
     typeof record.candidateBinding !== "string" ||
     record.candidateBinding.length < 1 ||
-    record.candidateBinding.length > 2_048
+    Buffer.byteLength(record.candidateBinding, "utf8") > 1024 * 1024
   ) {
     throw invalidInput(entity);
   }
@@ -1462,7 +1462,7 @@ const parseRequestDurableMaterializedGraphChangeInput = (
     bigTaskId.data !== record.bigTaskId ||
     typeof record.candidateBinding !== "string" ||
     record.candidateBinding.length < 1 ||
-    record.candidateBinding.length > 2_048 ||
+    Buffer.byteLength(record.candidateBinding, "utf8") > 1024 * 1024 ||
     typeof record.changeKind !== "string" ||
     !MATERIALIZED_GRAPH_CHANGE_KINDS.some(
       (changeKind) => changeKind === record.changeKind,
