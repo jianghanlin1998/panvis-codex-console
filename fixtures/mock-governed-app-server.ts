@@ -143,6 +143,12 @@ lines.on("line", (line) => {
       governedInput = {};
     }
     const resultContract = record(governedInput.resultContract);
+    const schema = record(params.outputSchema), properties = record(schema.properties);
+    const allowedOutcomes = role === "EXECUTE" || role === "REPAIR" ? ["READY", "BLOCKED"] : ["PASS", "BLOCKING_FAIL"];
+    const validOutputSchema = schema.type === "object" && schema.additionalProperties === false &&
+      JSON.stringify(schema.required) === JSON.stringify(["schemaVersion", "outcome", "summary", "findings", "promotionCandidate"]) &&
+      JSON.stringify(record(properties.outcome).enum) === JSON.stringify(allowedOutcomes) && record(properties.summary).maxLength === 1000 &&
+      record(properties.findings).maxItems === (role === "EXECUTE" || role === "REPAIR" ? 0 : 16);
     const validSandbox = writeEnabled
       ? sandbox.type === "workspaceWrite" &&
         sandbox.networkAccess === false &&
@@ -167,7 +173,7 @@ lines.on("line", (line) => {
       !Array.isArray(resultContract.exactKeys) ||
       resultContract.exactKeys.join(",") !==
         "schemaVersion,outcome,summary,findings,promotionCandidate" ||
-      !validSandbox
+      !validSandbox || !validOutputSchema
     ) {
       error(id);
       return;

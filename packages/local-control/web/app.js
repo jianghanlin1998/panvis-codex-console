@@ -213,7 +213,7 @@ async function contextHtml() {
 async function taskPage(id, tab) {
   const record = await api('task', { bigTaskId: id }); state.task = record; state.scope = { kind: 'BIG_TASK', id };
   const execution = record.execution; state.scopeSettings = record.settings;
-  const head = `<div class="ctc-crumb">${link(projectName(record.task.projectId), `project/${encodeURIComponent(record.task.projectId)}`, 'ctc-link')} / ${record.sourceDraft?.kind === 'SMALL_TASK' ? '小任务' : '大任务'}</div>` + heading(record.presentation?.title ?? record.task.title, record.task.goal, `${link('后续改进', `new-task/${encodeURIComponent(record.task.projectId)}/${encodeURIComponent(id)}`)}${execution && record.canResume ? button(execution.phase === 'APPROVED' ? '开始执行' : '继续执行', 'start', true) : ''}`) + lifecycleHtml(record.settings, execution) + tabsHtml('task', id, tab, [['overview', '概览'], ['discussion', '讨论'], ['plan', '计划'], ['tasks', '小任务'], ['results', '成果'], ['context', '上下文']]);
+  const head = `<div class="ctc-crumb">${link(projectName(record.task.projectId), `project/${encodeURIComponent(record.task.projectId)}`, 'ctc-link')} / ${record.sourceDraft?.kind === 'SMALL_TASK' ? '小任务' : '大任务'}</div>` + heading(record.presentation?.title ?? record.task.title, record.task.goal, `${link('后续改进', `new-task/${encodeURIComponent(record.task.projectId)}/${encodeURIComponent(id)}`)}${execution && record.canResume ? button(execution.phase === 'APPROVED' ? '开始执行' : '继续执行', 'start', true) : ''}`) + lifecycleHtml(record.settings, execution) + taskProgressHtml(record) + tabsHtml('task', id, tab, [['overview', '概览'], ['discussion', '讨论'], ['plan', '计划'], ['tasks', '小任务'], ['results', '成果'], ['context', '上下文']]);
   if (tab === 'discussion') return head + (record.sourceDraft ? `<div class="ctc-note">${link('查看开工前的方向讨论', `draft/${encodeURIComponent(record.sourceDraft.id)}`, 'ctc-link')}</div>` : '') + await discussionHtml();
   if (tab === 'context') return head + await contextHtml();
   if (tab === 'plan') return head + planHtml(record);
@@ -230,12 +230,53 @@ function blockersHtml(record) {
   const engineering = !execution && (['ENGINEERING_PREPARATION', 'CONTEXT_CHANGED', 'CONTEXT_LIMIT', 'INVALID_OUTPUT'].includes(reason) || (planning?.questions ?? []).some(question => /禁止使用工具|只读核对|协调者|用量费用估算/.test(question)));
   const title = engineering ? '计划准备遇到问题' : reason === 'USER_PAUSED' ? '任务已暂停' : execution ? '执行需要处理' : '准备下一步';
   const preparationFailure = execution?.stopReason === 'LOCAL_OPERATION_FAILED' && ['CHECK_LIMITS', 'PREPARE_ROLE'].includes(execution.lastControlFailure?.phase);
-  const explanation = preparationFailure ? 'Console 在准备下一步时中断，已保留计划和完成的工作。修复后可从保存的进度重试；不会重新规划或重置用量。' : engineering ? '需要继续核对代码、现有成果或工具能力。实施尚未开始；这些调查由 Console 处理，你可以让它重新准备计划。' : reasons[reason] ?? '查看当前记录后继续。';
+  const explanation = preparationFailure ? 'Console 在准备下一步时中断，已保留计划和完成的工作。修复后可从保存的进度重试；不会重新规划或重置用量。' : engineering ? '需要继续核对代码、现有成果或工具能力。实施尚未开始；这些调查由 Console 处理，你可以让它重新准备计划。' : execution ? executionFailureExplanation(execution) : reasons[reason] ?? '查看当前记录后继续。';
   return `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>${title}</h2><p class="ctc-spaced">${escape(explanation)}</p>${!engineering ? (planning?.questions ?? []).map(question => `<p class="ctc-spaced">${escape(question)}</p>`).join('') : ''}<div class="ctc-actions ctc-spaced">${!execution && planning?.phase === 'HUMAN_REQUIRED' ? button('重新调查并准备计划', 'plan-retry', true) : ''}${link('在聊天里讨论', `task/${encodeURIComponent(record.task.id)}/discussion`)}${execution && record.canRenewWindow ? button('调整续跑时间', 'renew-dialog') : ''}${preparationFailure && record.canResume ? button('重试并继续执行', 'start', true) : execution?.lastRoleFailure && ['GOVERNED_BLOCKED','TOKEN_LIMIT_REACHED','TIME_LIMIT_REACHED','USAGE_UNKNOWN'].includes(execution.stopReason) ? button('处理执行中断', execution.stopReason === 'USAGE_UNKNOWN' ? 'qa-recovery-review' : 'recovery-review') : ''}</div><details class="ctc-spaced"><summary>查看工程记录</summary><p>${escape((planning?.questions ?? []).join('\n'))}</p>${execution?.lastRoleFailure ? `<p>${escape(execution.lastRoleFailure.phase)} · ${escape(execution.lastRoleFailure.failureCode)}</p>` : ''}${execution?.lastControlFailure ? `<p>${escape(execution.lastControlFailure.phase)} · ${escape(execution.lastControlFailure.failureCode)}</p>` : ''}</details></section>`;
+}
+function activityName(activity) {
+  return { STARTING: '连接模型', THINKING: '分析与思考', READING_OR_TESTING: '读取资料或使用工具', EDITING: '修改文件', RESPONDING: '整理结果' }[activity] ?? '等待活动记录';
+}
+function executionFailureExplanation(execution) {
+  if (execution?.lastRoleFailure?.failureCode === 'STRUCTURED_RESULT_INVALID') return '模型步骤已结束，但返回结果的格式未被 Console 接受；这不代表 QA 已通过，也不代表触及用量上限。';
+  return reasons[execution?.stopReason] ?? '执行已停下，需要处理。';
+}
+function taskProgressHtml(record) {
+  const execution = record.execution;
+  const total = record.contracts?.length || record.subtasks?.length || 0;
+  const completed = execution?.integratedSubtaskIds?.length ?? 0;
+  const active = execution?.activeRole;
+  const child = active && (record.contracts ?? record.subtasks ?? []).find(item => (item.subtaskId ?? item.id) === active.subtaskId);
+  const planningRun = record.planning?.runs?.at(-1);
+  const planning = !execution && (record.planningActive || record.planning?.phase === 'RUNNING');
+  const title = active ? `${child?.title ?? '当前小任务'} · ${label(active.role)}` : execution?.phase === 'RUNNING' ? '正在准备或整合下一步' : execution ? label(execution.phase) : planning ? '正在准备计划' : '等待确认计划';
+  const detail = execution?.phase === 'CLOSED' ? '工程记录已保留，产品尚未验收。' : execution?.phase === 'HUMAN_REQUIRED' ? executionFailureExplanation(execution) : execution?.phase === 'AWAITING_ACCEPTANCE' ? '工程流程已完成，等待你体验和验收。' : '按已整合的小任务计数；当前模型步骤不估算完成百分比。';
+  return progressPanel(title, completed, total, total ? `已完成并整合 ${completed} / ${total} 个小任务` : '尚未形成小任务安排', detail,
+    active ? runningStatus(execution.startedAt, active.progress, true, '任务累计运行') : planning ? runningStatus(planningRun?.startedAt, planningRun?.progress) : '');
+}
+function subtaskProgressHtml(record) {
+  if (record.progressUnavailable) return progressPanel('进度暂时无法读取', 0, 0, '保留当前任务内容', '正在重新连接；不能确认任务是否仍在推进。', '');
+  const workflow = record.workflow, execution = record.execution;
+  const stages = workflow?.profile === 'HIGH_RISK_FOUNDATION' ? ['EXECUTE', 'HARDEN', 'FRESH_QA'] : ['EXECUTE', 'VERIFY'];
+  const stage = workflow?.currentStage;
+  const complete = stage === 'COMPLETE';
+  const repair = ['REPAIR', 'FOCUSED_RE_QA'].includes(stage);
+  const completed = complete ? stages.length : repair ? stages.length - 1 : Math.max(0, stages.indexOf(stage));
+  const active = execution?.activeRole?.subtaskId === record.task.id ? execution.activeRole : null;
+  const currentRun = record.inspection?.durableExecution?.recentChatThreads?.flatMap(thread => thread.runs).find(run => run.id === active?.runId);
+  const blocked = execution?.phase === 'HUMAN_REQUIRED' || workflow?.unresolvedHumanRequired;
+  const paused = record.settings?.lifecycle !== undefined && record.settings.lifecycle !== 'ACTIVE' || execution?.phase === 'PAUSED';
+  const title = complete ? '小任务工程流程已完成' : active ? `正在${label(active.role)}` : paused ? '任务已暂停或结束' : blocked ? '执行已停下，需要处理' : !workflow ? '计划中，尚未实施' : !record.inspection?.dependencyReadiness?.ready ? '等待前置任务完成' : '等待调度执行';
+  const detail = repair ? `当前：${label(stage)} · 已使用 ${workflow.repairCyclesUsed} 轮修复；QA 通过后才能完成。` : complete ? '检查与交付记录已保存。' : blocked ? executionFailureExplanation(execution) : `当前阶段：${label(stage ?? 'PLANNING')}。${active && paused ? '当前步骤完成后暂停。' : ''}`;
+  const chips = stages.map((item, index) => `<span class="ctc-stage ${index < completed ? 'ctc-stage-done' : item === stage || repair && index === stages.length - 1 ? 'ctc-stage-current' : ''}">${escape(item === 'VERIFY' ? '检查' : label(item))}</span>`).join('');
+  return progressPanel(title, completed, stages.length, `已通过 ${completed} / ${stages.length} 个主流程阶段`, detail,
+    `<div class="ctc-stages">${chips}</div>${active ? runningStatus(currentRun?.createdAt, active.progress) : ''}`);
+}
+function progressPanel(title, completed, total, count, detail, activity) {
+  return `<section class="ctc-task-progress" aria-label="任务进度"><div class="ctc-subtitle"><strong>${escape(title)}</strong><span class="ctc-small">${escape(count)}</span></div><progress aria-label="${escape(count)}" max="${Math.max(1, total)}" value="${Math.min(completed, total)}"></progress><p class="ctc-small">${escape(detail)}</p>${activity}</section>`;
 }
 function usageHtml(execution) {
   const activity = execution.activeRole;
-  return `<section class="ctc-surface ctc-spaced"><div class="ctc-subtitle"><h2>当前活动与用量</h2>${pill(execution.activeRoleCount ? '仍在执行' : '无活动步骤')}</div><div class="ctc-grid2">${facts([['正在做什么', activity ? `${label(activity.role)} · ${activity.progress?.phase ?? '运行中'}` : '当前没有运行中的模型步骤'], ['已确认用量', `${num(execution.knownTokens)} tokens${execution.unknownCompletedUsage ? '，另有未知用量' : ''}`]])}${facts([['执行次数', `${num(execution.roleCalls)} / ${num(execution.limits.roleCallLimit)}`], ['本次截止时间', timestamp(execution.expiresAt)]])}</div><details><summary>详细用量与预算记录</summary><pre class="ctc-evidence">${escape(JSON.stringify({ limits: execution.limits, usageBreakdown: execution.usageBreakdown, usageComplete: execution.usageComplete, activeRole: activity, windowRenewal: execution.windowRenewal }, null, 2))}</pre></details></section>`;
+  return `<section class="ctc-surface ctc-spaced"><div class="ctc-subtitle"><h2>当前活动与用量</h2>${pill(execution.activeRoleCount ? '仍在执行' : '无活动步骤')}</div><div class="ctc-grid2">${facts([['正在做什么', activity ? `${label(activity.role)} · ${activityName(activity.progress?.activity)}` : '当前没有运行中的模型步骤'], ['已确认用量', `${num(execution.knownTokens)} tokens${execution.unknownCompletedUsage ? '，另有未知用量' : ''}`]])}${facts([['执行次数', `${num(execution.roleCalls)} / ${num(execution.limits.roleCallLimit)}`], ['本次截止时间', timestamp(execution.expiresAt)]])}</div><details><summary>详细用量与预算记录</summary><pre class="ctc-evidence">${escape(JSON.stringify({ limits: execution.limits, usageBreakdown: execution.usageBreakdown, usageComplete: execution.usageComplete, activeRole: activity, windowRenewal: execution.windowRenewal }, null, 2))}</pre></details></section>`;
 }
 function planHtml(record) {
   const candidate = record.plan?.reviewState?.candidate;
@@ -253,7 +294,8 @@ function subtasksHtml(record) {
 }
 async function subtaskPage(id, tab) {
   const record = await api('subtask', { subtaskId: id }); state.subtask = record; state.scope = { kind: 'SUBTASK', id }; state.scopeSettings = record.settings;
-  const head = `<div class="ctc-crumb">${link(projectName(record.parent?.projectId), `project/${encodeURIComponent(record.parent?.projectId ?? '')}`, 'ctc-link')} / ${link(record.parent?.title ?? '大任务', `task/${encodeURIComponent(record.task.bigTaskId)}`, 'ctc-link')} / 小任务</div>` + heading(record.task.title, record.task.goal) + lifecycleHtml(record.settings) + tabsHtml('subtask', id, tab, [['overview', '任务概览'], ['discussion', '聊天'], ['context', '上下文'], ['history', '执行记录']]);
+  try { const parentRecord = await api('task', { bigTaskId: record.task.bigTaskId }); record.execution = parentRecord.execution; record.planning = parentRecord.planning; record.planningActive = parentRecord.planningActive; } catch { record.progressUnavailable = true; }
+  const head = `<div class="ctc-crumb">${link(projectName(record.parent?.projectId), `project/${encodeURIComponent(record.parent?.projectId ?? '')}`, 'ctc-link')} / ${link(record.parent?.title ?? '大任务', `task/${encodeURIComponent(record.task.bigTaskId)}`, 'ctc-link')} / 小任务</div>` + heading(record.task.title, record.task.goal) + lifecycleHtml(record.settings, record.execution?.activeRole?.subtaskId === id ? record.execution : null) + subtaskProgressHtml(record) + tabsHtml('subtask', id, tab, [['overview', '任务概览'], ['discussion', '聊天'], ['context', '上下文'], ['history', '执行记录']]);
   if (tab === 'discussion') return head + await discussionHtml();
   if (tab === 'context') return head + await contextHtml();
   if (tab === 'history') return head + `<section class="ctc-surface"><h2>执行记录</h2>${record.inspection?.durableExecution.recentChatThreads.flatMap(thread => thread.runs.map(run => `<article class="ctc-contextitem"><strong>${escape(label(run.status))}</strong><span>${escape(timestamp(run.updatedAt))} · ${escape(run.providerModelId ?? '模型信息未返回')}</span></article>`)).join('') || '<p class="ctc-spaced">还没有开始实施，聊天与准备材料已经可以使用。</p>'}</section>`;
@@ -286,17 +328,24 @@ function disclosureKeys() {
 }
 function rememberDisclosures() { if (state.mountedRoute) disclosureMemory.set(state.mountedRoute, new Map(disclosureKeys().map(([node, key]) => [key, node.open]))); }
 function restoreDisclosures(route) { const saved = disclosureMemory.get(route); if (saved) for (const [node, key] of disclosureKeys()) if (saved.has(key)) node.open = saved.get(key); }
+function pageHasActiveWork() {
+  const record = state.route[0] === 'subtask' ? state.subtask : state.route[0] === 'task' ? state.task : null;
+  return Boolean(record?.execution?.phase === 'RUNNING' || record?.planningActive || record?.planning?.phase === 'RUNNING' || record?.progressUnavailable || state.turns.some(turn => turn.status === 'RUNNING') || state.preview?.phase === 'STARTING');
+}
 function composerKeydown(event) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229 || event.repeat || !event.target.matches('.ctc-composer textarea[name="message"]')) return;
   event.preventDefault();
   const form = event.target.closest('form');
   if (!state.pending && !state.reading && !state.turns.some(turn => turn.status === 'RUNNING') && event.target.value.trim()) form.requestSubmit();
 }
-function runningStatus(startedAt, progress, active = true) {
-  const age = Math.max(0, Date.now() - Date.parse(progress?.observedAt ?? startedAt));
+function runningStatus(startedAt, progress, active = true, elapsedLabel = '已等待') {
+  const observed = Date.parse(progress?.observedAt ?? startedAt);
+  const age = Number.isFinite(observed) ? Math.max(0, Date.now() - observed) : Infinity;
+  const started = Date.parse(startedAt);
+  const elapsed = Number.isFinite(started) ? ` ${elapsedLabel} ${Math.floor(Math.max(0, Date.now() - started) / 60000)} 分钟`.trim() : '运行时间尚未返回';
   const stale = !progress || age > 90000;
   const phase = { STARTING: '连接模型', THINKING: '分析与思考', READING_OR_TESTING: '读取资料或使用工具', EDITING: '修改文件', RESPONDING: '整理回复' }[progress?.activity] ?? '等待模型活动记录';
-  return `<div class="ctc-live-status" role="status"><span class="ctc-live-dot ${active && !stale ? 'ctc-live-pulse' : ''}" aria-hidden="true"></span><div><strong>${escape(phase)}</strong><p class="ctc-small">已等待 ${Math.floor(Math.max(0, Date.now() - Date.parse(startedAt)) / 60000)} 分钟 · ${progress ? `最近活动：${escape(timestamp(progress.observedAt))}` : '这次运行尚无活动记录'}${stale ? ' · 暂未收到新活动，不能确认模型仍在推进' : ' · 已收到模型活动'}${!state.online ? ' · 本机连接中断' : ''}</p></div></div>`;
+  return `<div class="ctc-live-status" role="status"><span class="ctc-live-dot ${active && !stale && state.online ? 'ctc-live-pulse' : ''}" aria-hidden="true"></span><div><strong>${escape(phase)}</strong><p class="ctc-small">${elapsed} · ${progress ? `最近活动：${escape(timestamp(progress.observedAt))}` : '这次运行尚无活动记录'}${stale ? ' · 暂未收到新活动，不能确认模型仍在推进' : ' · 已收到模型活动'}${!state.online ? ' · 本机连接中断' : ''}</p></div></div>`;
 }
 const modelLabel = selection => selection?.model ? `${selection.model} / ${selection.reasoningEffort ?? '模型默认'}` : '跟随本机 Codex 默认';
 async function loadModels(refresh = false) {
@@ -389,7 +438,7 @@ async function act(action) {
     const prefs = state.review.consoleWorkflow;
     openModal('确认计划并开始实施', `<p>按刚才查看的计划实施，完成约定的检查与修复；最终产品验收仍由你决定。</p><details><summary>时长和用量安排</summary>${prefs ? `<label class="ctc-field">用量控制<select name="budgetMode"><option value="MEASURE" ${prefs.budgetMode === 'MEASURE' ? 'selected' : ''}>只统计和提醒</option><option value="HARD" ${prefs.budgetMode === 'HARD' ? 'selected' : ''}>达到预算后暂停</option></select></label>` : ''}${field('minutes', '本次运行窗口（分钟）', prefs?.durationMinutes ?? 180, { type: 'number', min: 1, max: prefs ? 1440 : 180 })}${field('tokens', state.review.consoleWorkflow ? '用量参考／预算' : '本次 token 上限', prefs?.executionTokenLimit ?? 2000000, { type: 'number', min: 1, max: prefs ? 100000000 : 2880000 })}${prefs ? '<input type="hidden" name="calls" value="10000">' : field('calls', '最多模型步骤', 96, { type: 'number', min: 1, max: 192 })}</details>${state.review.consoleReviewPolicy ? '<input type="hidden" name="repairs" value="2"><p>按各小任务选择执行：独立 QA 第 2 次失败停止；加固与 QA 第 3 次失败停止。</p>' : '<label class="ctc-field">QA 未通过后的修复轮数<select name="repairs"><option value="1">最多一轮</option><option value="2" selected>最多两轮</option></select></label>'}${state.review.executionIssues?.length ? `<p>当前计划仍有执行问题，请先处理：${escape(JSON.stringify(state.review.executionIssues))}</p>` : ''}`, 'execution-approve', '批准并开始');
   }
-  if (action === 'recovery-review') { state.review = await api('execution-recovery-review', { bigTaskId: id }); openModal('恢复已知失败的步骤', `<p>保留成果与失败记录，使用 Sol 的深入推理恢复这一步。</p><p>本次恢复将小任务 token 上限改为提醒${state.review.request.totalBudgetMode === 'WARNING_ONLY' ? '，总任务 token 上限也改为提醒' : ''}；时间窗口与修复轮数继续生效。当前已知用量 ${num(state.review.knownTokens)} token。</p>`, 'execution-recover', '恢复并继续'); }
+  if (action === 'recovery-review') { state.review = await api('execution-recovery-review', { bigTaskId: id }); openModal('恢复已知失败的步骤', `<p>${escape(executionFailureExplanation(state.task?.execution))}</p><p>保留成果与失败记录，使用 Sol/xhigh 重试这个步骤。</p><p>${state.task?.execution?.recovery ? '小任务用量已采用提醒模式，本次不重复调整。' : '恢复时，小任务用量改为提醒模式。'}${state.review.request.totalBudgetMode === 'WARNING_ONLY' ? '总任务用量采用提醒模式。' : '总任务用量上限继续生效。'}时间窗口与修复轮数保持原约定。当前已知用量 ${num(state.review.knownTokens)} token。</p>`, 'execution-recover', '恢复并继续'); }
   if (action === 'qa-recovery-review') { state.review = await api('execution-qa-recovery-review', { bigTaskId: id }); openModal('处理审核用量未知', `<p>已有一轮最终用量没有返回，历史记录保留为未知。仅对这一次失败审核继续复验：已知用量上限 200 万 token，新增最多三小时。未知用量不会被写成零。</p><p>当前已知用量：${num(state.review.request.acknowledgedKnownTokens)} token。</p>`, 'execution-recover-qa', '确认本次例外并继续'); }
   if (action === 'renew-dialog') openModal('调整续跑窗口', `<p>从实际继续时按已批准的续跑规则计时；历史用量和修复次数保留。</p>${field('minutes', '新的窗口（分钟）', '180', { type: 'number', min: 1, max: 180 })}`, 'execution-renew-window', '确认新窗口');
   if (action === 'accept-dialog') openModal('确认产品验收', '<p>确认你已经亲自测试当前成果，且结果符合目标。此操作记录产品验收，不会自动部署或合并其他仓库。</p>', 'execution-accept', '确认验收');
@@ -495,6 +544,5 @@ void boot();
 setInterval(() => {
   if (state.noticeUntil && Date.now() > state.noticeUntil) { notice.textContent = ''; state.noticeUntil = null; }
   if (document.hidden || state.reading || state.pending || modal.open || main.contains(document.activeElement) && document.activeElement.matches('input,textarea,select')) return;
-  const busy = state.turns.some(turn => turn.status === 'RUNNING') || state.task?.planningActive || state.task?.planning?.phase === 'RUNNING' || state.task?.execution?.phase === 'RUNNING' || state.preview?.phase === 'STARTING';
-  if (busy) void renderRoute(true);
+  if (pageHasActiveWork()) void renderRoute(true);
 }, 4000);

@@ -311,3 +311,15 @@ body { margin: 0; background: light-dark(#fbfbf9,#171b1b); }
 @keyframes ctc-pulse { 50% { opacity: 1; transform: scale(1.25); } }
 @media (prefers-reduced-motion: reduce) { .ctc-live-pulse { animation: none; opacity: 1; } }
 #ctc-direction .ctc-chat > details[open] ~ .ctc-composer { position: static; }
+
+.ctc-task-progress { margin-block: 16px 24px; padding: 18px 22px; border: 1px solid var(--ctc-line); border-left: 3px solid var(--ctc-accent); border-radius: 12px; background: var(--ctc-panel); }
+.ctc-task-progress progress { display: block; width: 100%; height: 7px; margin-block: 14px 10px; border: 0; border-radius: 8px; overflow: hidden; background: var(--ctc-line); accent-color: var(--ctc-accent); }
+.ctc-task-progress progress::-webkit-progress-bar { background: var(--ctc-line); border-radius: 8px; }
+.ctc-task-progress progress::-webkit-progress-value { background: var(--ctc-accent); border-radius: 8px; }
+.ctc-task-progress progress::-moz-progress-bar { background: var(--ctc-accent); border-radius: 8px; }
+.ctc-task-progress .ctc-live-status { margin-bottom: 0; }
+.ctc-stages { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ctc-stage { font-size: 12px; padding: 3px 9px; border: 1px solid var(--ctc-line); border-radius: 6px; color: var(--ctc-muted); }
+.ctc-stage-done { color: var(--ctc-accent); }
+.ctc-stage-current { color: var(--ctc-text); border-color: var(--ctc-accent); font-weight: 600; }
+@media (max-width: 640px) { .ctc-task-progress { padding: 14px; } .ctc-task-progress .ctc-subtitle { align-items: flex-start; flex-direction: column; gap: 6px; } }

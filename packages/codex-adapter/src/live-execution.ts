@@ -1688,6 +1688,7 @@ async function executeGovernedRoleCodexWithDependencies(
       {
         threadId: thread.threadId,
         input: [{ type: "text", text: promptText, text_elements: [] }, ...imageInputs.map(url => ({ type: "image", url }))],
+        outputSchema: governedOutputSchema(trustedAuthorization.role),
         ...(selectedModel === null ? {} : { model: selectedModel.model, effort: selectedModel.reasoningEffort }),
         cwd: worktreePath,
         approvalPolicy: "never",
@@ -1916,6 +1917,24 @@ export async function executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForT
     subtaskId,
     dependencies,
   );
+}
+
+/** Constrain the final answer at generation time; storage still validates semantic consistency. */
+function governedOutputSchema(role: string): JsonValue {
+  const implementing = role === "EXECUTE" || role === "REPAIR";
+  const text = (maximum: number): JsonValue => ({ type: "string", minLength: 1, maxLength: maximum });
+  return { type: "object", additionalProperties: false,
+    required: ["schemaVersion", "outcome", "summary", "findings", "promotionCandidate"],
+    properties: {
+      schemaVersion: { type: "integer", enum: [1] },
+      outcome: { type: "string", enum: implementing ? ["READY", "BLOCKED"] : ["PASS", "BLOCKING_FAIL"] },
+      summary: text(1000),
+      promotionCandidate: { anyOf: [text(1000), { type: "null" }] },
+      findings: { type: "array", maxItems: implementing ? 0 : 16,
+        items: { type: "object", additionalProperties: false,
+          required: ["findingId", "blocking", "violatedInvariant", "affectedContract", "reproduction"],
+          properties: { findingId: text(128), blocking: { type: "boolean" }, violatedInvariant: text(1000), affectedContract: text(256), reproduction: text(1000) } } },
+    } };
 }
 
 async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(

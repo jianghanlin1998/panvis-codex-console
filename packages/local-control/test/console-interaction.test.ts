@@ -5,7 +5,7 @@ const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").s
 function harness() {
   let details: { id: string; open: boolean; closest(): null; querySelector(): { textContent: string } }[] = [];
   const main = { querySelectorAll: () => details };
-  const view = runInNewContext(source + "\n({ state, rememberDisclosures, restoreDisclosures, composerKeydown, runningStatus, modelOptions, effortOptions })", { document: { getElementById: (id: string) => id === "main" ? main : {} }, Date: class extends Date { static override now() { return Date.parse("2026-09-10T04:00:00Z"); } } });
+  const view = runInNewContext(source + "\n({ state, rememberDisclosures, restoreDisclosures, composerKeydown, runningStatus, modelOptions, effortOptions, taskProgressHtml, subtaskProgressHtml, pageHasActiveWork, executionFailureExplanation })", { document: { getElementById: (id: string) => id === "main" ? main : {} }, Date: class extends Date { static override now() { return Date.parse("2026-09-10T04:00:00Z"); } } });
   return { view, setDetails: (opened: boolean[]) => { details = opened.map((open, i) => ({ id: `panel-${i}`, open, closest: () => null, querySelector: () => ({ textContent: `Panel ${i}` }) })); return details; } };
 }
 describe("Console interaction continuity", () => {
@@ -40,5 +40,40 @@ describe("Console interaction continuity", () => {
     const { view } = harness(); view.state.models = { models: [{ model: "future-model", displayName: "New model", defaultEffort: "new_effort", efforts: ["low", "new_effort"] }] };
     expect(view.effortOptions("future-model")).toContain('value="new_effort" selected');
     expect(view.modelOptions("retired-model")).toContain("当前列表不可用");
+  });
+});
+
+
+describe("Task progress visibility", () => {
+  it("counts integrated children and names the active task without claiming model percent", () => {
+    const { view } = harness(); view.state.online = true;
+    const html = view.taskProgressHtml({ contracts: [{subtaskId: "st_a", title: "Build collector"}, {subtaskId: "st_b", title: "Verify board"}], execution: { phase: "RUNNING", integratedSubtaskIds: ["st_a"], startedAt: "2026-09-10T03:00:00Z", activeRole: {subtaskId: "st_b", role: "FRESH_QA", progress: {activity: "READING_OR_TESTING", observedAt: "2026-09-10T03:59:50Z"}} } });
+    expect(html).toContain('max="2" value="1"'); expect(html).toContain("Verify board · 独立 QA");
+    expect(html).toContain("任务累计运行 60 分钟"); expect(html).toContain("读取资料或使用工具");
+  });
+  it("does not attribute a sibling's live activity to a waiting subtask", () => {
+    const { view } = harness();
+    const record = {task: {id: "st_a"}, workflow: {profile: "STANDARD", currentStage: "MATERIALIZE"}, execution: {phase: "RUNNING", activeRole: {subtaskId: "st_b", role: "EXECUTE", progress: {activity: "EDITING"}}}, inspection: {dependencyReadiness: {ready: false}}};
+    const html = view.subtaskProgressHtml(record);
+    expect(html).toContain("等待前置任务完成"); expect(html).not.toContain("修改文件"); expect(html).not.toContain("ctc-live-pulse");
+  });
+  it("keeps QA incomplete during repair and distinguishes completion from parent failure", () => {
+    const { view } = harness();
+    const record = {task: {id: "st_a"}, workflow: {profile: "HIGH_RISK_FOUNDATION", currentStage: "REPAIR", repairCyclesUsed: 1}, execution: {phase: "HUMAN_REQUIRED", stopReason: "GOVERNED_BLOCKED"}};
+    const repair = view.subtaskProgressHtml(record); expect(repair).toContain('max="3" value="2"'); expect(repair).toContain("QA 通过后才能完成");
+    record.workflow.currentStage = "COMPLETE";
+    const complete = view.subtaskProgressHtml(record); expect(complete).toContain('max="3" value="3"'); expect(complete).toContain("小任务工程流程已完成");
+  });
+  it("retries missing progress reads, polls active subtask pages and ignores stale pages", () => {
+    const { view } = harness(); view.state.route = ["subtask", "st_a"];
+    view.state.subtask = {progressUnavailable: true}; expect(view.pageHasActiveWork()).toBe(true);
+    expect(view.subtaskProgressHtml(view.state.subtask)).toContain("不能确认任务是否仍在推进");
+    view.state.subtask = {execution: {phase: "RUNNING"}}; expect(view.pageHasActiveWork()).toBe(true);
+    view.state.route = ["home"]; expect(view.pageHasActiveWork()).toBe(false);
+    expect(view.runningStatus(undefined, undefined)).not.toContain("NaN");
+  });
+  it("explains rejected QA output without blaming the budget", () => {
+    const { view } = harness();
+    expect(view.executionFailureExplanation({lastRoleFailure: {failureCode: "STRUCTURED_RESULT_INVALID"}})).toContain("格式未被 Console 接受");
   });
 });
