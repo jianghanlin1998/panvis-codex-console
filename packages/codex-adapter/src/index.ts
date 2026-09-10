@@ -120,3 +120,6 @@ export type {
   OwnedWorktreeCodexExecutionResult,
   OwnedWorktreeCodexExecutionSuccess,
 } from "./live-execution.js";
+
+export { readConsoleModelCatalog, readConsoleModelCatalogForTest } from "./live-execution.js";
+export type { ConsoleModelCatalog } from "./live-execution.js";

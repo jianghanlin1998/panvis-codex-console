@@ -58,7 +58,7 @@ describe("write-tool notification lifecycle", () => {
     const root = fixtureRoot();
     expect(() =>
       validateWriteTurnNotificationSequenceForTest(root, [
-        started({ type: "webSearch", id: "id", status: "inProgress" }),
+        started({ type: "unknownTool", id: "id", status: "inProgress" }),
       ]),
     ).toThrow("TOOL_ACTION_ATTEMPTED");
   });

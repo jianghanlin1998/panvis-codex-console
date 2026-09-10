@@ -21,7 +21,7 @@ export function planningProviderFixture(
   answer: (packet: PlanningMockPacket, sequence: number) => unknown,
   options: {
     omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; researchTools?: boolean; duplicateThread?: boolean;
-    configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean; failedCodexErrorInfo?: unknown;
+    modelsResult?: (cursor: unknown) => unknown; configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean; failedCodexErrorInfo?: unknown;
     delayedReply?: { method: string; milliseconds: number };
     streamResponse?: boolean; agentChunks?: readonly string[]; deltaThreadId?: string;
     governed?: boolean; onTurnStarted?: () => void; researchCall?: object; onResearchResult?: (result: unknown) => void;
@@ -79,6 +79,7 @@ export function planningProviderFixture(
             };
             if (message.method === "initialize") reply({ userAgent: "fixture", codexHome: "/private/mock-home", platformFamily: "unix", platformOs: "macos" });
             if (message.method === "account/read") reply({ account: options.apiKey ? { type: "apiKey" } : { type: "chatgpt", email: "fixture@example.invalid", planType: "pro" }, requiresOpenaiAuth: true });
+            if (message.method === "model/list") reply(options.modelsResult?.(message.params.cursor) ?? { data: [], nextCursor: null });
             if (message.method === "config/read") reply(options.configReadResult === undefined ? { config: { mcp_servers: {} }, origins: {} } : options.configReadResult);
             if (message.method === "thread/start") reply({
               thread: { id: threadId, ephemeral: true, cwd: spawnOptions.cwd }, cwd: spawnOptions.cwd,

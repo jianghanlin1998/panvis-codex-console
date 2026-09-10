@@ -1,3 +1,4 @@
+import type { ExecutionProgress, ConsoleModelSelection } from "@codex-task-console/domain";
 import { createHash } from "node:crypto";
 
 import {
@@ -206,6 +207,10 @@ export class LivePlanningStore {
     });
   }
 
+  recordProgress(input: BigTaskId, sequence: number, update: { progress?: ExecutionProgress; modelSelection?: ConsoleModelSelection | null }): void {
+    const run = this.#running(input, sequence);
+    this.#write(input, PlanningRunRecordSchema.parse({ ...run, ...update }));
+  }
   observe(input: BigTaskId, sequence: number, evidence: PlanningProviderEvidence): void {
     this.#storage.runInTransaction(() => {
       const run = this.#running(input, sequence);

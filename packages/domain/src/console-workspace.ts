@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ExecutionProgressSchema } from "./execution-progress.js";
 import { BigTaskIdSchema, ProjectIdSchema, SubtaskIdSchema } from "./identifiers.js";
 import { NormalizedUsageSchema } from "./execution.js";
 import { isWellFormedUnicode } from "./well-formed-unicode.js";
@@ -18,6 +19,8 @@ export const ConsoleReviewLevelSchema = z.enum(["LIGHT", "STANDARD", "THOROUGH"]
 export type ConsoleReviewLevel = z.infer<typeof ConsoleReviewLevelSchema>;
 export const ConsoleLifecycleSchema = z.enum(["ACTIVE", "PAUSED", "ENDED"]);
 export const ConsoleAssetSchema = z.object({ id: z.string().regex(/^asset_[a-f0-9]{32}$/), name: text(200), mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]), bytes: z.number().int().positive().max(4 * 1024 * 1024) }).strict();
+export const ConsoleModelSelectionSchema = z.object({ model: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/), reasoningEffort: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/) }).strict();
+export type ConsoleModelSelection = z.infer<typeof ConsoleModelSelectionSchema>;
 export const ConsoleWorkflowPreferencesSchema = z.object({
   planReview: z.enum(["SELF", "INDEPENDENT"]), budgetMode: z.enum(["MEASURE", "HARD"]),
   planningTokenLimit: z.number().int().min(1000).max(10_000_000),
@@ -29,8 +32,8 @@ export const ConsoleSettingsChangeSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   reviewLevel: ConsoleReviewLevelSchema.nullable().optional(), projectClosed: z.boolean().optional(),
   lifecycle: ConsoleLifecycleSchema.optional(), endOutcome: z.enum(["COMPLETED", "STOPPED"]).optional(),
-  preferences: ConsoleWorkflowPreferencesSchema.optional(),
-}).strict().refine(value => value.reviewLevel !== undefined || value.projectClosed !== undefined || value.lifecycle !== undefined || value.preferences !== undefined);
+  modelSelection: ConsoleModelSelectionSchema.nullable().optional(), preferences: ConsoleWorkflowPreferencesSchema.optional(),
+}).strict().refine(value => value.reviewLevel !== undefined || value.projectClosed !== undefined || value.lifecycle !== undefined || value.preferences !== undefined || value.modelSelection !== undefined);
 export const ConsolePlanReviewChangeSchema = z.object({
   requestId: ConsoleRequestIdSchema, bigTaskId: BigTaskIdSchema,
   expectedBinding: z.string().regex(/^[a-f0-9]{32}$/),
@@ -38,7 +41,7 @@ export const ConsolePlanReviewChangeSchema = z.object({
 }).strict();
 export const ConsoleScopeSettingsSchema = z.object({
   scope: ConsoleScopeSchema, revision: z.number().int().nonnegative(),
-  reviewLevel: ConsoleReviewLevelSchema.nullable(), projectClosed: z.boolean(), lifecycle: ConsoleLifecycleSchema.optional(), endOutcome: z.enum(["COMPLETED", "STOPPED"]).optional(), preferences: ConsoleWorkflowPreferencesSchema.optional(), updatedAt: z.iso.datetime().nullable(),
+  reviewLevel: ConsoleReviewLevelSchema.nullable(), projectClosed: z.boolean(), lifecycle: ConsoleLifecycleSchema.optional(), endOutcome: z.enum(["COMPLETED", "STOPPED"]).optional(), modelSelection: ConsoleModelSelectionSchema.nullable().optional(), preferences: ConsoleWorkflowPreferencesSchema.optional(), updatedAt: z.iso.datetime().nullable(),
 }).strict();
 export const ConsoleBriefSchema = z.object({
   title: text(200), goal: text(1000),
@@ -106,6 +109,7 @@ export const ConsoleDiscussionTurnSchema = z.object({
   answer: ConsoleDiscussionAnswerSchema.nullable(), usage: NormalizedUsageSchema.nullable(),
   failureCode: z.string().regex(/^[A-Z_]{1,80}$/).nullable(),
   createdAt: z.iso.datetime(), endedAt: z.iso.datetime().nullable(),
+  progress: ExecutionProgressSchema.optional(), modelSelection: ConsoleModelSelectionSchema.nullable().optional(), actualModel: z.string().max(200).optional(),
   completionBinding: z.string().regex(/^[a-f0-9]{32}$/).optional(),
   effects: z.array(z.object({ kind: z.enum(["TASK_CREATED", "REVIEW_LEVEL_CHANGED", "PLAN_REVIEW_CHANGED", "TASK_ADVANCE_REQUESTED", "TASK_PAUSE_REQUESTED", "TASK_ADVANCED", "TASK_PAUSED", "TASK_ACTION_FAILED", "EXECUTION_CONFIRMATION_REQUIRED"]), targetId: z.string(), description: text(1000) }).strict()).max(12).optional(),
 }).strict();

@@ -303,3 +303,11 @@ body { margin: 0; background: light-dark(#fbfbf9,#171b1b); }
 .ctc-guide { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.8; }
 .ctc-scope-preferences { flex-basis: 100%; }
 .ctc-policy { flex-wrap: wrap; }
+
+.ctc-live-status { display: flex; align-items: flex-start; gap: 12px; margin-block: 18px; }
+.ctc-live-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; margin-top: 7px; opacity: .45; flex: 0 0 auto; }
+.ctc-live-pulse { animation: ctc-pulse 1.6s ease-in-out infinite; }
+.ctc-model-current { margin-bottom: 16px; }
+@keyframes ctc-pulse { 50% { opacity: 1; transform: scale(1.25); } }
+@media (prefers-reduced-motion: reduce) { .ctc-live-pulse { animation: none; opacity: 1; } }
+#ctc-direction .ctc-chat > details[open] ~ .ctc-composer { position: static; }

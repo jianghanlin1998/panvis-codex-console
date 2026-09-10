@@ -366,3 +366,6 @@ export { ExecutionProgressSchema, ExecutionUsageBreakdownSchema } from "./execut
 export type { ExecutionProgress, ExecutionUsageBreakdown } from "./execution-progress.js";
 
 export * from "./console-workspace.js";
+
+export { ConsoleModelSelectionSchema } from "./console-workspace.js";
+export type { ConsoleModelSelection } from "./console-workspace.js";

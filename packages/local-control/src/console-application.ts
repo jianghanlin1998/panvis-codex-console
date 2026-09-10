@@ -6,15 +6,15 @@ import { devNull } from "node:os";
 import { isAbsolute } from "node:path";
 import { realpathSync, lstatSync } from "node:fs";
 import {
-  ConsoleScopeSchema, BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
+  ConsoleModelSelectionSchema, ConsoleScopeSchema, BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
   ConsoleProjectCreateSchema, CONSOLE_DISCUSSION_OUTPUT_SCHEMA, ProjectIdSchema, SubtaskIdSchema,
 } from "@codex-task-console/domain";
-import { executeConsoleDiscussionCodex } from "@codex-task-console/codex-adapter";
+import { readConsoleModelCatalog, executeConsoleDiscussionCodex } from "@codex-task-console/codex-adapter";
 import { BigTaskExecutionStore, ConsoleWorkspaceStore, TaskStorageError } from "@codex-task-console/storage";
 import type { TaskStorage } from "@codex-task-console/storage";
 import type { LocalControlService } from "./service.js";
 
-export interface ConsoleApplicationDependencies { readonly discuss: typeof executeConsoleDiscussionCodex; readonly previews?: ResultPreviews; readonly chooseFolder?: typeof chooseProjectFolder; }
+export interface ConsoleApplicationDependencies { readonly discuss: typeof executeConsoleDiscussionCodex; readonly models?: typeof readConsoleModelCatalog; readonly previews?: ResultPreviews; readonly chooseFolder?: typeof chooseProjectFolder; }
 const invalid = (): never => { throw new TaskStorageError("INVALID_INPUT", "Invalid Console request."); };
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : invalid();
 const exact = (value: unknown, keys: readonly string[]) => {
@@ -29,6 +29,13 @@ export class ConsoleApplication {
   readonly #jobs = new Map<string, Promise<unknown>>();
   readonly #queued = new Map<string, () => Promise<unknown>>();
   #stopping = false;
+  #catalog: { value: Awaited<ReturnType<typeof readConsoleModelCatalog>>; loaded: number } | undefined;
+  #catalogPending: Promise<Awaited<ReturnType<typeof readConsoleModelCatalog>>> | undefined;
+  async #models(refresh = false) {
+    if (!refresh && this.#catalog && Date.parse(this.store.now()) - this.#catalog.loaded < 300000) return this.#catalog.value;
+    if (!this.#catalogPending) this.#catalogPending = (this.dependencies.models ?? readConsoleModelCatalog)().then(value => { this.#catalog = { value, loaded: Date.parse(this.store.now()) }; return value; }).finally(() => { this.#catalogPending = undefined; });
+    return this.#catalogPending;
+  }
   constructor(private readonly storage: TaskStorage, private readonly service: LocalControlService,
     private readonly dependencies: ConsoleApplicationDependencies = { discuss: executeConsoleDiscussionCodex }) {
     this.store = new ConsoleWorkspaceStore(storage);
@@ -77,6 +84,7 @@ export class ConsoleApplication {
   }
   async request(action: string, input: unknown): Promise<object> {
     const data = object(input);
+    if (action === "models") { exact(input, ["refresh"]); if (data.refresh !== undefined && typeof data.refresh !== "boolean") invalid(); return this.#models(data.refresh === true); }
     if (action === "workspace") {
       exact(input, []);
       const projects = this.storage.listProjects();
@@ -183,7 +191,14 @@ export class ConsoleApplication {
       return result;
     }
     if (action === "scope-settings") { exact(input, ["scope"]); return this.store.settings(data.scope); }
-    if (action === "settings-change") return this.store.changeSettings(input);
+    if (action === "settings-change") {
+      if (data.modelSelection != null) {
+        const selection = ConsoleModelSelectionSchema.parse(data.modelSelection);
+        const model = (await this.#models()).models.find(model => model.model === selection.model);
+        if (!model?.efforts.includes(selection.reasoningEffort)) invalid();
+      }
+      return this.store.changeSettings(input);
+    }
     if (action === "direction-confirm") return this.store.confirmDirection(input);
     if (action === "context") { exact(input, ["scope"]); return this.store.context(data.scope); }
     if (action === "context-confirm") return this.store.confirmContext(input);

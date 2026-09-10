@@ -23,7 +23,7 @@ const lines = value => String(value ?? '').split(/\r?\n/u).map(item => item.trim
 const reviewSelect = (name = 'reviewIntensity', selected = 'STANDARD') => `<label class="ctc-field">审核深度<select name="${name}">${[['LIGHT', '实施 + 基本测试'], ['STANDARD', '独立 QA · 第 2 次失败反馈'], ['THOROUGH', '加固 + QA · 第 3 次失败反馈']].map(([value, text]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${text}</option>`).join('')}</select></label>`;
 const requestId = key => { if (!state.requestIds.has(key)) state.requestIds.set(key, crypto.randomUUID()); return state.requestIds.get(key); };
 const scopeKey = scope => scope ? `${scope.kind}:${scope.id}` : '';
-function notify(message, error = false) { notice.textContent = message; notice.classList.toggle('ctc-error', error); }
+function notify(message, error = false) { state.noticeUntil = Date.now() + (error ? 20000 : 8000); notice.textContent = message; notice.classList.toggle('ctc-error', error); }
 async function transport(path, body) {
   const controller = new AbortController(); const deadline = setTimeout(() => controller.abort(), path === "/ui/folder" ? 125_000 : 30_000);
   try {
@@ -168,8 +168,9 @@ async function discussionHtml() {
   const scope = state.scope;
   const result = await api('discussion', { scope }); state.turns = result.turns; state.latestProposal = result.latestProposal; state.after = result.previousAfter; state.hasMore = result.hasPrevious;
   const context = await api('context', { scope }); state.scopeSettings = context.settings; state.origin = context.origin;
+  await loadModels();
   const related = (context.relatedScopes ?? []).filter(item => scopeKey(item) !== scopeKey(scope));
-  return `<section class="ctc-surface ctc-chat"><div class="ctc-subtitle"><div><h2>${{ PROJECT: '项目聊天', BIG_TASK: '大任务聊天', SUBTASK: '小任务聊天', DRAFT: '任务准备' }[scope.kind]}</h2><p class="ctc-small">可直接要求继续推进、暂停任务、准备计划或调整检查深度。</p></div>${['BIG_TASK','SUBTASK'].includes(scope.kind) ? button('继续推进', 'chat-advance', true) : ''}${button('上下文与偏好', 'chat-context')}</div><details id="chat-context"><summary>当前上下文与检查安排</summary><p>当前目标、计划和停止原因可供聊天读取；需要时会只读调查项目代码。历史对话自动整理，原文继续保留。</p>${scopeSettingsHtml(context.settings, false)}${related.map(item => link('查看来源讨论', `${item.kind === 'DRAFT' ? 'draft' : item.kind === 'SUBTASK' ? 'subtask' : item.kind === 'PROJECT' ? 'project' : 'task'}/${encodeURIComponent(item.id)}${item.kind === 'DRAFT' ? '' : '/discussion'}`)).join('')}${(context.notes ?? []).map(note => `<p class="ctc-spaced">${escape(note.title)}：${escape(note.body)}</p>`).join('')}${button('补充上下文', 'context-dialog')}</details><div id="messages">${messagesHtml(state.turns)}</div><div id="older-messages">${result.hasPrevious ? button('加载更早的对话', 'more-messages') : ''}</div><form class="ctc-composer" data-form="discussion"><textarea name="message" aria-label="讨论内容" maxlength="1048576" placeholder="告诉我你想做什么，或直接粘贴截图…">${escape(state.drafts.get(scopeKey(scope)) ?? '')}</textarea><div id="attachment-tray">${attachmentTray()}</div><div class="ctc-composerfoot"><label class="ctc-button ctc-attach">＋ 图片<input type="file" accept="image/png,image/jpeg,image/webp" multiple data-images hidden></label><span class="ctc-label">支持粘贴、拖入截图</span><button class="ctc-button ctc-primary" type="submit" ${state.turns.some(turn => turn.status === 'RUNNING') ? 'disabled' : ''}>发送</button></div></form></section>`;
+  return `<section class="ctc-surface ctc-chat"><div class="ctc-subtitle"><div><h2>${{ PROJECT: '项目聊天', BIG_TASK: '大任务聊天', SUBTASK: '小任务聊天', DRAFT: '任务准备' }[scope.kind]}</h2><p class="ctc-small">可直接要求继续推进、暂停任务、准备计划或调整检查深度。</p></div>${['BIG_TASK','SUBTASK'].includes(scope.kind) ? button('继续推进', 'chat-advance', true) : ''}${button('模型与推理', 'model-settings')}${button('上下文与偏好', 'chat-context')}</div><p class="ctc-small ctc-model-current">聊天与规划：${escape(modelLabel(context.settings.effectiveModelSelection ?? state.models?.current))}${state.modelsUnavailable ? ' · 模型列表暂不可用' : ''}</p><details id="chat-context"><summary>当前上下文与检查安排</summary><p>当前目标、计划和停止原因可供聊天读取；需要时会只读调查项目代码。历史对话自动整理，原文继续保留。</p>${scopeSettingsHtml(context.settings, false)}${related.map(item => link('查看来源讨论', `${item.kind === 'DRAFT' ? 'draft' : item.kind === 'SUBTASK' ? 'subtask' : item.kind === 'PROJECT' ? 'project' : 'task'}/${encodeURIComponent(item.id)}${item.kind === 'DRAFT' ? '' : '/discussion'}`)).join('')}${(context.notes ?? []).map(note => `<p class="ctc-spaced">${escape(note.title)}：${escape(note.body)}</p>`).join('')}${button('补充上下文', 'context-dialog')}</details><div id="messages">${messagesHtml(state.turns)}</div><div id="older-messages">${result.hasPrevious ? button('加载更早的对话', 'more-messages') : ''}</div><form class="ctc-composer" data-form="discussion"><textarea name="message" aria-label="讨论内容" maxlength="1048576" placeholder="告诉我你想做什么，或直接粘贴截图…">${escape(state.drafts.get(scopeKey(scope)) ?? '')}</textarea><div id="attachment-tray">${attachmentTray()}</div><div class="ctc-composerfoot"><label class="ctc-button ctc-attach">＋ 图片<input type="file" accept="image/png,image/jpeg,image/webp" multiple data-images hidden></label><span class="ctc-label">Enter 发送 · Shift+Enter 换行 · 可粘贴截图</span><button class="ctc-button ctc-primary" type="submit" ${state.turns.some(turn => turn.status === 'RUNNING') ? 'disabled' : ''}>发送</button></div></form></section>`;
 }
 function attachmentTray() { return (state.attachments.get(scopeKey(state.scope)) ?? []).map(asset => `<span class="ctc-attachment"><img src="${escape(asset.dataUrl)}" alt="${escape(asset.name)}"><button type="button" data-remove-image="${asset.id}" aria-label="移除 ${escape(asset.name)}">×</button></span>`).join(''); }
 async function mountSavedImages() {
@@ -200,7 +201,7 @@ function discussionFailure(code) {
 }
 function messagesHtml(turns) {
   if (!turns.length) return `<div class="ctc-empty"><h3>从这里开始讨论</h3><p>告诉 Console 想要什么结果。任务相关的决定会先整理给你确认。</p></div>`;
-  return turns.map(turn => `<article class="ctc-message ctc-human"><div class="ctc-messagehead"><span class="ctc-avatar">H</span><strong>你</strong><span class="ctc-label">${escape(timestamp(turn.createdAt))}</span></div><p>${escape(turn.message)}</p>${(turn.attachments ?? []).map(asset => `<button class="ctc-image-link" type="button" data-view-image="${escape(asset.id)}"><img data-saved-image="${escape(asset.id)}" alt="${escape(asset.name)}" ${state.imageCache.has(asset.id) ? `src="${escape(state.imageCache.get(asset.id))}"` : ''}><span>${escape(asset.name)} · 查看大图</span></button>`).join('')}</article><article class="ctc-message"><div class="ctc-messagehead"><span class="ctc-avatar">C</span><strong>Console</strong>${pill(turn.effects?.some(effect => effect.kind === 'TASK_ACTION_FAILED') ? '操作未完成' : label(turn.status), turn.status === 'RUNNING' ? 'ctc-wait' : '')}</div><p>${escape(turn.answer?.reply ?? (turn.status === 'RUNNING' ? '正在思考。你可以切换页面，回复会保存在这里。' : discussionFailure(turn.failureCode)))}</p>${(turn.effects ?? []).map(effect => `<div class="ctc-effect">${effect.kind === 'TASK_CREATED' ? link(effect.description + ' →', `draft/${encodeURIComponent(effect.targetId)}`, 'ctc-link') : ['PLAN_REVIEW_CHANGED','EXECUTION_CONFIRMATION_REQUIRED','TASK_ADVANCED','TASK_ACTION_FAILED','TASK_PAUSED'].includes(effect.kind) ? link(effect.description + ' →', effect.targetId.startsWith('st_') ? `subtask/${encodeURIComponent(effect.targetId)}` : `task/${encodeURIComponent(effect.targetId)}/plan`, 'ctc-link') : escape(effect.description)}</div>`).join('')}${turn.answer?.proposal ? '<p class="ctc-small">已整理产品方向建议，可在方向表单中查看和修改。</p>' : ''}<details class="ctc-message-details"><summary>运行记录</summary><p class="ctc-small">${turn.status === 'RUNNING' ? '用量统计中' : `本轮用量：${num(turn.usage?.totalTokens)} tokens`}</p></details></article>`).join('');
+  return turns.map(turn => `<article class="ctc-message ctc-human"><div class="ctc-messagehead"><span class="ctc-avatar">H</span><strong>你</strong><span class="ctc-label">${escape(timestamp(turn.createdAt))}</span></div><p>${escape(turn.message)}</p>${(turn.attachments ?? []).map(asset => `<button class="ctc-image-link" type="button" data-view-image="${escape(asset.id)}"><img data-saved-image="${escape(asset.id)}" alt="${escape(asset.name)}" ${state.imageCache.has(asset.id) ? `src="${escape(state.imageCache.get(asset.id))}"` : ''}><span>${escape(asset.name)} · 查看大图</span></button>`).join('')}</article><article class="ctc-message"><div class="ctc-messagehead"><span class="ctc-avatar">C</span><strong>Console</strong>${pill(turn.effects?.some(effect => effect.kind === 'TASK_ACTION_FAILED') ? '操作未完成' : label(turn.status), turn.status === 'RUNNING' ? 'ctc-wait' : '')}</div><p>${escape(turn.answer?.reply ?? (turn.status === 'RUNNING' ? '正在思考。你可以切换页面，回复会保存在这里。' : discussionFailure(turn.failureCode)))}</p>${turn.status === 'RUNNING' ? runningStatus(turn.createdAt, turn.progress) : ''}${(turn.effects ?? []).map(effect => `<div class="ctc-effect">${effect.kind === 'TASK_CREATED' ? link(effect.description + ' →', `draft/${encodeURIComponent(effect.targetId)}`, 'ctc-link') : ['PLAN_REVIEW_CHANGED','EXECUTION_CONFIRMATION_REQUIRED','TASK_ADVANCED','TASK_ACTION_FAILED','TASK_PAUSED'].includes(effect.kind) ? link(effect.description + ' →', effect.targetId.startsWith('st_') ? `subtask/${encodeURIComponent(effect.targetId)}` : `task/${encodeURIComponent(effect.targetId)}/plan`, 'ctc-link') : escape(effect.description)}</div>`).join('')}${turn.answer?.proposal ? '<p class="ctc-small">已整理产品方向建议，可在方向表单中查看和修改。</p>' : ''}<details class="ctc-message-details"><summary>运行记录</summary><p>${escape(turn.actualModel ?? turn.modelSelection?.model ?? '历史记录未保存模型')}${turn.modelSelection?.reasoningEffort ? ` / ${escape(turn.modelSelection.reasoningEffort)}` : ''}</p><p class="ctc-small">${turn.status === 'RUNNING' ? '用量统计中' : `本轮用量：${num(turn.usage?.totalTokens)} tokens`}</p></details></article>`).join('');
 }
 async function contextHtml() {
   const context = await api('context', { scope: state.scope });
@@ -237,8 +238,12 @@ function usageHtml(execution) {
 }
 function planHtml(record) {
   const candidate = record.plan?.reviewState?.candidate;
-  if (!candidate) return blockersHtml(record) + empty(record.planningActive || record.planning?.phase === 'RUNNING' ? '正在生成或审核计划' : '计划尚未生成', 'Console 会先调查项目并整理计划；你确认计划后才开始实施。', record.planning?.phase === 'READY' && !record.planningActive ? button('调查并准备计划', 'plan-start', true) : '');
-  return blockersHtml(record) + `<section class="ctc-surface"><div class="ctc-subtitle"><h2>具体实施计划</h2>${pill(`第 ${candidate.revision} 版 · ${record.planReviewMode === 'SELF' ? '规划者自检' : '独立计划审核'} · ${label(record.planning?.phase)}`)}</div><form data-form="plan-review">${record.contracts.map((contract, index) => `<article class="ctc-contextitem"><h3>${index + 1}. ${link(contract.title, `subtask/${encodeURIComponent(contract.subtaskId)}`, 'ctc-titlelink')}</h3><p>${escape(contract.goal)}</p><details class="ctc-spaced"><summary>完成标准</summary><p>${escape(contract.acceptanceCriteria.join('；'))}</p></details><span>检查深度：${escape(label(candidate.subtasks.find(task => task.id === contract.subtaskId)?.profile))}</span>${!record.execution && record.planning?.phase !== 'RUNNING' && !record.presentation?.historyOf ? `<label class="ctc-field ctc-spaced">检查深度<select name="${escape(contract.subtaskId)}">${[['LIGHT','LOW'],['STANDARD','STANDARD'],['THOROUGH','HIGH_RISK_FOUNDATION']].map(([level, profile]) => `<option value="${level}" ${candidate.subtasks.find(task => task.id === contract.subtaskId)?.profile === profile ? 'selected' : ''}>${levelName(level)}</option>`).join('')}</select></label>` : `<span>本次已固定：${escape(label(candidate.subtasks.find(task => task.id === contract.subtaskId)?.profile))}</span>`}</article>`).join('')}${!record.execution && record.planning?.phase !== 'RUNNING' && !record.presentation?.historyOf ? '<button class="ctc-button" type="submit">保存检查安排</button><p class="ctc-small ctc-spaced">保留原记录，按任务偏好检查调整后的计划。</p>' : ''}</form><details><summary>任务依赖、范围与完整计划</summary><pre class="ctc-evidence">${escape(JSON.stringify({ dependencies: candidate.dependencies, contracts: record.contracts }, null, 2))}</pre></details>${!record.execution && record.planning?.phase === 'APPROVED' ? `<div class="ctc-actions ctc-spaced">${button('确认计划并开工', 'execution-review', true)}${link('先讨论调整', `task/${encodeURIComponent(record.task.id)}/discussion`)}</div>` : ''}</section>`;
+  const run = record.planning?.runs?.at(-1);
+  const working = record.planningActive || record.planning?.phase === 'RUNNING';
+  const activity = working ? `<section class="ctc-surface ctc-spaced"><h2>${run?.role === 'REVIEWER' ? '正在检查计划' : '正在调查并整理计划'}</h2>${runningStatus(run?.startedAt ?? new Date().toISOString(), run?.progress)}<p class="ctc-small">${escape(modelLabel(run?.modelSelection ?? (run?.model ? { model: run.model.providerModelId } : null)))} · 完成后会显示待确认的计划。可以切换页面。</p></section>` : '';
+  if (!candidate) return blockersHtml(record) + (working ? activity : empty('计划尚未生成', 'Console 会先调查项目并整理计划；你确认计划后才开始实施。', record.planning?.phase === 'READY' ? button('调查并准备计划', 'plan-start', true) : ''));
+
+  return blockersHtml(record) + activity + `<section class="ctc-surface"><div class="ctc-subtitle"><h2>具体实施计划</h2>${pill(`第 ${candidate.revision} 版 · ${record.planReviewMode === 'SELF' ? '规划者自检' : '独立计划审核'} · ${label(record.planning?.phase)}`)}</div><form data-form="plan-review">${record.contracts.map((contract, index) => `<article class="ctc-contextitem"><h3>${index + 1}. ${link(contract.title, `subtask/${encodeURIComponent(contract.subtaskId)}`, 'ctc-titlelink')}</h3><p>${escape(contract.goal)}</p><details class="ctc-spaced"><summary>完成标准</summary><p>${escape(contract.acceptanceCriteria.join('；'))}</p></details><span>检查深度：${escape(label(candidate.subtasks.find(task => task.id === contract.subtaskId)?.profile))}</span>${!record.execution && record.planning?.phase !== 'RUNNING' && !record.presentation?.historyOf ? `<label class="ctc-field ctc-spaced">检查深度<select name="${escape(contract.subtaskId)}">${[['LIGHT','LOW'],['STANDARD','STANDARD'],['THOROUGH','HIGH_RISK_FOUNDATION']].map(([level, profile]) => `<option value="${level}" ${candidate.subtasks.find(task => task.id === contract.subtaskId)?.profile === profile ? 'selected' : ''}>${levelName(level)}</option>`).join('')}</select></label>` : `<span>本次已固定：${escape(label(candidate.subtasks.find(task => task.id === contract.subtaskId)?.profile))}</span>`}</article>`).join('')}${!record.execution && record.planning?.phase !== 'RUNNING' && !record.presentation?.historyOf ? '<button class="ctc-button" type="submit">保存检查安排</button><p class="ctc-small ctc-spaced">保留原记录，按任务偏好检查调整后的计划。</p>' : ''}</form><details><summary>任务依赖、范围与完整计划</summary><pre class="ctc-evidence">${escape(JSON.stringify({ dependencies: candidate.dependencies, contracts: record.contracts }, null, 2))}</pre></details>${!record.execution && record.planning?.phase === 'APPROVED' ? `<div class="ctc-actions ctc-spaced">${button('确认计划并开工', 'execution-review', true)}${link('先讨论调整', `task/${encodeURIComponent(record.task.id)}/discussion`)}</div>` : ''}</section>`;
 }
 function subtasksHtml(record) {
   const tasks = record.navigation?.subtasks ?? record.subtasks;
@@ -268,8 +273,49 @@ function newProject() {
 }
 
 async function newTask(projectId, relatedBigTaskId) { const related = relatedBigTaskId ? await api('task', { bigTaskId: relatedBigTaskId }) : null; return heading('先说你想做成什么', '你可以交一个大任务，也可以直接交一个明确的小任务。') + (state.projects.length ? `<form data-form="new-task" class="ctc-surface ctc-reading"><div class="ctc-grid2"><label class="ctc-field">所属项目<select name="projectId">${state.projects.map(project => `<option value="${escape(project.id)}" ${project.id === projectId ? 'selected' : ''}>${escape(project.name)}</option>`).join('')}</select></label><label class="ctc-field">任务大小<select name="kind"><option value="BIG_TASK">大任务 · 需要讨论和拆分</option><option value="SMALL_TASK">小任务 · 一项明确改动</option></select></label></div>${related ? `<div class="ctc-note">关联任务：${escape(related.task.title)}。原目标和已确认结论会带入下一步方向讨论。</div>` : ''}${field('title', '任务名称', related ? `后续：${related.task.title}`.slice(0, 200) : '', { max: 200 })}${field('goal', '希望得到什么结果', related?.task.goal ?? '', { multiline: true, max: 1000 })}${relatedBigTaskId ? `<input type="hidden" name="relatedBigTaskId" value="${escape(relatedBigTaskId)}"><p class="ctc-label">这是关联原任务的后续工作，不会改写原来的执行计划。</p>` : ''}<div class="ctc-actions ctc-spaced"><button class="ctc-button ctc-primary" type="submit">创建并讨论方向</button><span class="ctc-label">不会直接开始改代码。</span></div></form>` : empty('先添加一个项目', '任务需要属于一个明确的本地仓库。', link('添加项目', 'new-project', 'ctc-button ctc-primary'))); }
-function settings() { return heading('任务偏好', '按任务难度选择检查深度；每项任务开工前都能调整。') + `<form data-form="settings" class="ctc-surface ctc-reading"><p class="ctc-small">检查深度在项目总览设置默认值，也可在具体任务中单独调整。</p><label class="ctc-field">外观<select name="theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label><p class="ctc-label">范围内的工具和工程检查自动进行。产品方向、计划和超出约定的事项交给你决定。已批准任务保留其原有约定。</p><div class="ctc-actions ctc-spaced"><button class="ctc-button ctc-primary" type="submit">保存偏好</button></div></form>`; }
-async function renderRoute() {
+function settings() { return `<section class="ctc-surface ctc-reading ctc-spaced"><h2>模型与推理设置</h2><p>本机默认：${escape(modelLabel(state.models?.current))}${state.modelsUnavailable ? ' · 列表暂不可用' : ''}</p><p class="ctc-small">项目级设置由各任务继承。各聊天顶部也能单独调整；新模型和支持的推理等级会从 Codex 自动补齐。</p>${state.projects.map(project => `<p class="ctc-spaced">${escape(project.name)} <button type="button" class="ctc-button" data-project-model="${escape(project.id)}">设置项目模型</button></p>`).join('')}</section>` + heading('任务偏好', '按任务难度选择检查深度；每项任务开工前都能调整。') + `<form data-form="settings" class="ctc-surface ctc-reading"><p class="ctc-small">检查深度在项目总览设置默认值，也可在具体任务中单独调整。</p><label class="ctc-field">外观<select name="theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label><p class="ctc-label">范围内的工具和工程检查自动进行。产品方向、计划和超出约定的事项交给你决定。已批准任务保留其原有约定。</p><div class="ctc-actions ctc-spaced"><button class="ctc-button ctc-primary" type="submit">保存偏好</button></div></form>`; }
+const disclosureMemory = new Map();
+function disclosureKeys() {
+  const counts = new Map();
+  return [...main.querySelectorAll('details')].map(node => {
+    const base = node.id || `${node.closest('[data-form]')?.dataset.form ?? ''}:${node.querySelector('summary')?.textContent ?? ''}`;
+    const count = counts.get(base) ?? 0; counts.set(base, count + 1);
+    return [node, `${base}:${count}`];
+  });
+}
+function rememberDisclosures() { if (state.mountedRoute) disclosureMemory.set(state.mountedRoute, new Map(disclosureKeys().map(([node, key]) => [key, node.open]))); }
+function restoreDisclosures(route) { const saved = disclosureMemory.get(route); if (saved) for (const [node, key] of disclosureKeys()) if (saved.has(key)) node.open = saved.get(key); }
+function composerKeydown(event) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229 || event.repeat || !event.target.matches('.ctc-composer textarea[name="message"]')) return;
+  event.preventDefault();
+  const form = event.target.closest('form');
+  if (!state.pending && !state.reading && !state.turns.some(turn => turn.status === 'RUNNING') && event.target.value.trim()) form.requestSubmit();
+}
+function runningStatus(startedAt, progress, active = true) {
+  const age = Math.max(0, Date.now() - Date.parse(progress?.observedAt ?? startedAt));
+  const stale = !progress || age > 90000;
+  const phase = { STARTING: '连接模型', THINKING: '分析与思考', READING_OR_TESTING: '读取资料或使用工具', EDITING: '修改文件', RESPONDING: '整理回复' }[progress?.activity] ?? '等待模型活动记录';
+  return `<div class="ctc-live-status" role="status"><span class="ctc-live-dot ${active && !stale ? 'ctc-live-pulse' : ''}" aria-hidden="true"></span><div><strong>${escape(phase)}</strong><p class="ctc-small">已等待 ${Math.floor(Math.max(0, Date.now() - Date.parse(startedAt)) / 60000)} 分钟 · ${progress ? `最近活动：${escape(timestamp(progress.observedAt))}` : '这次运行尚无活动记录'}${stale ? ' · 暂未收到新活动，不能确认模型仍在推进' : ' · 已收到模型活动'}${!state.online ? ' · 本机连接中断' : ''}</p></div></div>`;
+}
+const modelLabel = selection => selection?.model ? `${selection.model} / ${selection.reasoningEffort ?? '模型默认'}` : '跟随本机 Codex 默认';
+async function loadModels(refresh = false) {
+  try { state.models = await api('models', { refresh }); state.modelsUnavailable = false; }
+  catch { state.modelsUnavailable = true; }
+}
+function modelOptions(selected) { return '<option value="">使用上级／本机默认</option>' + (selected && !state.models?.models.some(model => model.model === selected) ? `<option selected value="${escape(selected)}">${escape(selected)}（当前列表不可用，请重新选择）</option>` : '') + (state.models?.models ?? []).map(model => `<option value="${escape(model.model)}" ${model.model === selected ? 'selected' : ''}>${escape(model.displayName)}</option>`).join(''); }
+function effortOptions(modelId, effort) {
+  const model = state.models?.models.find(item => item.model === modelId);
+  return (model?.efforts ?? []).map(value => `<option value="${escape(value)}" ${value === (effort ?? model.defaultEffort) ? 'selected' : ''}>${escape(value)}</option>`).join('');
+}
+async function openModelSettings(scope = state.scope) {
+  const settings = await api('scope-settings', { scope }); await loadModels(true);
+  if (state.modelsUnavailable) { notify('暂时无法读取模型列表，原模型设置保留。稍后可重新打开设置。', true); return; }
+  const selected = settings.modelSelection;
+  openModal('聊天与规划模型', `<p>当前生效：${escape(modelLabel(settings.effectiveModelSelection ?? state.models.current))}</p><p class="ctc-small">项目设置由下面的聊天继承；也可以为单个任务覆盖。保存后用于下一轮聊天和规划，不改变正在运行的步骤或已批准实施模型。列表从本机 Codex 自动读取。</p><label class="ctc-field">模型<select name="model">${modelOptions(selected?.model)}</select></label><label class="ctc-field">推理等级<select name="effort" ${selected ? '' : 'disabled'}>${effortOptions(selected?.model, selected?.reasoningEffort)}</select></label>`, 'model-settings', '保存模型设置');
+  state.modalContext.scope = scope; state.modalContext.settings = settings;
+}
+async function renderRoute(background = false) {
+  rememberDisclosures();
   const generation = ++state.generation;
   if (modal.open) modal.close(); state.modalContext = null;
   state.reading = true;
@@ -285,10 +331,15 @@ async function renderRoute() {
     else if (type === 'subtask') html = await subtaskPage(id, tab);
     else if (type === 'new-project') html = newProject();
     else if (type === 'new-task') html = await newTask(id, tab === 'overview' ? undefined : tab);
-    else if (type === 'settings') html = settings();
+    else if (type === 'settings') { await loadModels(); html = settings(); }
     else html = empty('页面不存在', '返回工作台继续。', link('工作台', 'home'));
     if (generation !== state.generation) return;
-    main.innerHTML = html; mountGraphLayout(); nav(); void mountSavedImages();
+    const currentRoute = location.hash;
+    const retainedFields = background && state.mountedRoute === currentRoute ? [...main.querySelectorAll('form[data-form]')].flatMap((form, index) => [...form.querySelectorAll('input[name],textarea[name],select[name]')].filter(node => node.type !== 'file').map(node => ({ form: form.dataset.form, index, name: node.name, value: node.value }))) : [];
+    rememberDisclosures();
+    main.innerHTML = html; state.mountedRoute = currentRoute; restoreDisclosures(currentRoute);
+    for (const field of retainedFields) { const form = main.querySelectorAll('form[data-form]')[field.index]; if (form?.dataset.form === field.form) { const node = form.elements.namedItem(field.name); if (node) node.value = field.value; } }
+    mountGraphLayout(); nav(); void mountSavedImages();
     if (type === 'settings') main.querySelector('[name=theme]').value = localStorage.getItem('ctc-theme') ?? 'system';
   } catch (error) {
     if (generation !== state.generation) return;
@@ -303,6 +354,7 @@ function openModal(title, body, action, confirm = '确认') {
   modal.showModal();
 }
 async function act(action) {
+  if (action === 'model-settings') return openModelSettings();
   if (action === 'chat-advance') { const result = await api('task-advance', { scope: state.scope, requestId: requestId('chat-advance') }); state.requestIds.delete('chat-advance'); notify(result.description); await loadWorkspace(); routeTo(result.targetId.startsWith('st_') ? `subtask/${encodeURIComponent(result.targetId)}` : `task/${encodeURIComponent(result.targetId)}/plan`); return; }
   if (action === 'chat-context') { const panel = document.getElementById('chat-context'); panel.open = !panel.open; return; }
   if (action === 'choose-folder' || action === 'inspect-folder') {
@@ -377,6 +429,11 @@ async function confirmModal() {
   if (!modal.open || !captured || captured.generation !== state.generation) { modal.close(); const error = new Error('页面已切换，请根据当前任务重新确认。'); error.code = 'STALE_VIEW'; throw error; }
   const action = state.modalAction; const value = name => modalContent.querySelector(`[name="${name}"]`)?.value;
   for (const control of modalContent.querySelectorAll('input,textarea,select')) if (!control.reportValidity()) return;
+  if (action === 'model-settings') {
+    const modelSelection = value('model') ? { model: value('model'), reasoningEffort: value('effort') } : null;
+    await api('settings-change', { scope: captured.scope, requestId: requestId('model-settings'), expectedRevision: captured.settings.revision, modelSelection });
+    state.requestIds.delete('model-settings'); modal.close(); notify('模型设置已保存，下一轮聊天和规划生效。'); await renderRoute(); return;
+  }
   const record = captured.task; const review = captured.review; const scope = captured.scope; const id = record?.task.id;
   if (action === 'scope-end') { const settings = captured.settings; await api('lifecycle-change', { requestId: requestId('end-scope'), scope: settings.scope, expectedRevision: settings.revision, lifecycle: 'ENDED', endOutcome: value('endOutcome') }); state.requestIds.delete('end-scope'); await loadWorkspace(); }
   if (action === 'context-confirm') { const key = `context:${scopeKey(scope)}`; await api(action, { requestId: requestId(key), scope, title: value('title'), body: value('body') }); state.requestIds.delete(key); }
@@ -409,7 +466,8 @@ async function addImages(files) {
   if (scopeKey(state.scope) === key) document.getElementById('attachment-tray').innerHTML = attachmentTray();
 }
 root.addEventListener('submit', event => { event.preventDefault(); void guarded(() => submit(event.target)); });
-root.addEventListener('click', event => { const remove = event.target.closest('[data-remove-image]'); if (remove) { const key = scopeKey(state.scope); state.attachments.set(key, (state.attachments.get(key) ?? []).filter(asset => asset.id !== remove.dataset.removeImage)); document.getElementById('attachment-tray').innerHTML = attachmentTray(); return; } const image = event.target.closest('[data-view-image]'); if (image) { void guarded(async () => { const asset = await api('asset-get', { scope: state.scope, id: image.dataset.viewImage }); openModal(asset.name, `<img class="ctc-full-image" src="${escape(asset.dataUrl)}" alt="${escape(asset.name)}">`, 'image-close', '关闭'); }); return; } const tree = event.target.closest('[data-tree]'); if (tree) { const memory = treeMemory(); const previous = memory[tree.dataset.tree]; if (previous) { previous.open = !previous.open; localStorage.setItem('ctc-tree', JSON.stringify(memory)); nav(); } return; } if (state.pending && event.target.closest('a')) { event.preventDefault(); return; } const target = event.target.closest('[data-action]'); if (target) void guarded(() => act(target.dataset.action)); });
+root.addEventListener('keydown', composerKeydown);
+root.addEventListener('click', event => { const projectModel = event.target.closest('[data-project-model]'); if (projectModel) { void guarded(() => openModelSettings({ kind: 'PROJECT', id: projectModel.dataset.projectModel })); return; } const remove = event.target.closest('[data-remove-image]'); if (remove) { const key = scopeKey(state.scope); state.attachments.set(key, (state.attachments.get(key) ?? []).filter(asset => asset.id !== remove.dataset.removeImage)); document.getElementById('attachment-tray').innerHTML = attachmentTray(); return; } const image = event.target.closest('[data-view-image]'); if (image) { void guarded(async () => { const asset = await api('asset-get', { scope: state.scope, id: image.dataset.viewImage }); openModal(asset.name, `<img class="ctc-full-image" src="${escape(asset.dataUrl)}" alt="${escape(asset.name)}">`, 'image-close', '关闭'); }); return; } const tree = event.target.closest('[data-tree]'); if (tree) { const memory = treeMemory(); const previous = memory[tree.dataset.tree]; if (previous) { previous.open = !previous.open; localStorage.setItem('ctc-tree', JSON.stringify(memory)); nav(); } return; } if (state.pending && event.target.closest('a')) { event.preventDefault(); return; } const target = event.target.closest('[data-action]'); if (target) void guarded(() => act(target.dataset.action)); });
 root.addEventListener('change', event => { if (event.target.matches('[data-images]')) void guarded(() => addImages([...event.target.files])); });
 root.addEventListener('paste', event => { const files = [...(event.clipboardData?.files ?? [])]; if (files.length && event.target.closest('.ctc-composer')) { event.preventDefault(); void guarded(() => addImages(files)); } });
 root.addEventListener('dragover', event => { if (event.target.closest('.ctc-composer')) event.preventDefault(); });
@@ -419,6 +477,7 @@ root.addEventListener('input', event => {
   if (event.target.name === 'message' && state.scope) state.drafts.set(scopeKey(state.scope), event.target.value);
   const form = event.target.closest('[data-form="direction"]'); if (form && state.draft) state.drafts.set(`brief:${state.draft.id}`, Object.fromEntries(new FormData(form)));
 });
+modal.addEventListener('change', event => { if (event.target.name === 'model') { const effort = modalContent.querySelector('[name=effort]'); effort.disabled = !event.target.value; effort.innerHTML = effortOptions(event.target.value); } });
 modal.addEventListener('click', event => { const action = event.target.closest('[data-modal]')?.dataset.modal; if (action === 'cancel') modal.close(); if (action === 'confirm') void guarded(confirmModal); });
 document.getElementById('refresh').addEventListener('click', () => { void guarded(() => act('refresh')); });
 window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#launch=')) { window.scrollTo(0, 0); void renderRoute(); } });
@@ -433,7 +492,8 @@ async function boot() {
 }
 void boot();
 setInterval(() => {
+  if (state.noticeUntil && Date.now() > state.noticeUntil) { notice.textContent = ''; state.noticeUntil = null; }
   if (document.hidden || state.reading || state.pending || modal.open || main.contains(document.activeElement) && document.activeElement.matches('input,textarea,select')) return;
   const busy = state.turns.some(turn => turn.status === 'RUNNING') || state.task?.planningActive || state.task?.planning?.phase === 'RUNNING' || state.task?.execution?.phase === 'RUNNING' || state.preview?.phase === 'STARTING';
-  if (busy) void renderRoute();
+  if (busy) void renderRoute(true);
 }, 4000);

@@ -1,3 +1,4 @@
+import type { ConsoleModelSelection } from "@codex-task-console/domain";
 import {
   spawn,
   type ChildProcessWithoutNullStreams,
@@ -30,7 +31,7 @@ import type {
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
 import {
-  ProjectIdSchema, BIG_TASK_PLANNING_LIMITS,
+  ConsoleModelSelectionSchema, ProjectIdSchema, BIG_TASK_PLANNING_LIMITS,
   PLANNER_OUTPUT_SCHEMA,
   PLANNER_REVIEW_OUTPUT_SCHEMA,
   ChatThreadIdSchema,
@@ -735,7 +736,7 @@ class TurnEventTracker {
             this.#appendAgentText(requireString(item.text));
           }
         }
-        this.#refreshIdleDeadline(itemType === "commandExecution" ? "READING_OR_TESTING" : itemType === "fileChange" ? "EDITING" : itemType === "agentMessage" ? "RESPONDING" : "THINKING");
+        this.#refreshIdleDeadline(["commandExecution", "webSearch", "imageView", "dynamicToolCall"].includes(itemType) ? "READING_OR_TESTING" : itemType === "fileChange" ? "EDITING" : itemType === "agentMessage" ? "RESPONDING" : "THINKING");
         return true;
       }
       case "item/commandExecution/outputDelta":
@@ -2400,6 +2401,8 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     readonly text: string; readonly outputSchema: JsonValue; readonly tokenLimit: number | null;
     readonly discussion?: true;
     readonly research?: (input: unknown) => object; readonly images?: readonly string[]; readonly repositoryPath?: string;
+    readonly modelSelection?: ConsoleModelSelection | null;
+    readonly onActivity?: (progress: Omit<ExecutionProgress, "observedAt">) => void;
     readonly remainingTimeMs: () => number | null;
     readonly observe: (evidence: ReturnType<typeof emptyEvidence>) => void;
   },
@@ -2477,6 +2480,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
           throw new LiveExecutionError("TURN_INTERRUPTED");
         }
       },
+      planning?.onActivity,
     );
     events = eventTracker;
 
@@ -2554,7 +2558,8 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         ephemeral: true,
         sandbox: "read-only",
         serviceName: CLIENT_INFO.name,
-        ...(planning?.research ? { config: { ...restrictedThreadConfig, features: { shell_tool: true, unified_exec: true, skill_search: false }, web_search: "live" }, developerInstructions: "Investigate with console_read, read-only shell commands, public web search (including opening and finding within pages), and image viewing. Project files must remain unchanged in discussion/planning. Use the project path in context for repository commands. Do not read credentials or unrelated personal files. Browser automation/edits/tests belong in authorized execution. Return workflow requests through the structured actions field; do not attempt to execute them as tools.", dynamicTools: [{ type: "function", ...CONSOLE_RESEARCH_TOOL }] } : {}),
+        ...(planning?.research ? { config: { ...restrictedThreadConfig, ...(planning.modelSelection ? { model_reasoning_effort: planning.modelSelection.reasoningEffort } : {}), features: { shell_tool: true, unified_exec: true, skill_search: false }, web_search: "live" }, developerInstructions: "Investigate with console_read, read-only shell commands, public web search (including opening and finding within pages), and image viewing. Project files must remain unchanged in discussion/planning. Use the project path in context for repository commands. Do not read credentials or unrelated personal files. Browser automation/edits/tests belong in authorized execution. Return workflow requests through the structured actions field; do not attempt to execute them as tools.", dynamicTools: [{ type: "function", ...CONSOLE_RESEARCH_TOOL }] } : {}),
+        ...(planning?.modelSelection ? { model: planning.modelSelection.model } : {}),
       },
       withinDeadline(dependencies.limits.requestTimeoutMs),
       {
@@ -2569,6 +2574,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     );
     const thread = parseThreadStartResult(threadResult, executionWorkspace);
     evidence.providerThread = mapCodexThreadReference(thread.threadId);
+    if (planning?.modelSelection && thread.model !== planning.modelSelection.model) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
     evidence.model = mapCodexModelReference(thread.model);
     planning?.observe(evidence);
     evidence.threadPolicy = {
@@ -2586,6 +2592,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
       "turn/start",
       {
         threadId: thread.threadId,
+        ...(planning?.modelSelection ? { model: planning.modelSelection.model, effort: planning.modelSelection.reasoningEffort } : {}),
         input: [
           {
             type: "text",
@@ -2745,7 +2752,7 @@ function executeConsoleDiscussion(
 }
 
 function discussionResearch(storage: TaskStorage, text: string) {
-  const packet = JSON.parse(text) as { scope?: unknown; projectId?: string };
+  const packet = JSON.parse(text) as { scope?: unknown; projectId?: string; turnId?: string };
   if (!packet.scope || !packet.projectId) return {};
   const scope = ConsoleScopeSchema.parse(packet.scope);
   const workspace = new ConsoleWorkspaceStore(storage);
@@ -2753,7 +2760,12 @@ function discussionResearch(storage: TaskStorage, text: string) {
   const turns = workspace.turns(scope).turns;
   const assets = [...new Map(turns.flatMap(turn => turn.attachments ?? []).map(asset => [asset.id, asset])).values()].slice(-6);
   const project = storage.getProjectById(ProjectIdSchema.parse(packet.projectId))!;
-  return { ...(project.repository.kind === "PATH" ? { repositoryPath: project.repository.path } : {}), research: consoleResearch(storage, packet.projectId, scope), images: assets.map(asset => workspace.entries.asset(packet.projectId!, asset.id).dataUrl) };
+  const modelSelection = workspace.settings(scope).effectiveModelSelection;
+  if (packet.turnId) workspace.recordDiscussionActivity(packet.turnId, { modelSelection });
+  return { modelSelection,
+    onActivity: throttledActivity(progress => { if (packet.turnId) workspace.recordDiscussionActivity(packet.turnId, { progress: { ...progress, observedAt: workspace.now() } }); }),
+    observe: (evidence: ExecutionEvidence) => { if (packet.turnId && evidence.model) workspace.recordDiscussionActivity(packet.turnId, { actualModel: evidence.model.providerModelId }); },
+    ...(project.repository.kind === "PATH" ? { repositoryPath: project.repository.path } : {}), research: consoleResearch(storage, packet.projectId, scope), images: assets.map(asset => workspace.entries.asset(packet.projectId!, asset.id).dataUrl) };
 }
 
 function consolePlanningImages(storage: TaskStorage, bigTaskId: BigTaskId) {
@@ -2761,6 +2773,60 @@ function consolePlanningImages(storage: TaskStorage, bigTaskId: BigTaskId) {
   const projectId = workspace.resolveScope(scope).projectId;
   const assets = [...new Map(workspace.roleContext(scope, { includeSubtasks: true }).turns.flatMap(turn => turn.attachments).map(asset => [asset.id, asset])).values()].slice(0, 6);
   return assets.map(asset => workspace.entries.asset(projectId, asset.id).dataUrl);
+}
+
+function throttledActivity(save: (progress: Omit<ExecutionProgress, "observedAt">) => void) {
+  let previous = -Infinity; let activity = "";
+  return (progress: Omit<ExecutionProgress, "observedAt">) => {
+    if (progress.activity === activity && performance.now() - previous < 2000) return;
+    previous = performance.now(); activity = progress.activity; save(progress);
+  };
+}
+
+export interface ConsoleModelCatalog {
+  models: { model: string; displayName: string; efforts: string[]; defaultEffort: string; isDefault: boolean }[];
+  current: { model: string | null; reasoningEffort: string | null };
+}
+export function readConsoleModelCatalog(): Promise<ConsoleModelCatalog> { return readConsoleModelCatalogWithDependencies(productionDependencies()); }
+export function readConsoleModelCatalogForTest(dependencies: LiveExecutionDependencies): Promise<ConsoleModelCatalog> {
+  if (process.env.NODE_ENV !== "test") throw new Error("INVALID_INPUT");
+  return readConsoleModelCatalogWithDependencies(dependencies);
+}
+async function readConsoleModelCatalogWithDependencies(dependencies: LiveExecutionDependencies): Promise<ConsoleModelCatalog> {
+  const runtime = dependencies.resolveRuntime(); assertExactActiveRuntime(runtime);
+  const cwd = dependencies.createWorkspace(); assertDisposableWorkspace(cwd);
+  let client: JsonlAppServerClient | undefined;
+  try {
+    const diagnostics = emptyDiagnostics();
+    const child = dependencies.spawnAppServer(runtime.canonicalExecutablePath, ownedWriteAppServerArguments(), {
+      cwd, env: buildLiveCodexChildEnvironment(dependencies.sourceEnvironment, dependencies.normalHomeDirectory, cwd), shell: false, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+    });
+    client = new JsonlAppServerClient(child, dependencies.limits, diagnostics, new TurnEventTracker(diagnostics, 1024), true);
+    await client.waitForSpawn(dependencies.limits.startupTimeoutMs);
+    validateInitializeResult(await client.request(1, "initialize", { clientInfo: CLIENT_INFO, capabilities: null }, dependencies.limits.requestTimeoutMs));
+    client.notify("initialized");
+    const rawConfig = requireRecord(requireRecord(await client.request(2, "config/read", { cwd, includeLayers: false }, dependencies.limits.requestTimeoutMs)).config);
+    const models: ConsoleModelCatalog["models"] = []; let cursor: string | null = null;
+    for (let page = 0; page < 10; page++) {
+      const response = requireRecord(await client.request(10 + page, "model/list", { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, dependencies.limits.requestTimeoutMs));
+      if (!Array.isArray(response.data)) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      for (const value of response.data) {
+        const model = requireRecord(value);
+        if (model.hidden === true) continue;
+        const id = requireBoundedString(model.model, 200);
+        const efforts = Array.isArray(model.supportedReasoningEfforts) ? model.supportedReasoningEfforts.map(value => requireBoundedString(requireRecord(value).reasoningEffort, 32)) : [];
+        const defaultEffort = requireBoundedString(model.defaultReasoningEffort, 32);
+        for (const effort of [...efforts, defaultEffort]) ConsoleModelSelectionSchema.parse({ model: id, reasoningEffort: effort });
+        if (!models.some(item => item.model === id)) models.push({ model: id, displayName: requireBoundedString(model.displayName, 200), efforts, defaultEffort, isDefault: model.isDefault === true });
+      }
+      cursor = response.nextCursor == null ? null : requireBoundedString(response.nextCursor, 1024);
+      if (!cursor) break;
+      if (page === 9) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    }
+    const current = { model: typeof rawConfig.model === "string" ? requireBoundedString(rawConfig.model, 200) : models.find(model => model.isDefault)?.model ?? null,
+      reasoningEffort: typeof rawConfig.model_reasoning_effort === "string" ? requireBoundedString(rawConfig.model_reasoning_effort, 32) : null };
+    return { models, current };
+  } finally { if (client) await client.shutdown(); dependencies.removeWorkspace(cwd); }
 }
 
 function productionDependencies(): LiveExecutionDependencies {
@@ -2797,7 +2863,10 @@ async function executeBigTaskPlanningWithDependencies(
   const run = planning.claim(bigTaskId);
   if (run.status !== "RUNNING") return planning.inspect(bigTaskId);
   try {
+    const modelSelection = new ConsoleWorkspaceStore(storage).settings({ kind: "BIG_TASK", id: bigTaskId }).effectiveModelSelection;
+    planning.recordProgress(bigTaskId, run.sequence, { modelSelection });
     const result = await executeSingleSubtaskLiveCodexWithDependencies(storage, null, "STANDARD_SUBTASK_EXECUTION", dependencies, {
+      modelSelection, onActivity: throttledActivity(progress => planning.recordProgress(bigTaskId, run.sequence, { progress: { ...progress, observedAt: new ConsoleWorkspaceStore(storage).now() } })),
       text: run.inputText,
       outputSchema: (run.role === "PLANNER" ? PLANNER_OUTPUT_SCHEMA : PLANNER_REVIEW_OUTPUT_SCHEMA) as JsonValue,
       tokenLimit: before.budgetException === undefined && planning.readIntake(bigTaskId).intake.consoleWorkflow?.budgetMode !== "MEASURE" ? before.tokenLimit - before.totalTokens : null,

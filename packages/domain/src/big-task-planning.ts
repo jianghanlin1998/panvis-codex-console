@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { ConsoleWorkflowPreferencesSchema } from "./console-workspace.js";
+import { ExecutionProgressSchema } from "./execution-progress.js";
+import { ConsoleModelSelectionSchema, ConsoleWorkflowPreferencesSchema } from "./console-workspace.js";
 
 import { ContextItemSchema } from "./context.js";
 import { BigTaskIdSchema } from "./identifiers.js";
@@ -141,6 +142,7 @@ export const PlanningRunRecordSchema = z.object({
   model: ProviderModelReferenceSchema.nullable(),
   normalizedUsage: NormalizedUsageSchema.nullable(),
   providerDiagnostics: PlanningProviderDiagnosticsSchema.optional(),
+  progress: ExecutionProgressSchema.optional(), modelSelection: ConsoleModelSelectionSchema.nullable().optional(),
   stopReason: z.enum(["PRODUCT_QUESTION", "ENGINEERING_PREPARATION", "USER_PAUSED", "REVIEW_ESCALATED", "PLAN_REVIEW_EXHAUSTED", "PROVIDER_FAILED", "INVALID_OUTPUT", "USAGE_UNKNOWN", "BUDGET_BLOCKED", "TIME_LIMIT_REACHED", "CONTEXT_CHANGED", "CONTEXT_LIMIT", "INTERRUPTED"]).nullable(),
   questions: texts,
 }).strict().superRefine((value, context) => {

@@ -15,11 +15,11 @@ it("returns bounded status and complete paged history even when full bindings ex
   f.governed.authorizeManualStart(SUBTASK_IDS[0]!);
   f.governed.prepareNextRole(BIG_TASK_ID);
   const original = f.governed.inspectBigTask(BIG_TASK_ID);
-  const binding = "large-synthetic-canonical-binding".repeat(4_000);
+  const binding = "large-synthetic-canonical-binding".repeat(40_000);
   const status = { ...original, candidateBinding: binding,
     workflows: original.workflows.map(w => ({ ...w, candidateBinding: binding,
       transitions: w.transitions.map(t => ({ ...t, candidateBinding: binding })) })) };
-  expect(Buffer.byteLength(JSON.stringify(status), "utf8")).toBeGreaterThan(65_536);
+  expect(Buffer.byteLength(JSON.stringify(status), "utf8")).toBeGreaterThan(1024 * 1024);
   const token = "e".repeat(64);
   const unicodeId = "bt_中文看板🚀";
   const inspected: string[] = [];
