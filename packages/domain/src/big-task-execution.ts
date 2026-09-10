@@ -19,6 +19,18 @@ export const BigTaskExecutionApprovalSchema = z.object({
 export type BigTaskExecutionApproval = z.infer<typeof BigTaskExecutionApprovalSchema>;
 export type BigTaskExecutionLimits = z.infer<typeof BigTaskExecutionLimitsSchema>;
 
+export const BigTaskExecutionAdjustmentValuesSchema = z.object({
+  totalTokenLimit: z.number().int().min(1).max(100_000_000),
+  roleCallLimit: z.number().int().min(1).max(10_000),
+  budgetMode: z.enum(["MEASURE", "HARD"]),
+  recoveryAttemptLimit: z.number().int().min(1).max(100),
+}).strict();
+export const BigTaskExecutionAdjustmentSchema = z.object({
+  bigTaskId: BigTaskIdSchema, planDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+  expectedRevision: z.number().int().nonnegative(), values: BigTaskExecutionAdjustmentValuesSchema,
+}).strict();
+export type BigTaskExecutionAdjustment = z.infer<typeof BigTaskExecutionAdjustmentSchema>;
+
 /** Explicit one-time recovery of a known failed implementation; never a budget reset. */
 export const BigTaskExecutionRecoverySchema = z.object({
   bigTaskId: BigTaskIdSchema,
@@ -119,7 +131,8 @@ export const BigTaskExecutionStatusSchema = z.object({
     role: z.string().min(1).max(32), usageState: z.literal("IN_PROGRESS"), progress: ExecutionProgressSchema.nullable() }).strict().optional(),
   recovery: recovery.optional(),
   totalBudgetMode: z.literal("WARNING_ONLY").optional(),
-  additionalRecoveries: z.array(recovery).min(1).max(23).optional(),
+  additionalRecoveries: z.array(recovery).min(1).optional(),
+  limitAdjustment: z.object({revision:z.number().int().positive(),values:BigTaskExecutionAdjustmentValuesSchema}).strict().optional(),
   windowRenewal: windowRenewal.optional(),
   additionalWindowRenewals: z.array(windowRenewal).min(1).optional(),
   qaRecovery: qaRecovery.optional(), unacknowledgedUnknownUsage: z.boolean().optional(),
@@ -130,11 +143,11 @@ export const BigTaskExecutionStatusSchema = z.object({
 }).strict().refine(v => v.roleCalls <= v.limits.roleCallLimit && v.usageComplete === (v.activeRoleCount === 0 && !v.unknownCompletedUsage) && new Set(v.integratedSubtaskIds).size === v.integratedSubtaskIds.length &&
   (v.activeRole === undefined || v.activeRoleCount === 1) &&
   (v.usageBreakdown === undefined || v.usageBreakdown.completedRuns + v.activeRoleCount <= v.roleCalls) &&
-  (v.totalBudgetMode === "WARNING_ONLY") === (v.limits.budgetMode === "MEASURE" || [v.recovery, ...(v.additionalRecoveries ?? [])].some(r => r?.totalBudgetMode === "WARNING_ONLY")) &&
+  (v.totalBudgetMode === "WARNING_ONLY") === (v.limitAdjustment ? v.limitAdjustment.values.budgetMode === "MEASURE" : v.limits.budgetMode === "MEASURE" || [v.recovery, ...(v.additionalRecoveries ?? [])].some(r => r?.totalBudgetMode === "WARNING_ONLY")) &&
   (v.additionalRecoveries === undefined || v.recovery !== undefined &&
     new Set([v.recovery, ...v.additionalRecoveries].map(r => r.failedAuthorizationId)).size === v.additionalRecoveries.length + 1) &&
   (v.qaRecovery === undefined ? (v.limits.budgetMode === "MEASURE" ? v.unacknowledgedUnknownUsage !== undefined : v.unacknowledgedUnknownUsage === undefined) : v.recovery !== undefined && v.unknownCompletedUsage &&
-    v.unacknowledgedUnknownUsage !== undefined && v.limits.totalTokenLimit === v.qaRecovery.knownTokenLimit) &&
+    v.unacknowledgedUnknownUsage !== undefined && (v.limitAdjustment !== undefined || v.limits.totalTokenLimit === v.qaRecovery.knownTokenLimit)) &&
   (() => {
     if (v.phase === "APPROVED") return v.startedAt === null && v.expiresAt === null && v.roleCalls === 0 &&
       v.windowRenewal === undefined && v.additionalWindowRenewals === undefined && v.qaRecovery === undefined;

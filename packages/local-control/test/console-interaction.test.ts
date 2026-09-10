@@ -53,7 +53,8 @@ describe("Task progress visibility", () => {
   it("explains exhausted recovery and separates result errors from budget caps", () => {
     const {view} = harness();
     const execution={lastRoleFailure:{authorizationId:"retry",phase:"RESULT",failureCode:"GOVERNED_AUTHORITY_REQUIRED"},additionalRecoveries:[{authorizationId:"retry"}]};
-    expect(view.executionRecoveryBlocker(execution)).toContain("恢复仍然失败");
+    expect(view.executionRecoveryBlocker(execution)).toContain("调整限制并继续");
+    expect(view.executionRecoveryBlocker({...execution,limitAdjustment:{values:{recoveryAttemptLimit:2}}})).toBeNull();
     const html=view.executionProblemHtml(execution);
     for(const title of ["为什么停下","错在哪一步","已保留什么","下一步"]) expect(html).toContain(title);
     expect(html).toContain("旧记录没有保留具体检查项");

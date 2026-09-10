@@ -728,9 +728,11 @@ const parseRoleAuthorizationRow = (
     "FRESH_INDEPENDENT_QA",
     "FOCUSED_RE_QA",
   ].find((value) => value === row.context_profile);
+  let expectedId = stableId("gra", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence, row.repair_cycles_used, row.role);
+  for(let i=0;i<Math.min(row.recovery_attempt,100);i++) expectedId=recoveryAuthorizationId(expectedId);
   if (
-    (row.recovery_attempt !== 0 && row.recovery_attempt !== 1) ||
-    row.authorization_id !== (row.recovery_attempt === 1 ? recoveryAuthorizationId(stableId("gra", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence, row.repair_cycles_used, row.role)) : stableId("gra", row.project_id, row.big_task_id, row.plan_revision, row.candidate_binding, row.subtask_id, row.workflow_sequence, row.repair_cycles_used, row.role)) ||
+    (!Number.isSafeInteger(row.recovery_attempt) || row.recovery_attempt<0 || row.recovery_attempt>100) ||
+    row.authorization_id !== expectedId ||
     !/^gra_[0-9a-f]{48}$/u.test(row.authorization_id) ||
     !/^gdr_[0-9a-f]{48}$/u.test(row.dispatch_receipt_id) ||
     !subtaskId.success ||
@@ -1109,7 +1111,7 @@ export class GovernedExecutionStore {
     const authorization = this.getRoleAuthorization(String(rows[0]!.authorization_id))!;
     const run = this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(rows[0]!.execution_run_id));
     this.#assertRoleAuthorizationCurrent(authorization);
-    if (this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt !== 0 || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
+    if (this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt as number >= (state.limitAdjustment?.values.recoveryAttemptLimit ?? 1) || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
       run.normalizedUsage?.totalTokens === undefined || this.#getRoleResult(authorization.authorizationId) !== null) throw conflict("The failed role cannot be recovered.");
     const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
     if (worktree.ownership.id !== authorization.worktreeOwnershipId || worktree.currentHeadSha !== authorization.candidateSha) throw conflict("Recovery candidate changed.");
@@ -1579,7 +1581,7 @@ export class GovernedExecutionStore {
     const row = this.#access().sqlite
       .prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id = ?")
       .get(authorizationId) as RoleAuthorizationRow | undefined;
-    if (row?.recovery_attempt === 1) {
+    if (row !== undefined && row.recovery_attempt > 0) {
       const state = new BigTaskExecutionStore(this.#storage).inspect(row.big_task_id as BigTaskId);
       if (![...executionRecoveries(state).map(r => r.authorizationId), state.qaRecovery?.authorizationId].includes(row.authorization_id)) throw malformed();
     }
@@ -2998,7 +3000,7 @@ export class GovernedExecutionStore {
       candidateSha: authorization.candidateSha,
       worktreeOwnershipId: authorization.worktreeOwnershipId,
       writeEnabled: authorization.writeEnabled,
-      ...(this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt === 1 ? { recovery: authorization.role === "FRESH_QA"
+      ...(this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt as number > 0 ? { recovery: authorization.role === "FRESH_QA"
         ? "Perform fresh independent QA of this exact candidate against its contract. The previous call produced no verdict. Inspect the repository and run the required checks using the read-only sandbox; return your own structured result."
         : "Continue the current role from its preserved work. The prior run stopped without an accepted result. Inspect existing changes and tests, complete only the remaining work for this role, and return a fresh structured result. Do not redo preserved work unnecessarily or claim prior QA passed." } : {}),
       instruction: isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId)
@@ -3673,7 +3675,7 @@ export class GovernedExecutionStore {
       .all(bigTaskId) as unknown as readonly RoleAuthorizationRow[];
     for (const row of rows) {
       const authorization = parseRoleAuthorizationRow(row);
-      if (row.recovery_attempt === 1) {
+      if (row.recovery_attempt > 0) {
         const state = new BigTaskExecutionStore(this.#storage).inspect(bigTaskId);
         if (![...executionRecoveries(state).map(r => r.authorizationId), state.qaRecovery?.authorizationId].includes(authorization.authorizationId)) throw malformed();
       }

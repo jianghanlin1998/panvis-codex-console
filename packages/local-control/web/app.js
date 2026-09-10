@@ -231,14 +231,20 @@ function blockersHtml(record) {
   const title = engineering ? '计划准备遇到问题' : reason === 'USER_PAUSED' ? '任务已暂停' : execution ? '执行需要处理' : '准备下一步';
   const preparationFailure = execution?.stopReason === 'LOCAL_OPERATION_FAILED' && ['CHECK_LIMITS', 'PREPARE_ROLE'].includes(execution.lastControlFailure?.phase);
   const explanation = preparationFailure ? 'Console 在准备下一步时中断，已保留计划和完成的工作。修复后可从保存的进度重试；不会重新规划或重置用量。' : engineering ? '需要继续核对代码、现有成果或工具能力。实施尚未开始；这些调查由 Console 处理，你可以让它重新准备计划。' : execution ? executionFailureExplanation(execution) : reasons[reason] ?? '查看当前记录后继续。';
-  return `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>${title}</h2>${execution?.lastRoleFailure ? executionProblemHtml(execution) : `<p class="ctc-spaced">${escape(explanation)}</p>`}${!engineering ? (planning?.questions ?? []).map(question => `<p class="ctc-spaced">${escape(question)}</p>`).join('') : ''}<div class="ctc-actions ctc-spaced">${!execution && planning?.phase === 'HUMAN_REQUIRED' ? button('重新调查并准备计划', 'plan-retry', true) : ''}${link('在聊天里讨论', `task/${encodeURIComponent(record.task.id)}/discussion`)}${execution && record.canRenewWindow ? button('调整续跑时间', 'renew-dialog') : ''}${preparationFailure && record.canResume ? button('重试并继续执行', 'start', true) : execution?.lastRoleFailure && ['GOVERNED_BLOCKED','TOKEN_LIMIT_REACHED','TIME_LIMIT_REACHED','USAGE_UNKNOWN'].includes(execution.stopReason) ? button('查看原因与处理方式', execution.stopReason === 'USAGE_UNKNOWN' ? 'qa-recovery-review' : 'recovery-review') : ''}</div><details class="ctc-spaced"><summary>查看工程记录</summary><p>${escape((planning?.questions ?? []).join('\n'))}</p>${execution?.lastRoleFailure ? `<p>${escape(execution.lastRoleFailure.phase)} · ${escape(execution.lastRoleFailure.failureCode)}</p>` : ''}${execution?.lastControlFailure ? `<p>${escape(execution.lastControlFailure.phase)} · ${escape(execution.lastControlFailure.failureCode)}</p>` : ''}</details></section>`;
+  return `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>${title}</h2>${execution?.lastRoleFailure ? executionProblemHtml(execution) : `<p class="ctc-spaced">${escape(explanation)}</p>`}${!engineering ? (planning?.questions ?? []).map(question => `<p class="ctc-spaced">${escape(question)}</p>`).join('') : ''}<div class="ctc-actions ctc-spaced">${!execution && planning?.phase === 'HUMAN_REQUIRED' ? button('重新调查并准备计划', 'plan-retry', true) : ''}${link('在聊天里讨论', `task/${encodeURIComponent(record.task.id)}/discussion`)}${execution && ['PAUSED','HUMAN_REQUIRED'].includes(execution.phase) && execution.activeRoleCount === 0 ? button('调整限制并继续', 'adjust-limits', true) : ''}${execution && record.canRenewWindow ? button('调整续跑时间', 'renew-dialog') : ''}${preparationFailure && record.canResume ? button('重试并继续执行', 'start', true) : execution?.lastRoleFailure && ['GOVERNED_BLOCKED','TOKEN_LIMIT_REACHED','TIME_LIMIT_REACHED','USAGE_UNKNOWN'].includes(execution.stopReason) ? button('查看原因与处理方式', execution.stopReason === 'USAGE_UNKNOWN' ? 'qa-recovery-review' : 'recovery-review') : ''}</div><details class="ctc-spaced"><summary>查看工程记录</summary><p>${escape((planning?.questions ?? []).join('\n'))}</p>${execution?.lastRoleFailure ? `<p>${escape(execution.lastRoleFailure.phase)} · ${escape(execution.lastRoleFailure.failureCode)}</p>` : ''}${execution?.lastControlFailure ? `<p>${escape(execution.lastControlFailure.phase)} · ${escape(execution.lastControlFailure.failureCode)}</p>` : ''}</details></section>`;
 }
 function activityName(activity) {
   return { STARTING: '连接模型', THINKING: '分析与思考', READING_OR_TESTING: '读取资料或使用工具', EDITING: '修改文件', RESPONDING: '整理结果' }[activity] ?? '等待活动记录';
 }
+function recoveryAttemptsUsed(execution) {
+  const records=[execution?.recovery,...(execution?.additionalRecoveries??[]),execution?.qaRecovery].filter(Boolean);
+  let id=execution?.lastRoleFailure?.authorizationId,count=0;
+  for (let i=0;i<records.length;i++) {const entry=records.find(item=>item.authorizationId===id);if(!entry) break;count++;id=entry.failedAuthorizationId;}
+  return count;
+}
 function executionRecoveryBlocker(execution) {
   if (!execution) return '尚未取得执行状态。';
-  if (!execution.latestRole?.outcome && [execution.recovery, ...(execution.additionalRecoveries ?? []), execution.qaRecovery].some(item => item && item.authorizationId === execution.lastRoleFailure?.authorizationId)) return '这一步已经恢复过一次，恢复仍然失败。需要先修复失败原因；当前不能再次使用同一个恢复入口。';
+  if (!execution.latestRole?.outcome && recoveryAttemptsUsed(execution) >= (execution.limitAdjustment?.values.recoveryAttemptLimit ?? 1)) return '这一步已达到当前恢复次数上限。可以点击「调整限制并继续」增加恢复机会，从保留的工作重试；历史失败与 QA 结果不会清除。';
   if (execution.expiresAt && Date.parse(execution.expiresAt) <= Date.now()) return '本次执行时间窗口已经结束。请在任务页调整续跑时间后再检查恢复条件。';
   return null;
 }
@@ -262,6 +268,16 @@ function executionProblemHtml(execution) {
   const stage = {BEFORE_TURN:'准备模型步骤', TURN:'模型执行中', RESULT:'模型结束后：接收结果'}[failure?.phase] ?? '任务协调';
   const next = executionRecoveryBlocker(execution) ?? (failure?.phase === 'RESULT' ? '先核对结果接收错误；仅刷新不会恢复执行。确认失败原因已处理后，再使用恢复入口。' : '核对当前错误和执行记录，再选择对应的恢复操作。');
   return facts([['为什么停下', executionFailureExplanation(execution)], ['错在哪一步', stage], ['已保留什么', '原计划、已有执行记录和工作区保留；失败步骤尚未作为通过结果交付。'], ['下一步', next]]) + (failure ? `<details class="ctc-spaced"><summary>诊断编号与时间</summary><p>${escape(failure.failureCode)} · ${escape(timestamp(failure.at))}</p><p>${escape(failure.authorizationId)}</p></details>` : '');
+}
+function adjustmentForm(execution) {
+  const expired=execution.expiresAt && Date.parse(execution.expiresAt)<=Date.now();
+  return `<p>当前已用 ${num(execution.knownTokens)} token，已调用 ${num(execution.roleCalls)} 个模型步骤。保留所有历史，调整后从未完成的步骤继续。</p>
+    ${field('recoveryLimit','同一步最多恢复次数（已用 '+recoveryAttemptsUsed(execution)+' 次）',Math.max(execution.limitAdjustment?.values.recoveryAttemptLimit??1,recoveryAttemptsUsed(execution)+1),{type:'number',min:1,max:100})}
+    <label class="ctc-field">token 控制<select name="budgetMode"><option value="MEASURE" ${execution.totalBudgetMode==='WARNING_ONLY'?'selected':''}>只统计和提醒</option><option value="HARD" ${execution.totalBudgetMode!=='WARNING_ONLY'?'selected':''}>达到上限后暂停</option></select></label>
+    ${field('tokens','累计 token 参考／上限',execution.limits.totalTokenLimit,{type:'number',min:1,max:100000000})}
+    ${field('calls','累计模型步骤上限',Math.max(execution.limits.roleCallLimit,execution.roleCalls+1),{type:'number',min:Math.max(1,execution.roleCalls),max:10000})}
+    ${expired?field('minutes','时间已到：新增续跑时间（分钟）',180,{type:'number',min:1,max:180}):`<p>本次时间截止：${escape(timestamp(execution.expiresAt))}。到期后可在这里延长。</p>`}
+    <p>这里调整执行限制；实际 QA 结论和已用修复轮数保留。模型重试使用 Sol/xhigh。</p>`;
 }
 function taskProgressHtml(record) {
   const execution = record.execution;
@@ -462,10 +478,11 @@ async function act(action) {
     const prefs = state.review.consoleWorkflow;
     openModal('确认计划并开始实施', `<p>按刚才查看的计划实施，完成约定的检查与修复；最终产品验收仍由你决定。</p><details><summary>时长和用量安排</summary>${prefs ? `<label class="ctc-field">用量控制<select name="budgetMode"><option value="MEASURE" ${prefs.budgetMode === 'MEASURE' ? 'selected' : ''}>只统计和提醒</option><option value="HARD" ${prefs.budgetMode === 'HARD' ? 'selected' : ''}>达到预算后暂停</option></select></label>` : ''}${field('minutes', '本次运行窗口（分钟）', prefs?.durationMinutes ?? 180, { type: 'number', min: 1, max: prefs ? 1440 : 180 })}${field('tokens', state.review.consoleWorkflow ? '用量参考／预算' : '本次 token 上限', prefs?.executionTokenLimit ?? 2000000, { type: 'number', min: 1, max: prefs ? 100000000 : 2880000 })}${prefs ? '<input type="hidden" name="calls" value="10000">' : field('calls', '最多模型步骤', 96, { type: 'number', min: 1, max: 192 })}</details>${state.review.consoleReviewPolicy ? '<input type="hidden" name="repairs" value="2"><p>按各小任务选择执行：独立 QA 第 2 次失败停止；加固与 QA 第 3 次失败停止。</p>' : '<label class="ctc-field">QA 未通过后的修复轮数<select name="repairs"><option value="1">最多一轮</option><option value="2" selected>最多两轮</option></select></label>'}${state.review.executionIssues?.length ? `<p>当前计划仍有执行问题，请先处理：${escape(JSON.stringify(state.review.executionIssues))}</p>` : ''}`, 'execution-approve', '批准并开始');
   }
+  if (action === 'adjust-limits') { openModal('调整限制并继续', adjustmentForm(state.task.execution), 'adjust-and-continue', '保存调整并继续'); return; }
   if (action === 'recovery-review') {
     const execution = state.task?.execution;
     state.review = null;
-    openModal('执行中断说明', executionProblemHtml(execution), 'image-close', '关闭');
+    openModal('执行中断说明', executionProblemHtml(execution) + button('调整限制并继续', 'adjust-limits', true), 'image-close', '关闭');
     if (executionRecoveryBlocker(execution)) return;
     const generation = state.generation;
     try {
@@ -529,6 +546,23 @@ async function confirmModal() {
   if (action === 'context-confirm') { const key = `context:${scopeKey(scope)}`; await api(action, { requestId: requestId(key), scope, title: value('title'), body: value('body') }); state.requestIds.delete(key); }
   if (action === 'execution-approve') { await api(action, { bigTaskId: id, planDigest: review.planDigest, repositoryHeadSha: review.repositoryHeadSha,
     limits: { durationMilliseconds: Number(value('minutes')) * 60_000, totalTokenLimit: Number(value('tokens')), roleCallLimit: Number(value('calls')), repairCycleLimit: Number(value('repairs')), ...(review.consoleWorkflow ? { budgetMode: value('budgetMode') || review.consoleWorkflow.budgetMode } : {}) } }); await api('execution-start', { bigTaskId: id }); }
+  if (action === 'adjust-and-continue') {
+    try {
+      let execution=await api('execution-adjust-limits',{bigTaskId:id,planDigest:record.execution.planDigest,expectedRevision:record.execution.limitAdjustment?.revision??0,
+        values:{totalTokenLimit:Number(value('tokens')),roleCallLimit:Number(value('calls')),budgetMode:value('budgetMode'),recoveryAttemptLimit:Number(value('recoveryLimit'))}});
+      // Each successful amendment is durable; use its returned revision on another click after a later failure.
+      record.execution=execution;
+      if (value('minutes')) {execution=await api('execution-renew-window',{bigTaskId:id,planDigest:execution.planDigest,previousExpiresAt:execution.expiresAt,durationMilliseconds:Number(value('minutes'))*60000});record.execution=execution;}
+      if (execution.phase==='HUMAN_REQUIRED' && execution.lastRoleFailure) {
+        const retry=await api('execution-recovery-review',{bigTaskId:id});
+        record.execution=await api('execution-recover',retry.request);
+      }
+      await api('execution-start',{bigTaskId:id});
+      modal.close();notify('调整已保存，已从保留的进度继续。');await renderRoute();return;
+    } catch(error) {
+      openModal('调整后的执行状态', `<p role="alert">${escape(error.message)}。已保存的调整保留；没有把失败标为通过。</p><p>若任务仍因工程问题停下，请查看最新执行原因；无需重复创建任务。</p>`+button('重新查看调整', 'adjust-limits'), 'image-close','关闭');return;
+    }
+  }
   if (action === 'execution-recover') { await api(action, review.request); await api('execution-start', { bigTaskId: id }); }
   if (action === 'execution-recover-qa') { await api(action, review.request); await api('execution-start', { bigTaskId: id }); }
   if (action === 'execution-renew-window') await api(action, { bigTaskId: id, planDigest: record.execution.planDigest, previousExpiresAt: record.execution.expiresAt, durationMilliseconds: Number(value('minutes')) * 60_000 });
@@ -568,7 +602,7 @@ root.addEventListener('input', event => {
   const form = event.target.closest('[data-form="direction"]'); if (form && state.draft) state.drafts.set(`brief:${state.draft.id}`, Object.fromEntries(new FormData(form)));
 });
 modal.addEventListener('change', event => { if (event.target.name === 'model') { const effort = modalContent.querySelector('[name=effort]'); effort.disabled = !event.target.value; effort.innerHTML = effortOptions(event.target.value); } });
-modal.addEventListener('click', event => { const action = event.target.closest('[data-modal]')?.dataset.modal; if (action === 'cancel') modal.close(); if (action === 'confirm') void guarded(confirmModal); });
+modal.addEventListener('click', event => { const target=event.target.closest('[data-action]'); if(target) {void guarded(()=>act(target.dataset.action));return;} const action = event.target.closest('[data-modal]')?.dataset.modal; if (action === 'cancel') modal.close(); if (action === 'confirm') void guarded(confirmModal); });
 document.getElementById('refresh').addEventListener('click', () => { void guarded(() => act('refresh')); });
 window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#launch=')) { window.scrollTo(0, 0); void renderRoute(); } });
 const theme = localStorage.getItem('ctc-theme'); if (theme && theme !== 'system') document.documentElement.style.colorScheme = theme;

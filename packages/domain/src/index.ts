@@ -358,8 +358,8 @@ export type {
   PlanningRunRecord,
 } from "./big-task-planning.js";
 
-export { BigTaskExecutionCloseoutSchema, BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskRoleFailureSchema, GovernedExecutionFailureCodeSchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, executionTokenLimitReached, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
-export type { BigTaskExecutionCloseout, BigTaskControlFailure, BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskExecutionLimits } from "./big-task-execution.js";
+export { BigTaskExecutionAdjustmentSchema, BigTaskExecutionCloseoutSchema, BigTaskQaRecoverySchema, BigTaskQaRecoveryReviewSchema, BigTaskRoleFailureSchema, GovernedExecutionFailureCodeSchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, executionTokenLimitReached, BigTaskExecutionWindowRenewalSchema, BigTaskExecutionRecoverySchema, BigTaskExecutionRecoveryReviewSchema, BigTaskExecutionApprovalSchema, BigTaskExecutionLimitsSchema, BigTaskExecutionAcceptanceSchema, BigTaskExecutionStatusSchema } from "./big-task-execution.js";
+export type { BigTaskExecutionAdjustment, BigTaskExecutionCloseout, BigTaskControlFailure, BigTaskQaRecovery, BigTaskRoleFailure, BigTaskExecutionWindowRenewal, BigTaskExecutionRecovery, BigTaskExecutionApproval, BigTaskExecutionLimits } from "./big-task-execution.js";
 export { BigTaskControlFailureSchema } from "./big-task-execution.js";
 
 export { ExecutionProgressSchema, ExecutionUsageBreakdownSchema } from "./execution-progress.js";

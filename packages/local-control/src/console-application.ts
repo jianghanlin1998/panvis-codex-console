@@ -255,6 +255,7 @@ export class ConsoleApplication {
         materialized: record!.materialized, parent: this.storage.getBigTaskById(task.bigTaskId), context: this.store.context({ kind: "SUBTASK", id }), settings: this.store.settings({ kind: "SUBTASK", id }), inspection: record!.materialized ? await this.service.inspectSubtask(id) : null, workflow: record!.materialized ? this.storage.getDurableWorkflowControlView(id) : null,
         checkpoints: record!.materialized ? this.storage.listSubtaskImplementationCheckpoints(id).slice(-20) : [] };
     }
+    if (action === "execution-adjust-limits") return new BigTaskExecutionStore(this.storage).adjustLimits(input);
     if (action === "execution-approve") return this.service.approveExecution!(input);
     if (action === "execution-recover") return this.service.recoverExecution!(input);
     if (action === "execution-recover-qa") return this.service.recoverQaExecution!(input);
