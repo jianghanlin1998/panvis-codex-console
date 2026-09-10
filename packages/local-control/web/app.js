@@ -78,7 +78,7 @@ function nav() {
 function lifecycleHtml(settings, execution = null) {
   if (!settings) return '';
   const lifecycle = settings.lifecycle ?? (settings.projectClosed || ['CLOSED','ACCEPTED'].includes(execution?.phase) ? 'ENDED' : 'ACTIVE');
-  return `<div class="ctc-controlbar"><span>${pill(lifecycle === 'ENDED' ? '已结束' : lifecycle === 'PAUSED' ? '已暂停' : execution?.phase === 'RUNNING' ? '正在执行' : '已打开', lifecycle === 'ACTIVE' ? 'ctc-good' : '')}${execution?.activeRoleCount && lifecycle !== 'ACTIVE' ? ' 当前步骤完成后暂停，不再启动下一步…' : ''}</span><div class="ctc-actions">${lifecycle === 'ACTIVE' ? button('暂停', 'scope-pause') + button('结束…', 'scope-end') : button(lifecycle === 'ENDED' ? '重新打开' : '继续', 'scope-resume', true, execution?.activeRoleCount ? 'disabled' : '')}</div></div>`;
+  return `<div class="ctc-controlbar"><span>${pill(lifecycle === 'ENDED' ? '已结束' : lifecycle === 'PAUSED' ? execution?.activeRoleCount ? '暂停待生效' : '已暂停' : execution?.phase === 'RUNNING' ? '正在执行' : '已打开', lifecycle === 'ACTIVE' ? 'ctc-good' : '')}${execution?.activeRoleCount && lifecycle !== 'ACTIVE' ? ' 当前步骤完成后暂停，不再启动下一步…' : ''}</span><div class="ctc-actions">${lifecycle === 'ACTIVE' ? button('暂停', 'scope-pause') + button('结束…', 'scope-end') : button(lifecycle === 'ENDED' ? '重新打开' : execution?.activeRoleCount ? '取消暂停，继续执行' : '继续', 'scope-resume', true, lifecycle === 'ENDED' && execution?.activeRoleCount ? 'disabled' : '')}</div></div>`;
 }
 function preferencesFields(value = {}) {
   return `<div class="ctc-formgrid"><label class="ctc-field">计划检查<select name="planReview"><option value="SELF" ${value.planReview !== 'INDEPENDENT' ? 'selected' : ''}>规划者自检</option><option value="INDEPENDENT" ${value.planReview === 'INDEPENDENT' ? 'selected' : ''}>增加独立计划审核</option></select></label><label class="ctc-field">用量控制<select name="budgetMode"><option value="MEASURE" ${value.budgetMode !== 'HARD' ? 'selected' : ''}>只统计和提醒</option><option value="HARD" ${value.budgetMode === 'HARD' ? 'selected' : ''}>达到预算后暂停</option></select></label>${field('durationMinutes', '运行时长（分钟）', value.durationMinutes ?? 180, { type: 'number', min: 1, max: 1440 })}${field('executionTokenLimit', '执行用量参考／预算', value.executionTokenLimit ?? 2000000, { type: 'number', min: 1000, max: 100000000 })}${field('planningTokenLimit', '规划用量参考／预算', value.planningTokenLimit ?? 120000, { type: 'number', min: 1000, max: 10000000 })}</div>`;
@@ -251,7 +251,7 @@ function taskProgressHtml(record) {
   const title = active ? `${child?.title ?? '当前小任务'} · ${label(active.role)}` : execution?.phase === 'RUNNING' ? '正在准备或整合下一步' : execution ? label(execution.phase) : planning ? '正在准备计划' : '等待确认计划';
   const detail = execution?.phase === 'CLOSED' ? '工程记录已保留，产品尚未验收。' : execution?.phase === 'HUMAN_REQUIRED' ? executionFailureExplanation(execution) : execution?.phase === 'AWAITING_ACCEPTANCE' ? '工程流程已完成，等待你体验和验收。' : '按已整合的小任务计数；当前模型步骤不估算完成百分比。';
   return progressPanel(title, completed, total, total ? `已完成并整合 ${completed} / ${total} 个小任务` : '尚未形成小任务安排', detail,
-    active ? runningStatus(execution.startedAt, active.progress, true, '任务累计运行') : planning ? runningStatus(planningRun?.startedAt, planningRun?.progress) : '');
+    active ? runningStatus(execution.startedAt, active.progress, true, '距首次启动（含暂停）') : planning ? runningStatus(planningRun?.startedAt, planningRun?.progress) : '');
 }
 function subtaskProgressHtml(record) {
   if (record.progressUnavailable) return progressPanel('进度暂时无法读取', 0, 0, '保留当前任务内容', '正在重新连接；不能确认任务是否仍在推进。', '');
@@ -272,7 +272,7 @@ function subtaskProgressHtml(record) {
     `<div class="ctc-stages">${chips}</div>${active ? runningStatus(currentRun?.createdAt, active.progress) : ''}`);
 }
 function progressPanel(title, completed, total, count, detail, activity) {
-  return `<section class="ctc-task-progress" aria-label="任务进度"><div class="ctc-subtitle"><strong>${escape(title)}</strong><span class="ctc-small">${escape(count)}</span></div><progress aria-label="${escape(count)}" max="${Math.max(1, total)}" value="${Math.min(completed, total)}"></progress><p class="ctc-small">${escape(detail)}</p>${activity}</section>`;
+  return `<section class="ctc-task-progress" aria-label="任务进度"><div class="ctc-subtitle"><strong>${escape(title)}</strong><span class="ctc-small">${escape(count)}</span></div><progress aria-label="${escape(count)}" max="${Math.max(1, total)}" value="${Math.min(completed, total)}"></progress><p class="ctc-small">${escape(detail)}</p>${activity}<div class="ctc-actions">${button('更新进度', 'refresh')}</div></section>`;
 }
 function usageHtml(execution) {
   const activity = execution.activeRole;
@@ -338,7 +338,7 @@ function composerKeydown(event) {
   const form = event.target.closest('form');
   if (!state.pending && !state.reading && !state.turns.some(turn => turn.status === 'RUNNING') && event.target.value.trim()) form.requestSubmit();
 }
-function runningStatus(startedAt, progress, active = true, elapsedLabel = '已等待') {
+function runningStatus(startedAt, progress, active = true, elapsedLabel = '本轮已进行') {
   const observed = Date.parse(progress?.observedAt ?? startedAt);
   const age = Number.isFinite(observed) ? Math.max(0, Date.now() - observed) : Infinity;
   const started = Date.parse(startedAt);

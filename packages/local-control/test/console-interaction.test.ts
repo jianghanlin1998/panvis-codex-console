@@ -5,7 +5,7 @@ const source = readFileSync(new URL("../web/app.js", import.meta.url), "utf8").s
 function harness() {
   let details: { id: string; open: boolean; closest(): null; querySelector(): { textContent: string } }[] = [];
   const main = { querySelectorAll: () => details };
-  const view = runInNewContext(source + "\n({ state, rememberDisclosures, restoreDisclosures, composerKeydown, runningStatus, modelOptions, effortOptions, taskProgressHtml, subtaskProgressHtml, pageHasActiveWork, executionFailureExplanation })", { document: { getElementById: (id: string) => id === "main" ? main : {} }, Date: class extends Date { static override now() { return Date.parse("2026-09-10T04:00:00Z"); } } });
+  const view = runInNewContext(source + "\n({ state, rememberDisclosures, restoreDisclosures, composerKeydown, runningStatus, modelOptions, effortOptions, taskProgressHtml, subtaskProgressHtml, pageHasActiveWork, executionFailureExplanation, lifecycleHtml })", { document: { getElementById: (id: string) => id === "main" ? main : {} }, Date: class extends Date { static override now() { return Date.parse("2026-09-10T04:00:00Z"); } } });
   return { view, setDetails: (opened: boolean[]) => { details = opened.map((open, i) => ({ id: `panel-${i}`, open, closest: () => null, querySelector: () => ({ textContent: `Panel ${i}` }) })); return details; } };
 }
 describe("Console interaction continuity", () => {
@@ -45,11 +45,19 @@ describe("Console interaction continuity", () => {
 
 
 describe("Task progress visibility", () => {
+  it("allows cancelling a pending pause without disabling resume for the active role", () => {
+    const { view } = harness();
+    const html = view.lifecycleHtml({lifecycle: "PAUSED"}, {phase: "RUNNING", activeRoleCount: 1});
+    expect(html).toContain("暂停待生效"); expect(html).toContain("取消暂停，继续执行"); expect(html).not.toContain("disabled");
+    const stopped = view.lifecycleHtml({lifecycle: "PAUSED"}, {phase: "PAUSED", activeRoleCount: 0});
+    expect(stopped).toContain("已暂停"); expect(stopped).not.toContain("取消暂停");
+    expect(view.taskProgressHtml({})).toContain('data-action="refresh"');
+  });
   it("counts integrated children and names the active task without claiming model percent", () => {
     const { view } = harness(); view.state.online = true;
     const html = view.taskProgressHtml({ contracts: [{subtaskId: "st_a", title: "Build collector"}, {subtaskId: "st_b", title: "Verify board"}], execution: { phase: "RUNNING", integratedSubtaskIds: ["st_a"], startedAt: "2026-09-10T03:00:00Z", activeRole: {subtaskId: "st_b", role: "FRESH_QA", progress: {activity: "READING_OR_TESTING", observedAt: "2026-09-10T03:59:50Z"}} } });
     expect(html).toContain('max="2" value="1"'); expect(html).toContain("Verify board · 独立 QA");
-    expect(html).toContain("任务累计运行 60 分钟"); expect(html).toContain("读取资料或使用工具");
+    expect(html).toContain("距首次启动（含暂停） 60 分钟"); expect(html).toContain("读取资料或使用工具");
   });
   it("does not attribute a sibling's live activity to a waiting subtask", () => {
     const { view } = harness();

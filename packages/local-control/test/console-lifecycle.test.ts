@@ -48,13 +48,19 @@ describe("Console lifecycle and candidate context continuity", () => {
       expect(signal?.aborted).toBe(false);
       expect(f.starts).toHaveLength(1);
       expect(f.outcomes).toHaveLength(0);
+      // Cancel a pending pause while the same provider is still running; never start a duplicate.
+      await ui.request("lifecycle-change", { requestId: "cancel-pending-pause", scope, expectedRevision: 1, lifecycle: "ACTIVE" });
+      expect(ui.store.lifecycle(scope)).toBe("ACTIVE");
+      expect(await service.inspectExecution!(scope.id)).toMatchObject({ phase: "RUNNING", activeRoleCount: 1, roleCalls: 1 });
+      expect(signal?.aborted).toBe(false); expect(f.starts).toHaveLength(1);
+      await ui.request("lifecycle-change", { requestId: "pause-again", scope, expectedRevision: 2, lifecycle: "PAUSED" });
       // The real mock process waits after turn/start until this explicit release.
       writeFileSync(gate, "continue", { encoding: "utf8" });
       expect(await firstStop).toMatchObject({ phase: "PAUSED", stopReason: "USER_PAUSED", activeRoleCount: 0, knownTokens: 18, roleCalls: 1 });
       expect(f.starts).toHaveLength(1);
       expect(f.outcomes).toEqual([{ code: null, success: true }]);
       const completed = untilStopped();
-      await ui.request("lifecycle-change", { requestId: "resume-live-role", scope, expectedRevision: 1, lifecycle: "ACTIVE" });
+      await ui.request("lifecycle-change", { requestId: "resume-live-role", scope, expectedRevision: 3, lifecycle: "ACTIVE" });
       reportProgress();
       expect(await completed).toMatchObject({ phase: "AWAITING_ACCEPTANCE", roleCalls: 6, knownTokens: 108, expiresAt: original.expiresAt });
       expect(f.starts).toHaveLength(6);
