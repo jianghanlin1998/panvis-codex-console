@@ -479,7 +479,7 @@ describe("route, body, and authentication boundary matrices", () => {
     expect(server.service.provisionOwnedWorktree).not.toHaveBeenCalled();
   });
 
-  it("distinguishes the exact 16 KiB body boundary from one byte over", async () => {
+  it("distinguishes the exact 1 MiB body boundary from one byte over", async () => {
     const server = await startServer();
     const bodyAtLimit = `{"padding":"${"x".repeat(
       LOCAL_CONTROL_BODY_LIMIT_BYTES - Buffer.byteLength('{"padding":""}'),
@@ -569,7 +569,7 @@ describe("HTTP resource bounds, serialization, and concurrency", () => {
     );
   });
 
-  it("accepts a response exactly at 64 KiB and replaces one byte over with a stable error", async () => {
+  it("accepts a response exactly at 1 MiB and replaces one byte over with a stable error", async () => {
     for (const extra of [0, 1]) {
       const service = serviceFixture();
       const overhead = Buffer.byteLength('{"padding":""}', "utf-8");

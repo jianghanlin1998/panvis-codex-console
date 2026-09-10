@@ -21,8 +21,8 @@ import {
 import type { LocalControlService } from "./service.js";
 
 export const LOCAL_CONTROL_HOST = "127.0.0.1";
-export const LOCAL_CONTROL_BODY_LIMIT_BYTES = 16 * 1_024;
-export const LOCAL_CONTROL_RESPONSE_LIMIT_BYTES = 64 * 1_024;
+export const LOCAL_CONTROL_BODY_LIMIT_BYTES = 1024 * 1024;
+export const LOCAL_CONTROL_RESPONSE_LIMIT_BYTES = 1024 * 1024;
 export const localControlResponseLimitBytes = (path: string): number =>
   ["/v0/planning/intake", "/v0/planning/status", "/v0/planning/run", "/v0/execution/review"].includes(path)
     ? BIG_TASK_PLANNING_LIMITS.maxInputBytes : LOCAL_CONTROL_RESPONSE_LIMIT_BYTES;
@@ -608,7 +608,7 @@ export const createLocalControlHttpServer = (
               throw new HttpBoundaryError("REQUEST_BOUNDARY_FAILED", 403);
             }
             if ((url === "/ui/api" || url === "/ui/attachment" || url === "/ui/folder") && !browserSessions.accepts(request.headers.cookie)) throw new HttpBoundaryError("SESSION_AUTH_FAILED", 401);
-            const body = await readBoundedBody(request, url === "/ui/attachment" ? 8 * 1024 * 1024 : 256 * 1024);
+            const body = await readBoundedBody(request, url === "/ui/attachment" ? 8 * 1024 * 1024 : 4 * 1024 * 1024);
             if (!hasUnambiguousJsonStructure(body)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
             let value: unknown;
             try { value = JSON.parse(body); } catch { throw new HttpBoundaryError("INVALID_REQUEST", 400); }
@@ -625,7 +625,7 @@ export const createLocalControlHttpServer = (
             if (url === "/ui/folder" && envelope.action !== "folder-choose") throw new HttpBoundaryError("INVALID_REQUEST", 400);
             if (url === "/ui/attachment" && !["asset-save", "asset-get"].includes(envelope.action)) throw new HttpBoundaryError("INVALID_REQUEST", 400);
             const result = await requireGovernedMethod(service.consoleRequest).call(service, envelope.action, envelope.input);
-            writeJson(response, 200, result, url === "/ui/attachment" ? 8 * 1024 * 1024 : 1024 * 1024);
+            writeJson(response, 200, result, url === "/ui/attachment" ? 8 * 1024 * 1024 : 40 * 1024 * 1024);
             return;
           }
           requireBoundary(request, authority, sessionToken);

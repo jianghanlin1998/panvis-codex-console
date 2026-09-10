@@ -9,9 +9,11 @@ import { NormalizedUsageSchema, ProviderModelReferenceSchema, ProviderRunReferen
 
 /** Planning-only byte limits; execution context and token budgets are unchanged. */
 export const BIG_TASK_PLANNING_LIMITS = Object.freeze({
-  maxResponseBytes: 100 * 1024,
-  // Full proposal/contracts plus approved intent, repository rules and revision requirements.
-  maxInputBytes: 256 * 1024,
+  maxResponseBytes: 1024 * 1024,
+  maxIntakeBytes: 1024 * 1024,
+  maxStoredIntakeBytes: 2 * 1024 * 1024,
+  // Wire envelope includes JSON escaping and multiple 1 MiB content blocks.
+  maxInputBytes: 4 * 1024 * 1024,
 });
 
 const text = z.string().min(1).max(1_000)

@@ -184,7 +184,7 @@ export interface GovernedRoleExecutionInput {
     status: "WITHIN_TARGET" | "ABOVE_TARGET";
     utf8Bytes: number;
     normalTargetBytes: 40_000;
-    absoluteCapBytes: 64_000;
+    absoluteCapBytes: 1_048_576;
     contextProfile: GovernedRoleContextProfile;
     text: string;
   }>;
@@ -369,7 +369,7 @@ interface FindingRow {
 }
 
 const ROLE_INPUT_MARKER = "CODEX_TASK_CONSOLE_GOVERNED_ROLE_V0\n";
-const MAX_ROLE_RESULT_BYTES = 16 * 1024;
+const MAX_ROLE_RESULT_BYTES = 1024 * 1024;
 const SAFE_GIT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 const invalid = (message: string): TaskStorageError =>
@@ -2940,7 +2940,7 @@ export class GovernedExecutionStore {
         allowed: true;
         utf8Bytes: number;
         normalTargetBytes: 40_000;
-        absoluteCapBytes: 64_000;
+        absoluteCapBytes: 1_048_576;
         contextProfile: GovernedRoleContextProfile;
         text: string;
       }>
@@ -2949,7 +2949,7 @@ export class GovernedExecutionStore {
         allowed: false;
         utf8Bytes: number;
         normalTargetBytes: 40_000;
-        absoluteCapBytes: 64_000;
+        absoluteCapBytes: 1_048_576;
         contextProfile: GovernedRoleContextProfile;
       }> {
     const boundedFindings = authorization.role === "REPAIR" || authorization.role === "FOCUSED_RE_QA"
@@ -3002,13 +3002,13 @@ export class GovernedExecutionStore {
     const text = payload === null ? null : ROLE_INPUT_MARKER + payload;
     const utf8Bytes =
       text === null ? base.utf8Bytes : Buffer.byteLength(text, "utf8");
-    if (text === null || utf8Bytes > 64_000) {
+    if (text === null || utf8Bytes > 1_048_576) {
       return freeze({
         status: "HARD_CAP_EXCEEDED",
         allowed: false,
         utf8Bytes,
         normalTargetBytes: 40_000,
-        absoluteCapBytes: 64_000,
+        absoluteCapBytes: 1_048_576,
         contextProfile: authorization.contextProfile,
       });
     }
@@ -3017,7 +3017,7 @@ export class GovernedExecutionStore {
       allowed: true,
       utf8Bytes,
       normalTargetBytes: 40_000,
-      absoluteCapBytes: 64_000,
+      absoluteCapBytes: 1_048_576,
       contextProfile: authorization.contextProfile,
       text,
     });
@@ -3204,7 +3204,7 @@ export class GovernedExecutionStore {
       ? this.#requiredBlockingFindings(authorization.subtaskId, authorization.workflowSequence).map(f => f.finding_id) : [];
     if (claim === undefined || claim.execution_run_id !== link.execution_run_id ||
         claim.candidate_sha !== authorization.candidateSha || !/^[a-f0-9]{64}$/u.test(claim.input_hash) ||
-        !Number.isSafeInteger(claim.input_bytes) || claim.input_bytes < 1 || claim.input_bytes > 64_000 ||
+        !Number.isSafeInteger(claim.input_bytes) || claim.input_bytes < 1 || claim.input_bytes > 1_048_576 ||
         claim.target_finding_ids !== JSON.stringify(targets) || !isCanonicalTimestamp(claim.claimed_at) ||
         claim.claimed_at < authorization.authorizedAt) throw malformed();
   }

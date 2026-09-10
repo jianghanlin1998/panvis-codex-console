@@ -14,6 +14,7 @@ type Scenario =
   | "malformed-response-after-tools"
   | "malformed-tool"
   | "progress-success"
+  | "research-success"
   | "success"
   | "turn-failed"
   | "turn-started-before-response"
@@ -516,6 +517,7 @@ function readScenario(): Scenario {
     "malformed-response-after-tools",
     "malformed-tool",
     "progress-success",
+    "research-success",
     "success",
     "turn-failed",
     "turn-started-before-response",
@@ -560,6 +562,7 @@ function readThreadStartVariant(): ThreadStartVariant {
 }
 
 function completeSyntheticSuccessfulTurn(): void {
+  if (scenario === "research-success") for (const type of ["webSearch", "imageView"]) sendItemLifecycle({ id: type, type, status: "completed" });
   emitAllowedToolItems();
   writeFileSync("owned-output.txt", "owned worktree write\n", {
     encoding: "utf8",

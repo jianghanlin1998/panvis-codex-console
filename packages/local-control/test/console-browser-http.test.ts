@@ -70,7 +70,7 @@ describe("full browser control-plane boundary", () => {
       expect((await f.send(path!, JSON.stringify({ action: "execution-start", input: {} }), own)).status).toBe(400);
       expect((await f.send(path!, body, own)).status).toBe(200);
     }
-    const image = JSON.stringify({ action: "asset-save", input: { dataUrl: "x".repeat(300_000) } });
+    const image = JSON.stringify({ action: "asset-save", input: { dataUrl: "x".repeat(4 * 1024 * 1024 + 1) } });
     expect((await f.send("/ui/api", image, own)).status).toBe(413);
     expect((await f.send("/ui/attachment", image, own)).status).toBe(200);
     expect(service.consoleRequest).toHaveBeenCalledTimes(3);

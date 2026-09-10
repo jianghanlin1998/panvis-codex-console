@@ -30,7 +30,7 @@ import type {
   WorktreeOwnershipId,
 } from "@codex-task-console/domain";
 import {
-  BIG_TASK_PLANNING_LIMITS,
+  ProjectIdSchema, BIG_TASK_PLANNING_LIMITS,
   PLANNER_OUTPUT_SCHEMA,
   PLANNER_REVIEW_OUTPUT_SCHEMA,
   ChatThreadIdSchema,
@@ -158,10 +158,10 @@ const DEFAULT_LIMITS = Object.freeze({
   interruptTimeoutMs: 3_000,
   shutdownGraceMs: 2_000,
   terminateGraceMs: 2_000,
-  maxJsonlLineBytes: 1024 * 1024,
+  maxJsonlLineBytes: 8 * 1024 * 1024,
   maxPendingRequests: 8,
   maxNotifications: 2_000,
-  maxAgentResponseBytes: 16 * 1024,
+  maxAgentResponseBytes: 1024 * 1024,
   maxStderrBytes: 16 * 1024,
 });
 
@@ -545,7 +545,7 @@ interface WriteToolItemState {
 
 type TurnEventPolicy =
   | Readonly<{ readonly kind: "READ_ONLY" }>
-  | Readonly<{ readonly kind: "CONSOLE_RESEARCH"; readonly worktreePath: string }>
+  | Readonly<{ readonly kind: "CONSOLE_RESEARCH"; readonly worktreePath: string; readonly repositoryPath?: string }>
   | Readonly<{ readonly kind: "READ_ONLY_WORKTREE"; readonly worktreePath: string }>
   | Readonly<{
       readonly kind: "WORKSPACE_WRITE";
@@ -677,7 +677,7 @@ class TurnEventTracker {
         const item = requireRecord(record.item);
         const itemType = requireBoundedString(item.type, 64);
         if (itemType === "commandExecution" || itemType === "fileChange") {
-          if ((this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "CONSOLE_RESEARCH") || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && itemType === "fileChange") {
+          if (this.eventPolicy.kind === "READ_ONLY" || (this.eventPolicy.kind === "CONSOLE_RESEARCH" || this.eventPolicy.kind === "READ_ONLY_WORKTREE") && itemType === "fileChange") {
             this.diagnostics.toolActionsObserved += 1;
             throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
           }
@@ -685,10 +685,11 @@ class TurnEventTracker {
             method,
             item,
             itemType,
-            this.eventPolicy.worktreePath,
+            this.eventPolicy.kind === "CONSOLE_RESEARCH" && this.eventPolicy.repositoryPath && typeof item.cwd === "string" && commandCwdIsWithin(item.cwd, this.eventPolicy.repositoryPath) ? this.eventPolicy.repositoryPath : this.eventPolicy.worktreePath,
           );
         } else if (
           !(this.eventPolicy.kind === "CONSOLE_RESEARCH" && itemType === "dynamicToolCall") &&
+          !(this.eventPolicy.kind !== "READ_ONLY" && ["webSearch", "imageView"].includes(itemType)) &&
           itemType !== "userMessage" &&
           itemType !== "agentMessage" &&
           itemType !== "plan" &&
@@ -748,7 +749,7 @@ class TurnEventTracker {
           requireBoundedString(record.turnId, 512),
         );
         const itemId = requireBoundedString(record.itemId, 512);
-        if ((this.eventPolicy.kind === "READ_ONLY" || this.eventPolicy.kind === "CONSOLE_RESEARCH") || this.eventPolicy.kind === "READ_ONLY_WORKTREE" && method !== "item/commandExecution/outputDelta") {
+        if (this.eventPolicy.kind === "READ_ONLY" || (this.eventPolicy.kind === "CONSOLE_RESEARCH" || this.eventPolicy.kind === "READ_ONLY_WORKTREE") && method !== "item/commandExecution/outputDelta") {
           this.diagnostics.toolActionsObserved += 1;
           throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
         }
@@ -1341,7 +1342,7 @@ class JsonlAppServerClient {
       if (request.tool !== "console_read" || request.threadId !== this.events.threadId || request.turnId !== this.events.turnId || request.namespace != null) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
       const result = this.research(request.arguments);
       const text = JSON.stringify(result);
-      this.#send({ id, result: { success: true, contentItems: [{ type: "inputText", text: text.length <= 120_000 ? text : JSON.stringify({ error: "READ_TOO_LARGE", message: "Read a specific task or a smaller page." }) }] } });
+      this.#send({ id, result: { success: true, contentItems: [{ type: "inputText", text: Buffer.byteLength(text, "utf8") <= 2 * 1024 * 1024 ? text : JSON.stringify({ error: "READ_TOO_LARGE", message: "Read a specific task or a smaller page." }) }] } });
       return;
     }
     if (
@@ -1631,7 +1632,7 @@ async function executeGovernedRoleCodexWithDependencies(
       {
         approvalPolicy: "never",
         approvalsReviewer: "user",
-        config: selectedModel === null ? restrictedThreadConfig : { ...restrictedThreadConfig, model_reasoning_effort: selectedModel.reasoningEffort },
+        config: { ...restrictedThreadConfig, web_search: "live", ...(selectedModel === null ? {} : { model_reasoning_effort: selectedModel.reasoningEffort }) },
         ...(selectedModel === null ? {} : { model: selectedModel.model }),
         cwd: worktreePath,
         ephemeral: true,
@@ -2104,7 +2105,7 @@ async function executeSingleSubtaskOwnedWorktreeCodexWithDependencies(
       {
         approvalPolicy: "never",
         approvalsReviewer: "user",
-        config: restrictedThreadConfig,
+        config: { ...restrictedThreadConfig, web_search: "live" },
         cwd: worktreePath,
         ephemeral: true,
         sandbox: "workspace-write",
@@ -2398,7 +2399,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
   planning?: {
     readonly text: string; readonly outputSchema: JsonValue; readonly tokenLimit: number | null;
     readonly discussion?: true;
-    readonly research?: (input: unknown) => object; readonly images?: readonly string[];
+    readonly research?: (input: unknown) => object; readonly images?: readonly string[]; readonly repositoryPath?: string;
     readonly remainingTimeMs: () => number | null;
     readonly observe: (evidence: ReturnType<typeof emptyEvidence>) => void;
   },
@@ -2468,7 +2469,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     const eventTracker = new TurnEventTracker(
       diagnostics,
       planning === undefined ? dependencies.limits.maxAgentResponseBytes : BIG_TASK_PLANNING_LIMITS.maxResponseBytes,
-      planning?.research ? { kind: "CONSOLE_RESEARCH", worktreePath: executionWorkspace } : { kind: "READ_ONLY" },
+      planning?.research ? { kind: "CONSOLE_RESEARCH", worktreePath: executionWorkspace, ...(planning.repositoryPath ? { repositoryPath: planning.repositoryPath } : {}) } : { kind: "READ_ONLY" },
       planning === undefined ? undefined : (usage) => {
         evidence.normalizedUsage = usage;
         planning.observe(evidence);
@@ -2502,7 +2503,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     }
     client = new JsonlAppServerClient(
       child,
-      planning?.research ? { ...dependencies.limits, maxJsonlLineBytes: 36 * 1024 * 1024 } : dependencies.limits,
+      planning ? { ...dependencies.limits, maxJsonlLineBytes: Math.max(dependencies.limits.maxJsonlLineBytes, (planning.research ? 36 : 8) * 1024 * 1024) } : dependencies.limits,
       diagnostics,
       eventTracker,
       planning !== undefined,
@@ -2553,7 +2554,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         ephemeral: true,
         sandbox: "read-only",
         serviceName: CLIENT_INFO.name,
-        ...(planning?.research ? { dynamicTools: [{ type: "function", ...CONSOLE_RESEARCH_TOOL }] } : {}),
+        ...(planning?.research ? { config: { ...restrictedThreadConfig, features: { shell_tool: true, unified_exec: true, skill_search: false }, web_search: "live" }, developerInstructions: "Investigate with console_read, read-only shell commands, public web search (including opening and finding within pages), and image viewing. Project files must remain unchanged in discussion/planning. Use the project path in context for repository commands. Do not read credentials or unrelated personal files. Browser automation/edits/tests belong in authorized execution. Return workflow requests through the structured actions field; do not attempt to execute them as tools.", dynamicTools: [{ type: "function", ...CONSOLE_RESEARCH_TOOL }] } : {}),
       },
       withinDeadline(dependencies.limits.requestTimeoutMs),
       {
@@ -2751,7 +2752,8 @@ function discussionResearch(storage: TaskStorage, text: string) {
   if (workspace.resolveScope(scope).projectId !== packet.projectId) throw new Error("INVALID_INPUT");
   const turns = workspace.turns(scope).turns;
   const assets = [...new Map(turns.flatMap(turn => turn.attachments ?? []).map(asset => [asset.id, asset])).values()].slice(-6);
-  return { research: consoleResearch(storage, packet.projectId, scope), images: assets.map(asset => workspace.entries.asset(packet.projectId!, asset.id).dataUrl) };
+  const project = storage.getProjectById(ProjectIdSchema.parse(packet.projectId))!;
+  return { ...(project.repository.kind === "PATH" ? { repositoryPath: project.repository.path } : {}), research: consoleResearch(storage, packet.projectId, scope), images: assets.map(asset => workspace.entries.asset(packet.projectId!, asset.id).dataUrl) };
 }
 
 function consolePlanningImages(storage: TaskStorage, bigTaskId: BigTaskId) {
@@ -2791,6 +2793,7 @@ async function executeBigTaskPlanningWithDependencies(
 ): Promise<LivePlanningStatus> {
   const planning = new LivePlanningStore(storage);
   const before = planning.inspect(bigTaskId);
+  const planningProject = storage.getProjectById(planning.readIntake(bigTaskId).intake.bigTask.projectId)!;
   const run = planning.claim(bigTaskId);
   if (run.status !== "RUNNING") return planning.inspect(bigTaskId);
   try {
@@ -2798,7 +2801,7 @@ async function executeBigTaskPlanningWithDependencies(
       text: run.inputText,
       outputSchema: (run.role === "PLANNER" ? PLANNER_OUTPUT_SCHEMA : PLANNER_REVIEW_OUTPUT_SCHEMA) as JsonValue,
       tokenLimit: before.budgetException === undefined && planning.readIntake(bigTaskId).intake.consoleWorkflow?.budgetMode !== "MEASURE" ? before.tokenLimit - before.totalTokens : null,
-      ...(planning.readIntake(bigTaskId).intake.consoleWorkflow ? { research: consoleResearch(storage, planning.readIntake(bigTaskId).intake.bigTask.projectId, { kind: "BIG_TASK", id: bigTaskId }), images: consolePlanningImages(storage, bigTaskId) } : {}),
+      ...(planning.readIntake(bigTaskId).intake.consoleWorkflow ? { ...(planningProject.repository.kind === "PATH" ? { repositoryPath: planningProject.repository.path } : {}), research: consoleResearch(storage, planning.readIntake(bigTaskId).intake.bigTask.projectId, { kind: "BIG_TASK", id: bigTaskId }), images: consolePlanningImages(storage, bigTaskId) } : {}),
       remainingTimeMs: () => planning.remainingTimeMs(bigTaskId),
       observe: (evidence) => planning.observe(bigTaskId, run.sequence, {
         providerThread: evidence.providerThread, providerRun: evidence.providerRun,

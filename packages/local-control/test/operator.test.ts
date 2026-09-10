@@ -281,7 +281,7 @@ describe("thin operator command boundary", () => {
     ).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
 
     const oversized = await startResponder((_request, response) => {
-      respondJson(response, 200, { data: "x".repeat(70 * 1_024) });
+      respondJson(response, 200, { data: "x".repeat(1024 * 1024 + 1) });
     });
     const oversizedPaths = createPaths();
     installSession(oversizedPaths, oversized.port);

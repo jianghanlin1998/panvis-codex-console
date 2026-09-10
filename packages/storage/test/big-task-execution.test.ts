@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { BigTaskExecutionStatusSchema } from "@codex-task-console/domain";
 import { makeExecutionFixture } from "./big-task-execution-fixture.js";
@@ -68,9 +68,12 @@ describe("durable human execution authority", () => {
     } finally { f.close(); }
   });
 
+  describe("uncertain reservation recovery", () => {
+    let f: ReturnType<typeof makeExecutionFixture>;
+    beforeEach(() => { f = makeExecutionFixture(); });
+    afterEach(() => { f.close(); });
   it("retains an uncertain provider reservation after restart without replaying it", () => {
-    const f = makeExecutionFixture();
-    try {
+
       f.execution.approve(f.approval); f.execution.start(f.approval.bigTaskId);
       const prepared = f.governed.prepareNextRole(f.approval.bigTaskId);
       if (prepared.kind !== "ROLE_AUTHORIZED") throw new Error("Expected role");
@@ -80,7 +83,8 @@ describe("durable human execution authority", () => {
       expect(execution.inspect(f.approval.bigTaskId)).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "INTERRUPTED", roleCalls: 1 });
       expect(() => execution.start(f.approval.bigTaskId)).toThrow();
       expect(f.starts).toEqual([]);
-    } finally { f.close(); }
+
+  });
   });
 
   it("does not renew elapsed time by pausing or restarting", () => {

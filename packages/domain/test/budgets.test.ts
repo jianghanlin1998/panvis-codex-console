@@ -15,7 +15,7 @@ const validationCodes = (policy: unknown): readonly string[] => {
 describe("V1 budget policy", () => {
   it("exactly matches every approved default", () => {
     expect(DEFAULT_V1_BUDGET_POLICY).toEqual({
-      compiledContext: { normalTargetBytes: 40_000, absoluteCapBytes: 64_000 },
+      compiledContext: { normalTargetBytes: 40_000, absoluteCapBytes: 1_048_576 },
       rawHistory: {
         singleRetrievalTokens: 4_000,
         automaticPerTurnTokens: 8_000,
@@ -61,7 +61,7 @@ describe("V1 budget policy", () => {
       ...DEFAULT_V1_BUDGET_POLICY,
       compiledContext: {
         ...DEFAULT_V1_BUDGET_POLICY.compiledContext,
-        normalTargetBytes: 64_001,
+        normalTargetBytes: 1_048_577,
       },
     };
     expect(validationCodes(policy)).toContain("COMPILED_CONTEXT_TARGET_EXCEEDS_CAP");
@@ -74,8 +74,8 @@ describe("V1 budget policy", () => {
     [40_000, "WITHIN_TARGET", true],
     [40_001, "ABOVE_TARGET", true],
     [63_999, "ABOVE_TARGET", true],
-    [64_000, "ABOVE_TARGET", true],
-    [64_001, "HARD_CAP_EXCEEDED", false],
+    [1_048_576, "ABOVE_TARGET", true],
+    [1_048_577, "HARD_CAP_EXCEEDED", false],
   ] as const)(
     "classifies %i UTF-8 bytes with the exact fixed policy",
     (utf8Bytes, status, allowed) => {
@@ -84,7 +84,7 @@ describe("V1 budget policy", () => {
         allowed,
         utf8Bytes,
         normalTargetBytes: 40_000,
-        absoluteCapBytes: 64_000,
+        absoluteCapBytes: 1_048_576,
       });
     },
   );

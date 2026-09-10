@@ -6,7 +6,7 @@ import { devNull } from "node:os";
 import { isAbsolute } from "node:path";
 import { realpathSync, lstatSync } from "node:fs";
 import {
-  BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
+  ConsoleScopeSchema, BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
   ConsoleProjectCreateSchema, CONSOLE_DISCUSSION_OUTPUT_SCHEMA, ProjectIdSchema, SubtaskIdSchema,
 } from "@codex-task-console/domain";
 import { executeConsoleDiscussionCodex } from "@codex-task-console/codex-adapter";
@@ -48,6 +48,32 @@ export class ConsoleApplication {
       this.#jobs.set(id, promise);
       void promise.catch(() => undefined);
     }
+  }
+  async #advanceTask(input: unknown, requestId: string) {
+    const { scope } = this.store.resolveScope(input);
+    if (scope.kind !== "BIG_TASK" && scope.kind !== "SUBTASK") invalid();
+    const id = BigTaskIdSchema.parse(scope.kind === "BIG_TASK" ? scope.id : this.store.subtaskRecord(scope.id)!.task.bigTaskId);
+    const own = this.store.settings(scope);
+    if (own.lifecycle === "ENDED") throw new TaskStorageError("CONFLICT", "Reopen the ended task before continuing.");
+    if (own.lifecycle === "PAUSED") await this.request("lifecycle-change", { scope, requestId, expectedRevision: own.revision, lifecycle: "ACTIVE" });
+    if (this.store.lifecycle(scope) !== "ACTIVE") throw new TaskStorageError("CONFLICT", "The parent task or project is paused or ended.");
+    const presence = this.store.taskPresence(id);
+    if (presence.execution) {
+      const state = await this.service.inspectExecution!(id);
+      if (["APPROVED", "PAUSED"].includes(state.phase)) await this.request("execution-start", { bigTaskId: id });
+      else if (state.phase !== "RUNNING") throw new TaskStorageError("CONFLICT", "This execution needs its current recovery or acceptance action.");
+      return { kind: "TASK_ADVANCED" as const, targetId: scope.id, description: scope.kind === "SUBTASK" ? "已继续此小任务；按原计划的依赖和检查安排执行。" : "已继续已获批准的任务。" };
+    }
+    if (!presence.planning) invalid();
+    const planning = await this.service.inspectPlanning!(id);
+    if (planning.phase === "APPROVED") return { kind: "EXECUTION_CONFIRMATION_REQUIRED" as const, targetId: id, description: "计划已准备好。查看并确认计划后开始实施 →" };
+    if (planning.phase === "HUMAN_REQUIRED") {
+      const result = this.store.prepareAgain(id, requestId);
+      if (new LivePlanningStore(this.storage).inspect(result.bigTaskId).phase === "READY") this.#schedule(`planning:${result.bigTaskId}`, () => this.service.runPlanning!(result.bigTaskId));
+      return { kind: "TASK_ADVANCED" as const, targetId: result.bigTaskId, description: "已沿用现有要求和小任务重新准备计划；原讨论保留，实施尚未开始。" };
+    }
+    await this.request("planning-start", { bigTaskId: id });
+    return { kind: "TASK_ADVANCED" as const, targetId: id, description: "计划准备已在进行；完成后会展示待确认的执行计划。" };
   }
   async request(action: string, input: unknown): Promise<object> {
     const data = object(input);
@@ -116,11 +142,16 @@ export class ConsoleApplication {
       }
       return result;
     }
+    if (action === "task-advance") {
+      exact(input, ["scope", "requestId"]);
+      if (typeof data.requestId !== "string") invalid();
+      return this.#advanceTask(ConsoleScopeSchema.parse(data.scope), String(data.requestId));
+    }
     if (action === "planning-retry") {
       exact(input, ["bigTaskId", "requestId"]);
       if (typeof data.bigTaskId !== "string" || typeof data.requestId !== "string") invalid();
       const result = this.store.prepareAgain(String(data.bigTaskId), String(data.requestId));
-      this.#schedule(`planning:${result.bigTaskId}`, () => this.service.runPlanning!(result.bigTaskId));
+      if (new LivePlanningStore(this.storage).inspect(result.bigTaskId).phase === "READY") this.#schedule(`planning:${result.bigTaskId}`, () => this.service.runPlanning!(result.bigTaskId));
       return result;
     }
     if (action === "project-create") {
@@ -176,6 +207,22 @@ export class ConsoleApplication {
           for (const effect of finished.effects ?? []) if (effect.kind === "PLAN_REVIEW_CHANGED") {
             const id = BigTaskIdSchema.parse(effect.targetId);
             this.#schedule(`planning:${id}`, () => this.service.runPlanning!(id));
+          }
+          for (const [index, effect] of (finished.effects ?? []).entries()) {
+            if (effect.kind !== "TASK_ADVANCE_REQUESTED" && effect.kind !== "TASK_PAUSE_REQUESTED") continue;
+            const scope = BigTaskIdSchema.safeParse(effect.targetId).success
+              ? { kind: "BIG_TASK" as const, id: effect.targetId } : { kind: "SUBTASK" as const, id: effect.targetId };
+            try {
+              if (effect.kind === "TASK_ADVANCE_REQUESTED") this.store.completeTaskAction(finished.id, index, await this.#advanceTask(scope, `chat_advance_${finished.id}_${index}`));
+              else {
+                const settings = this.store.settings(scope);
+                if (settings.lifecycle === "ENDED") throw new TaskStorageError("CONFLICT", "This task has ended.");
+                await this.request("lifecycle-change", { scope, requestId: `chat_pause_${finished.id}_${index}`, expectedRevision: settings.revision, lifecycle: "PAUSED" });
+                this.store.completeTaskAction(finished.id, index, { kind: "TASK_PAUSED", targetId: scope.id, description: "已请求暂停；正在执行的步骤会在安全边界保存后停止。" });
+              }
+            } catch {
+              this.store.completeTaskAction(finished.id, index, { kind: "TASK_ACTION_FAILED", targetId: scope.id, description: "此次推进或暂停未完成。请查看任务当前状态；已结束任务需要先重新打开，父任务暂停或执行中断需要先处理。原消息和任务均保留。" });
+            }
           }
         } catch { this.store.finishDiscussion(claim.turn.id, null, null, "PROVIDER_FAILED"); }
       });

@@ -52,6 +52,7 @@ type Scenario =
   | "malformed-response-after-tools"
   | "malformed-tool"
   | "progress-success"
+  | "research-success"
   | "success"
   | "turn-failed"
   | "turn-started-before-response"
@@ -143,11 +144,11 @@ afterEach(() => {
 });
 
 describe.sequential("Write-Enabled Execution Authority Binding V0", () => {
-  it("accepts the exact .9 thread mode response and binds the exact turn root", async () => {
+  it.each(["success", "research-success"] as const)("accepts the exact thread mode and requested tools (%s)", async scenario => {
     const fixture = createFixture(true);
     try {
       const sourceBefore = sourceEvidence(fixture.sourcePath);
-      const harness = makeHarness(fixture, "success");
+      const harness = makeHarness(fixture, scenario);
       const result = await executeSingleSubtaskOwnedWorktreeCodexWithDependenciesForTest(
         fixture.storage,
         SUBTASK_ID,

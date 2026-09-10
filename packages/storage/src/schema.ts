@@ -2112,7 +2112,7 @@ export const governedProviderClaimsTable = sqliteTable("governed_provider_claims
   claimedAt: text("claimed_at").notNull(),
 }, (table) => [
   uniqueIndex("governed_provider_claim_run_unique").on(table.executionRunId),
-  check("governed_provider_claim_bytes_check", sql`typeof(${table.inputBytes}) = 'integer' and ${table.inputBytes} between 1 and 64000`),
+  check("governed_provider_claim_bytes_check", sql`typeof(${table.inputBytes}) = 'integer' and ${table.inputBytes} between 1 and 1048576`),
   check("governed_provider_claim_hash_check", sql`length(${table.inputHash}) = 64 and ${table.inputHash} not glob '*[^0-9a-f]*'`),
 ]);
 
@@ -2130,7 +2130,7 @@ export const governedResultProvenanceTable = sqliteTable("governed_result_proven
   uniqueIndex("governed_result_provenance_authorization_unique").on(table.authorizationId),
   uniqueIndex("governed_result_provenance_thread_unique").on(table.providerThreadId),
   uniqueIndex("governed_result_provenance_run_unique").on(table.providerRunId),
-  check("governed_result_provenance_size_check", sql`length(${table.structuredResult}) between 2 and 16384`),
+  check("governed_result_provenance_size_check", sql`length(${table.structuredResult}) between 2 and 1048576`),
 ]);
 
 export const governedDispatchGateSnapshotsTable = sqliteTable("governed_dispatch_gate_snapshots", {

@@ -9,7 +9,8 @@ import { fixedClock, makeBigTask, makeProject } from "./fixtures.js";
 
 /** A real four-task JSON shape, filled evenly with Unicode scope text to an exact byte boundary. */
 export const sizedPlanningProposal = (byteLength: number) => {
-  const tasks = ["ui", "collector", "integration", "validation"].map(key => ({
+  const keys = byteLength > 250_000 ? Array.from({ length: 20 }, (_, index) => `part_${index}`) : ["ui", "collector", "integration", "validation"];
+  const tasks = keys.map(key => ({
     key, title: key, goal: `Complete ${key}`, scopeIn: [key], scopeOut: ["Deployment"],
     acceptanceCriteria: [`Verify ${key}`], untouchedAreas: [], promptSeed: `Implement ${key}`,
     profile: "HIGH_RISK_FOUNDATION", writeEnabled: true,

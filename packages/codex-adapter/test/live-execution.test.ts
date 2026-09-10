@@ -1065,7 +1065,7 @@ function seedHierarchy(storage: TaskStorage, repositoryPath: string): void {
 }
 
 function addLargeActiveContext(storage: TaskStorage): void {
-  for (let index = 0; index < 20; index += 1) {
+  for (let index = 0; index < 300; index += 1) {
     storage.createContextItem(
       ContextItemSchema.parse({
         id: `ctx_live_large_${index}`,

@@ -46,7 +46,7 @@ it("carries a complete 100 KiB plan through revision, fresh review, CLI display 
     for (const packet of provider.packets.slice(1)) {
       const bytes = Buffer.byteLength(JSON.stringify(packet), "utf8");
       expect(bytes).toBeGreaterThan(64_000);
-      expect(bytes).toBeLessThanOrEqual(262_144);
+      expect(bytes).toBeLessThanOrEqual(4_194_304);
     }
     const view = await call(["execution-review", f.intake.bigTask.id]);
     expect(view.succeeded).toBe(true);
@@ -101,7 +101,7 @@ it("returns large bounded product questions through both planning-run and planni
 });
 
 describe("bounded planning HTTP envelope", () => {
-  it.each([262_143, 262_144, 262_145])("caps the server response at 256 KiB (%i bytes)", async bytes => {
+  it.each([4_194_303, 4_194_304, 4_194_305])("caps the server response at 4 MiB envelope (%i bytes)", async bytes => {
     const body = { padding: "x".repeat(bytes - Buffer.byteLength(JSON.stringify({ padding: "" }), "utf8")) };
     const http = createLocalControlHttpServer({ inspectPlanning: async () => body } as unknown as LocalControlService, token);
     try {
@@ -120,8 +120,8 @@ describe("bounded planning HTTP envelope", () => {
         });
         call.once("error", reject); call.end(input);
       });
-      expect(result.status).toBe(bytes <= 262_144 ? 200 : 500);
-      expect(result.body).toBe(bytes <= 262_144 ? JSON.stringify(body) : JSON.stringify({ error: { code: "RESPONSE_TOO_LARGE" } }));
+      expect(result.status).toBe(bytes <= 4_194_304 ? 200 : 500);
+      expect(result.body).toBe(bytes <= 4_194_304 ? JSON.stringify(body) : JSON.stringify({ error: { code: "RESPONSE_TOO_LARGE" } }));
     } finally {
       await new Promise<void>(resolve => { http.server.close(() => resolve()); http.server.closeAllConnections(); });
     }

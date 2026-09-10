@@ -9,7 +9,7 @@ import { makePlanningFixture, sizedPlanningProposal } from "../../storage/test/l
 import { planningProviderFixture } from "./planning-provider-fixture.js";
 
 describe("real Big Task planning adapter with deterministic JSONL peer", () => {
-  it.each([102_399, 102_400, 102_401])("enforces the 100 KiB planning UTF-8 stream boundary at %i bytes", async (bytes) => {
+  it.each([1_048_575, 1_048_576, 1_048_577])("enforces the 1 MiB planning UTF-8 stream boundary at %i bytes", async (bytes) => {
     const f = makePlanningFixture();
     try {
       f.planning.accept(f.intake);
@@ -20,14 +20,14 @@ describe("real Big Task planning adapter with deterministic JSONL peer", () => {
       const agentChunks = text.match(/.{1,128}/gu)!;
       const provider = planningProviderFixture(() => proposal, { agentChunks });
       const result = await executeBigTaskPlanningCodexForTest(f.storage, f.intake.bigTask.id, provider.dependencies);
-      const accepted = bytes <= 102_400;
+      const accepted = bytes <= 1_048_576;
       expect(result).toMatchObject({ phase: accepted ? "READY" : "HUMAN_REQUIRED", totalTokens: 100,
         stopReason: accepted ? null : "PROVIDER_FAILED" });
       expect(result.runs[0]?.providerDiagnostics).toMatchObject({
         failureCode: accepted ? null : "AGENT_RESPONSE_LIMIT_EXCEEDED",
         appServerChildCleaned: true, disposableWorkspaceCleaned: true,
       });
-      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)?.reviewState.candidate.subtasks.length ?? 0).toBe(accepted ? 4 : 0);
+      expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)?.reviewState.candidate.subtasks.length ?? 0).toBe(accepted ? 20 : 0);
       expect(provider.launches).toHaveLength(1);
       expect(provider.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
     } finally { f.close(); }
@@ -50,7 +50,7 @@ describe("real Big Task planning adapter with deterministic JSONL peer", () => {
   });
 
   it.each([
-    ["oversized UTF-8 output", ["你".repeat(34_134)], undefined, "AGENT_RESPONSE_LIMIT_EXCEEDED"],
+    ["oversized UTF-8 output", ["你".repeat(349_526)], undefined, "AGENT_RESPONSE_LIMIT_EXCEEDED"],
     ["empty-delta flood", Array.from({ length: 65 }, () => ""), undefined, "JSONL_LIMIT_EXCEEDED"],
     ["foreign thread", ["x"], "unrelated-thread", "APP_SERVER_PROTOCOL_ERROR"],
   ] as const)("keeps byte, control-event and authority limits for %s", async (_name, agentChunks, deltaThreadId, failureCode) => {

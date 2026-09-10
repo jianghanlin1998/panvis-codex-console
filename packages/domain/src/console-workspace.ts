@@ -5,6 +5,7 @@ import { isWellFormedUnicode } from "./well-formed-unicode.js";
 
 const text = (max: number) => z.string().trim().min(1).max(max).refine(isWellFormedUnicode)
   .refine(value => Array.from(value).every(char => { const code = char.codePointAt(0)!; return code >= 32 && code !== 127 || code === 9 || code === 10 || code === 13; }));
+const payloadText = text(1024 * 1024).refine(value => new TextEncoder().encode(value).byteLength <= 1024 * 1024);
 export const ConsoleRequestIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{8,80}$/);
 export const ConsoleScopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("PROJECT"), id: ProjectIdSchema }).strict(),
@@ -66,9 +67,15 @@ export const ConsoleDraftSchema = ConsoleDraftCreateSchema.omit({ requestId: tru
 }).strict();
 export type ConsoleDraft = z.infer<typeof ConsoleDraftSchema>;
 export const ConsoleDiscussionInputSchema = z.object({
-  requestId: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, message: text(32_000), attachments: z.array(ConsoleAssetSchema).max(6).optional(),
+  requestId: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, message: payloadText, attachments: z.array(ConsoleAssetSchema).max(6).optional(),
 }).strict();
+const taskActionScope = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("BIG_TASK"), id: BigTaskIdSchema }).strict(),
+  z.object({ kind: z.literal("SUBTASK"), id: SubtaskIdSchema }).strict(),
+]);
 const discussionAction = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("ADVANCE_TASK"), scope: taskActionScope }).strict(),
+  z.object({ kind: z.literal("PAUSE_TASK"), scope: taskActionScope }).strict(),
   ConsolePlanReviewChangeSchema.omit({ requestId: true }).extend({ kind: z.literal("AMEND_PLAN_REVIEW") }).strict(),
   z.object({ kind: z.literal("CREATE_TASK"), taskKind: z.enum(["BIG_TASK", "SMALL_TASK"]),
     brief: ConsoleBriefSchema, suggestedSubtasks: z.array(ConsoleBriefSchema).max(24),
@@ -79,11 +86,11 @@ const discussionAction = z.discriminatedUnion("kind", [
   }).strict(),
 ]);
 export const ConsoleDiscussionAnswerSchema = z.object({
-  reply: text(32_000), contextSummary: text(12_000).optional(), proposal: ConsoleBriefSchema.nullable(),
+  reply: payloadText, contextSummary: payloadText.optional(), proposal: ConsoleBriefSchema.nullable(),
   actions: z.array(discussionAction).max(12).optional(),
 }).strict();
 export type ConsoleDiscussionAnswer = z.infer<typeof ConsoleDiscussionAnswerSchema>;
-export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussionAnswerSchema.extend({ actions: z.array(discussionAction).max(12), contextSummary: text(12_000) }), {
+export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussionAnswerSchema.extend({ actions: z.array(discussionAction).max(12), contextSummary: payloadText }), {
   override: ({ zodSchema, jsonSchema }) => {
     // The provider's structured-output subset accepts anyOf, not oneOf.
     // Distinct required kind literals keep these branches mutually exclusive.
@@ -95,12 +102,12 @@ export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussion
 });
 export const ConsoleDiscussionTurnSchema = z.object({
   id: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, sequence: z.number().int().positive(),
-  message: text(32_000), attachments: z.array(ConsoleAssetSchema).max(6).optional(), status: z.enum(["RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]),
+  message: payloadText, attachments: z.array(ConsoleAssetSchema).max(6).optional(), status: z.enum(["RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"]),
   answer: ConsoleDiscussionAnswerSchema.nullable(), usage: NormalizedUsageSchema.nullable(),
   failureCode: z.string().regex(/^[A-Z_]{1,80}$/).nullable(),
   createdAt: z.iso.datetime(), endedAt: z.iso.datetime().nullable(),
   completionBinding: z.string().regex(/^[a-f0-9]{32}$/).optional(),
-  effects: z.array(z.object({ kind: z.enum(["TASK_CREATED", "REVIEW_LEVEL_CHANGED", "PLAN_REVIEW_CHANGED"]), targetId: z.string(), description: text(1000) }).strict()).max(12).optional(),
+  effects: z.array(z.object({ kind: z.enum(["TASK_CREATED", "REVIEW_LEVEL_CHANGED", "PLAN_REVIEW_CHANGED", "TASK_ADVANCE_REQUESTED", "TASK_PAUSE_REQUESTED", "TASK_ADVANCED", "TASK_PAUSED", "TASK_ACTION_FAILED", "EXECUTION_CONFIRMATION_REQUIRED"]), targetId: z.string(), description: text(1000) }).strict()).max(12).optional(),
 }).strict();
 export type ConsoleDiscussionTurn = z.infer<typeof ConsoleDiscussionTurnSchema>;
 export const ConsoleProjectCreateSchema = z.object({
@@ -108,5 +115,5 @@ export const ConsoleProjectCreateSchema = z.object({
   repositoryPath: text(2000), defaultBranch: text(100),
 }).strict();
 export const ConsoleContextDecisionSchema = z.object({
-  requestId: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, title: text(200), body: text(4000),
+  requestId: ConsoleRequestIdSchema, scope: ConsoleScopeSchema, title: text(200), body: payloadText,
 }).strict();

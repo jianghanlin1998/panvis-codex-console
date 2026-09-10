@@ -293,7 +293,7 @@ describe.sequential("Execution Input Preflight V0", () => {
           format: FORMAT,
           profile: "STANDARD_SUBTASK_EXECUTION",
           normalTargetBytes: 40_000,
-          absoluteCapBytes: 64_000,
+          absoluteCapBytes: 1_048_576,
         });
         expect(result.text).toBe(MARKER + JSON.stringify(expectedPacket));
         expect(result.text.endsWith("\n")).toBe(false);
@@ -435,7 +435,7 @@ describe.sequential("Execution Input Preflight V0", () => {
     withSyntheticRepository("sized context rules\n", (repository) =>
       withMemoryStorage((blockedStorage) => {
         seedHierarchy(blockedStorage, repository.path);
-        const fullBody = seedSizedProjectContext(blockedStorage, 17);
+        const fullBody = seedSizedProjectContext(blockedStorage, 300);
         const packet = new OperationalJitContextAssembler(
           blockedStorage,
         ).assembleOperationalJitContextPacketForSubtask(
@@ -445,7 +445,7 @@ describe.sequential("Execution Input Preflight V0", () => {
         const serializedPacket = JSON.stringify(packet);
         expect(serializedPacket).toContain(fullBody);
         expect(Buffer.byteLength(MARKER + serializedPacket, "utf8")).toBeGreaterThan(
-          64_000,
+          1_048_576,
         );
 
         const blocked = new ExecutionInputPreflight(
@@ -461,7 +461,7 @@ describe.sequential("Execution Input Preflight V0", () => {
           profile: "STANDARD_SUBTASK_EXECUTION",
           utf8Bytes: Buffer.byteLength(MARKER + serializedPacket, "utf8"),
           normalTargetBytes: 40_000,
-          absoluteCapBytes: 64_000,
+          absoluteCapBytes: 1_048_576,
         });
         expect(blocked).not.toHaveProperty("text");
         expect(blocked).not.toHaveProperty("serializedText");
@@ -495,7 +495,7 @@ describe.sequential("Execution Input Preflight V0", () => {
 
   it.each([
     [10, "ABOVE_TARGET", true],
-    [17, "HARD_CAP_EXCEEDED", false],
+    [300, "HARD_CAP_EXCEEDED", false],
   ] as const)(
     "does not mutate or retry the accepted packet for %s large Context Items",
     (itemCount, expectedStatus, expectedAllowed) => {
@@ -608,7 +608,7 @@ describe.sequential("Execution Input Preflight V0", () => {
       preflightSource.match(/evaluateCompiledContextByteBudget\(/g),
     ).toHaveLength(1);
     expect(preflightSource).not.toMatch(
-      /if\s*\(\s*utf8Bytes\s*<=|if\s*\([^)]*(?:40_000|64_000)/,
+      /if\s*\(\s*utf8Bytes\s*<=|if\s*\([^)]*(?:40_000|1_048_576)/,
     );
   });
 
@@ -816,7 +816,7 @@ describe.sequential("Execution Input Preflight V0", () => {
 
   it.each([
     [0, true],
-    [17, false],
+    [300, false],
   ] as const)(
     "performs no application database or target repository write with %i large items",
     (itemCount, expectedAllowed) => {

@@ -125,7 +125,7 @@ describe("persistent Console discussions and human direction", () => {
       const ui = new ConsoleWorkspaceStore(f.storage); const scope = { kind: "PROJECT", id: f.intake.bigTask.projectId };
       for (let index = 0; index < 19; index++) {
         const turn = ui.claimDiscussion({ requestId: `paged-turn-${index}`, scope, message: "Discuss this product " + "中".repeat(3000) });
-        expect(Buffer.byteLength(turn.inputText, "utf8")).toBeLessThanOrEqual(100000);
+        expect(Buffer.byteLength(turn.inputText, "utf8")).toBeLessThanOrEqual(4 * 1024 * 1024);
         ui.finishDiscussion(turn.turn.id, answer, { totalTokens: 1 }, null);
       }
       const recent = ui.turns(scope);

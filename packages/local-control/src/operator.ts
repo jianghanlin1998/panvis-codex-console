@@ -130,9 +130,9 @@ const readOperatorJson = (path: string): unknown => {
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > 16_384) throw new Error();
+    if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error();
     const bytes = readFileSync(fd);
-    if (bytes.byteLength > 16_384 || !isUtf8(bytes)) throw new Error();
+    if (bytes.byteLength > 1024 * 1024 || !isUtf8(bytes)) throw new Error();
     const text = bytes.toString("utf8");
     if (!hasUnambiguousJsonStructure(text)) throw new Error();
     return JSON.parse(text) as unknown;

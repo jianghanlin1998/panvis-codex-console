@@ -20,7 +20,7 @@ export interface PlanningMockPacket {
 export function planningProviderFixture(
   answer: (packet: PlanningMockPacket, sequence: number) => unknown,
   options: {
-    omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; duplicateThread?: boolean;
+    omitUsage?: boolean; tokens?: number; apiKey?: boolean; toolAttempt?: boolean; researchTools?: boolean; duplicateThread?: boolean;
     configReadResult?: unknown; extraNotifications?: number; silentTurn?: boolean; failedCodexErrorInfo?: unknown;
     delayedReply?: { method: string; milliseconds: number };
     streamResponse?: boolean; agentChunks?: readonly string[]; deltaThreadId?: string;
@@ -116,6 +116,16 @@ export function planningProviderFixture(
                     totalTokens, inputTokens: totalTokens - 1, outputTokens: 1,
                     cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0,
                   } } } });
+                }
+                if (options.researchTools) {
+                  for (const type of ["webSearch", "imageView"]) {
+                    send({ method: "item/started", params: { threadId, turnId, item: { id: type, type, status: "inProgress" } } });
+                    send({ method: "item/completed", params: { threadId, turnId, item: { id: type, type, status: "completed" } } });
+                  }
+                  const item = { id: "read-command", type: "commandExecution", command: "git status --short", cwd: spawnOptions.cwd, commandActions: [] };
+                  send({ method: "item/started", params: { threadId, turnId, item: { ...item, status: "inProgress" } } });
+                  send({ method: "item/commandExecution/outputDelta", params: { threadId, turnId, itemId: item.id, delta: "fixture" } });
+                  send({ method: "item/completed", params: { threadId, turnId, item: { ...item, status: "completed" } } });
                 }
                 if (options.toolAttempt) {
                   send({ method: "item/started", params: { threadId, turnId, item: { id: "command", type: "commandExecution", status: "inProgress" } } });

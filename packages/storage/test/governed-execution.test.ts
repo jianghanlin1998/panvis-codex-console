@@ -999,7 +999,7 @@ describe("Operational Governed Execution V0", () => {
     try {
       const { bigTaskId } = seed(scenario, {
         profiles: ["LOW"],
-        promptSeed: "x".repeat(63_900),
+        promptSeed: "x".repeat(1_048_500),
       });
       expect(governedFor(scenario).prepareNextRole(bigTaskId)).toMatchObject({
         kind: "BLOCKED",
@@ -1290,7 +1290,7 @@ describe("Step 8D bounded persisted-state matrix", () => {
 });
 
 describe("Step 8D exact context, restart and operation matrices", () => {
-  it.each([40_000,40_001,64_000,64_001])("measures the final UTF-8 role input at %i bytes", bytes => {
+  it.each([40_000,40_001,1_048_576,1_048_577])("measures the final UTF-8 role input at %i bytes", bytes => {
     const baseline = createScenario();
     let overhead: number;
     try {
@@ -1306,7 +1306,7 @@ describe("Step 8D exact context, restart and operation matrices", () => {
         const {bigTaskId,subtaskIds} = seed(scenario,{profiles:["LOW"],promptSeed:"x".repeat(bytes-overhead)});
         const governed = governedFor(scenario);
         const prepared = governed.prepareNextRole(bigTaskId);
-        if (bytes > 64_000) {
+        if (bytes > 1_048_576) {
           expect(prepared).toMatchObject({kind:"BLOCKED",reason:"CONTEXT_PREFLIGHT_BLOCKED"});
           expect(scenario.storage.getSubtaskById(subtaskIds[0]!)?.status).toBe("TODO");
           expect(governed.inspectBigTask(bigTaskId).dispatchReceipts).toHaveLength(0);

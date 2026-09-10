@@ -671,7 +671,7 @@ describe("governed operator response boundaries", () => {
       await expect(runResponse(["governed-manual-start", SUBTASK_ID], body)).rejects.toMatchObject({ code: "RESPONSE_MALFORMED" });
     }
     await expect(runResponse(["governed-manual-start", SUBTASK_ID], JSON.stringify({
-      ...manual(), authorityId: "x".repeat(65_536),
+      ...manual(), authorityId: "x".repeat(1024 * 1024 + 1),
     }))).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
   });
 
@@ -814,7 +814,7 @@ describe("Step 9A comprehensive contradiction and cleanup regressions", () => {
       request.resume();
       response.writeHead(200, variant === "content-type"
         ? { "content-type": "text/plain" }
-        : { "content-type": "application/json", "content-length": "65537" });
+        : { "content-type": "application/json", "content-length": "1048577" });
       response.flushHeaders(); // deliberately never ends; the client must close it
     });
     const paths = createPaths(); installSession(paths, port);
@@ -827,9 +827,9 @@ describe("Step 9A comprehensive contradiction and cleanup regressions", () => {
     } finally { destroy.mockRestore(); }
   });
 
-  it.each(["planning-status", "execution-review"])("bounds declared and streamed %s responses at 256 KiB", async command => {
+  it.each(["planning-status", "execution-review"])("bounds declared and streamed %s responses at 4 MiB envelope", async command => {
     for (const declared of [false, true]) {
-      for (const bytes of [262_143, 262_144, 262_145]) {
+      for (const bytes of [4_194_303, 4_194_304, 4_194_305]) {
         const error = JSON.stringify({ error: { code: "LOCAL_OPERATION_FAILED" } });
         const body = error + " ".repeat(bytes - Buffer.byteLength(error, "utf8"));
         let calls = 0;
@@ -840,7 +840,7 @@ describe("Step 9A comprehensive contradiction and cleanup regressions", () => {
         });
         const paths = createPaths(); installSession(paths, port);
         const result = runOperatorCommandForTesting(parseOperatorCommand([command, "bt_capacity"]), paths, 1_000);
-        if (bytes > 262_144) await expect(result).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
+        if (bytes > 4_194_304) await expect(result).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
         else expect(await result).toMatchObject({ httpStatus: 503, succeeded: false, body: { error: { code: "LOCAL_OPERATION_FAILED" } } });
         expect(calls).toBe(1);
       }

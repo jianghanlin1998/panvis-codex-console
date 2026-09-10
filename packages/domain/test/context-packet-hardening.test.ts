@@ -1908,7 +1908,7 @@ describe("JIT Context Packet budget, resource, provider, and I/O boundaries", ()
   it("keeps byte-budget enforcement outside Packet Core", () => {
     expect(DEFAULT_V1_BUDGET_POLICY.compiledContext).toEqual({
       normalTargetBytes: 40_000,
-      absoluteCapBytes: 64_000,
+      absoluteCapBytes: 1_048_576,
     });
     const packet = compileOrThrow(makeStandardInput("budget_boundary"));
     const keys = collectKeys(packet);
@@ -2326,7 +2326,7 @@ const SOURCE_TO_TEST_MAPPING = [
   "late schedules rejected -> temporal matrix",
   "forward/reverse relay rejected -> joint relay test",
   "40,000-byte normal target remains outside Packet Core -> budget test",
-  "64,000-byte absolute cap remains outside Packet Core -> budget test",
+  "1 MiB absolute cap remains outside Packet Core -> budget test",
   "no token measurement -> source audit",
   "no character proxy -> source audit",
   "no pruning or truncation -> large packet test",

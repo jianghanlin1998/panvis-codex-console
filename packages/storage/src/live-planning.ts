@@ -73,7 +73,7 @@ export class LivePlanningStore {
   #accept(input: unknown, inDirectionTransaction: boolean): LivePlanningStatus {
     const parsed = BigTaskPlanningIntakeSchema.safeParse(input);
     if (!parsed.success || canonical(input) !== canonical(parsed.data)
-      || Buffer.byteLength(canonical(parsed.data), "utf8") > 24_000) fail("INVALID_INPUT");
+      || Buffer.byteLength(canonical(parsed.data), "utf8") > BIG_TASK_PLANNING_LIMITS.maxIntakeBytes) fail("INVALID_INPUT");
     const intake = parsed.data;
     if (intake.productDirection === undefined) {
       throw new TaskStorageError("INVALID_INPUT", "Confirm the product direction, success examples and scope before planning; tool permission is not product approval.");
@@ -89,7 +89,7 @@ export class LivePlanningStore {
       const repository = new TrustedRepositorySourceReader(this.#storage)
         .readTrustedRepositorySourceSnapshotForBigTask(intake.bigTask.id);
       const payload = canonical({ intake, project, repository });
-      if (Buffer.byteLength(payload, "utf8") > 40_000) fail("INVALID_INPUT");
+      if (Buffer.byteLength(payload, "utf8") > BIG_TASK_PLANNING_LIMITS.maxStoredIntakeBytes) fail("INVALID_INPUT");
       this.#access.sqlite.prepare("INSERT INTO live_planning_intakes (big_task_id, payload, created_at) VALUES (?, ?, ?)")
         .run(intake.bigTask.id, payload, this.#now());
       return this.inspect(intake.bigTask.id);
@@ -166,7 +166,7 @@ export class LivePlanningStore {
             ? " Historical workflow capabilities: LOW and STANDARD use execution plus verification and finish IMPLEMENTED. Only HIGH_RISK_FOUNDATION adds hardening, fresh QA and bounded repairs to reach ACCEPTED. Preserve this pinned historical contract."
             : " Workflow capabilities for this confirmed product brief: LOW uses execution plus verification and finishes IMPLEMENTED. STANDARD uses execution plus fresh independent QA and can reach ACCEPTED and perform bounded repair/re-QA without a separate hardening sweep. HIGH_RISK_FOUNDATION adds comprehensive hardening before fresh QA. Use STANDARD for ordinary reviewed work, HIGH_RISK_FOUNDATION when deeper invariant testing is warranted, and LOW only where IMPLEMENTED suffices. Both reviewed paths support bounded repairs when writeEnabled=true.")
           + " Models do not commit: the Console saves and integrates their candidate files. Execution roles have no network access; never claim that synthetic tests prove live fetching. Any required live acceptance needs an explicit coordinator or human verification step."
-          + ` Return compact JSON without indentation or formatting whitespace. The entire response has a hard limit of ${BIG_TASK_PLANNING_LIMITS.maxResponseBytes} UTF-8 bytes (100 KiB); this is a ceiling, not a target. Every text field must be a trimmed single-line string of at most 1,000 characters, with no control characters. Be concise and do not repeat shared intent or repository rules inside every contract. Use only the tasks needed for complete, independently verifiable delivery. Preserve all goal coverage and acceptance criteria.`
+          + ` Return compact JSON without indentation or formatting whitespace. The entire response has a hard limit of ${BIG_TASK_PLANNING_LIMITS.maxResponseBytes} UTF-8 bytes (1 MiB); this is a ceiling, not a target. Every text field must be a trimmed single-line string of at most 1,000 characters, with no control characters. Be concise and do not repeat shared intent or repository rules inside every contract. Use only the tasks needed for complete, independently verifiable delivery. Preserve all goal coverage and acceptance criteria.`
           + (role === "PLANNER"
             ? " If a complete plan cannot fit, return HUMAN_REQUIRED with a concise scope question instead of truncating or omitting required work."
             : " If a complete review cannot fit, use ESCALATE with a concise question instead of truncating or omitting blocking findings."),
@@ -186,7 +186,7 @@ export class LivePlanningStore {
           ? { revisionRequirements: bundle.reviewState.revisionRequirements } : {}),
       };
       if (source.intake.consoleWorkflow) {
-        packet.instruction = packet.instruction.replace("No tools, edits, execution, self-approval or invented evidence.", "Use console_read to investigate the actual repository, retained delivery, task context and available capabilities before writing the plan. No edits, task execution or invented evidence. Engineering investigation is your job and does not require another owner approval.")
+        packet.instruction = packet.instruction.replace("No tools, edits, execution, self-approval or invented evidence.", "Use console_read, read-only shell commands, public web search/page reading and image viewing to investigate the actual repository, retained delivery, task context and available capabilities before writing the plan. No edits, task execution or invented evidence. Engineering investigation is your job and does not require another owner approval.")
           .replace("No tools or edits.", "Use console_read when evidence is missing; no edits.")
           + " Check that each selected QA level agrees with all acceptance prose. Under SELF review, include a complete self-checked plan for owner approval; no independent plan review will be claimed. Do not put prerequisite read-only investigation inside a task that requires this plan to be approved first. If capabilities are missing, describe the engineering work to connect and validate them; only ask the owner for consequential product choices.";
       }

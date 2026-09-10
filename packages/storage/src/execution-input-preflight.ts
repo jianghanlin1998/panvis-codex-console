@@ -37,7 +37,7 @@ export type ExecutionInputPreflightResult =
       profile: OperationalJitContextProfile;
       utf8Bytes: number;
       normalTargetBytes: 40_000;
-      absoluteCapBytes: 64_000;
+      absoluteCapBytes: 1_048_576;
       text: string;
     }>
   | Readonly<{
@@ -47,7 +47,7 @@ export type ExecutionInputPreflightResult =
       profile: OperationalJitContextProfile;
       utf8Bytes: number;
       normalTargetBytes: 40_000;
-      absoluteCapBytes: 64_000;
+      absoluteCapBytes: 1_048_576;
     }>;
 
 const preflightError = (

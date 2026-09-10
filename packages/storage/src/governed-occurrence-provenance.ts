@@ -128,7 +128,7 @@ function validateGateValue(sqlite: DatabaseSync, observation: GateObservation): 
         owner.candidateBinding, owner.subtaskId, owner.workflowSequence, 0, "EXECUTE"]);
       const text = JSON.parse(value.text.split("\n").slice(1).join("\n")) as Record<string, unknown>;
       if (value.authorizationId !== authorizationId || value.hash !== inputHash(value.text) || value.bytes !== Buffer.byteLength(value.text, "utf8") ||
-          value.bytes < 1 || value.bytes > 64_000 || text.authorizationId !== authorizationId || text.role !== "EXECUTE" ||
+          value.bytes < 1 || value.bytes > 1_048_576 || text.authorizationId !== authorizationId || text.role !== "EXECUTE" ||
           text.candidateSha !== owner.candidateSha || text.worktreeOwnershipId !== owner.worktreeOwnershipId) malformed();
       break;
     }

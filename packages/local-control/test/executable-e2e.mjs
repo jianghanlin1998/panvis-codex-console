@@ -379,7 +379,7 @@ try {
   for (const header of ["content-type", "content-length"]) {
     await runIsolatedOperator(["governed-advance", owner.bigTaskId], response => {
       response.setHeader("content-type", header === "content-type" ? "text/plain" : "application/json");
-      if (header === "content-length") response.setHeader("content-length", "65537");
+      if (header === "content-length") response.setHeader("content-length", String(1024 * 1024 + 1));
       response.flushHeaders(); // deliberately never end: the operator must close its socket and exit
     }, 1, undefined, header === "content-type" ? "RESPONSE_MALFORMED" : "RESPONSE_TOO_LARGE");
   }

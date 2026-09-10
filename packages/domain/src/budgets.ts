@@ -91,14 +91,14 @@ export type CompiledContextByteBudgetDecision =
       allowed: true;
       utf8Bytes: number;
       normalTargetBytes: 40_000;
-      absoluteCapBytes: 64_000;
+      absoluteCapBytes: 1_048_576;
     }>
   | Readonly<{
       status: "HARD_CAP_EXCEEDED";
       allowed: false;
       utf8Bytes: number;
       normalTargetBytes: 40_000;
-      absoluteCapBytes: 64_000;
+      absoluteCapBytes: 1_048_576;
     }>;
 
 const validateBudgetInvariants = (
@@ -245,7 +245,7 @@ export const validateBudgetPolicy = (input: unknown): BudgetPolicyValidationResu
 export const DEFAULT_V1_BUDGET_POLICY = Object.freeze({
   compiledContext: Object.freeze({
     normalTargetBytes: 40_000,
-    absoluteCapBytes: 64_000,
+    absoluteCapBytes: 1_048_576,
   }),
   rawHistory: Object.freeze({
     singleRetrievalTokens: 4_000,

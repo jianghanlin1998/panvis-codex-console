@@ -71,7 +71,7 @@ describe("Big Task live planning ownership", () => {
       expect(packet.instruction).not.toContain("STANDARD uses execution plus fresh independent QA");
     } finally { f.close(); }
   });
-  it.each([102_399, 102_400, 102_401])("validates and durably reopens a planning response at %i UTF-8 bytes", (bytes) => {
+  it.each([1_048_575, 1_048_576, 1_048_577])("validates and durably reopens a planning response at %i UTF-8 bytes", (bytes) => {
     const f = makePlanningFixture();
     try {
       f.planning.accept(f.intake);
@@ -79,7 +79,7 @@ describe("Big Task live planning ownership", () => {
       const text = JSON.stringify(proposal);
       expect(Buffer.byteLength(text, "utf8")).toBe(bytes);
       const state = run(f, text);
-      if (bytes > 102_400) {
+      if (bytes > 1_048_576) {
         expect(state).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "INVALID_OUTPUT", totalTokens: 100 });
         expect(f.storage.getDurablePlanningSnapshot(f.intake.bigTask.id)).toBeNull();
       } else {
