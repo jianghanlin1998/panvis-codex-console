@@ -8,7 +8,7 @@ export const BigTaskExecutionLimitsSchema = z.object({
   totalTokenLimit: z.number().int().min(1).max(100_000_000),
   roleCallLimit: z.number().int().min(1).max(10_000),
   budgetMode: z.enum(["MEASURE", "HARD"]).optional(),
-  repairCycleLimit: z.union([z.literal(1), z.literal(2)]),
+  repairCycleLimit: z.union([z.literal(0), z.literal(1), z.literal(2)]),
 }).strict().refine(value => value.budgetMode !== undefined || value.durationMilliseconds <= 10_800_000 && value.totalTokenLimit <= 2_880_000 && value.roleCallLimit <= 192);
 export const BigTaskExecutionApprovalSchema = z.object({
   bigTaskId: BigTaskIdSchema,

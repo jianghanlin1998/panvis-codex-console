@@ -46,6 +46,20 @@ describe('Chat confirmation performs the current operation',()=>{
       expect(result).toMatchObject({kind:'TASK_ADVANCED',targetId:id});expect(approveExecution).toHaveBeenCalledTimes(1);expect(startExecution).toHaveBeenCalledTimes(1);
     }finally{await ui.stop();f.close();}
   });
+  it.each([true,false,null])('forwards the owner network choice %s from chat into recovery',async networkAccess=>{
+    const f=makeExecutionFixture();
+    const id=f.approval.bigTaskId;
+    const action={kind:'RECOVER_TASK',bigTaskId:id,planDigest:f.approval.planDigest,expectedRevision:0,acknowledgeUnknownUsage:false,durationMinutes:null,networkAccess};
+    const ui=new ConsoleApplication(f.storage,base,{discuss:mock(action)});
+    const original=ui.request.bind(ui);
+    const request=vi.spyOn(ui,'request').mockImplementation(async(kind,input)=>kind==='task-recover-and-start'?{kind:'TASK_ADVANCED',targetId:id,description:'Recovered'}:original(kind,input));
+    try{
+      const scope={kind:'BIG_TASK',id} as const;
+      await ui.request('discuss',{scope,requestId:'network-recovery-chat',message:'调整联网设置并恢复任务'});
+      await settle(()=>ui.store.turns(scope).turns[0]?.effects?.[0]?.kind==='TASK_ADVANCED');
+      expect(request).toHaveBeenCalledWith('task-recover-and-start',expect.objectContaining({networkAccess}));
+    }finally{await ui.stop();f.close();}
+  });
   it('rejects confirming unrelated drafts from a big-task chat',()=>{
     const f=makePlanningFixture();f.planning.accept(f.intake);
     const ui=new ConsoleApplication(f.storage,base,{discuss:forbidden});

@@ -303,6 +303,9 @@ function adjustmentForm(execution) {
     </details>${expired?field('minutes','时间已到：新增续跑时间（分钟）',180,{type:'number',min:1,max:180}):`<p>本次时间截止：${escape(timestamp(execution.expiresAt))}。到期后可在这里延长。</p>`}
     <p>默认增加一次技术重试，沿用你的用量模式。实际 QA 结论保留；要重新安排 QA，请使用任务修订入口。模型重试使用 Sol/xhigh。</p>`;
 }
+function qaAllowanceHtml(execution) {
+  return execution?.limits?.repairCycleLimit === 0 ? '<p class="ctc-small">本次保留一次独立 QA；若失败即停下，已有检查记录保留。可在聊天中调整后续安排。</p>' : '';
+}
 function taskProgressHtml(record) {
   const execution = record.execution;
   const total = record.contracts?.length || record.subtasks?.length || 0;
@@ -314,7 +317,7 @@ function taskProgressHtml(record) {
   const title = active ? `${child?.title ?? '当前小任务'} · ${label(active.role)}` : execution?.phase === 'RUNNING' ? '正在准备或整合下一步' : execution ? label(execution.phase) : planning ? '正在准备计划' : '等待确认计划';
   const detail = execution?.phase === 'CLOSED' ? '工程记录已保留，产品尚未验收。' : execution?.phase === 'HUMAN_REQUIRED' ? executionFailureExplanation(execution) : execution?.phase === 'AWAITING_ACCEPTANCE' ? '工程流程已完成，等待你体验和验收。' : '按已整合的小任务计数；当前模型步骤不估算完成百分比。';
   return progressPanel(title, completed, total, total ? `已完成并整合 ${completed} / ${total} 个小任务` : '尚未形成小任务安排', detail,
-    active ? runningStatus(execution.startedAt, active.progress, true, '距首次启动（含暂停）') : planning ? runningStatus(planningRun?.startedAt, planningRun?.progress) : '');
+    qaAllowanceHtml(execution) + (active ? runningStatus(execution.startedAt, active.progress, true, '距首次启动（含暂停）') : planning ? runningStatus(planningRun?.startedAt, planningRun?.progress) : ''));
 }
 function subtaskProgressHtml(record) {
   if (record.progressUnavailable) return progressPanel('进度暂时无法读取', 0, 0, '保留当前任务内容', '正在重新连接；不能确认任务是否仍在推进。', '');
@@ -333,7 +336,7 @@ function subtaskProgressHtml(record) {
   const detail = repair ? `当前：${label(stage)} · 已使用 ${workflow.repairCyclesUsed} 轮修复；QA 通过后才能完成。` : complete ? '检查与交付记录已保存。' : blocked ? executionFailureExplanation(execution) : `当前阶段：${label(stage ?? 'PLANNING')}。${active && paused ? '当前步骤完成后暂停。' : ''}`;
   const chips = stages.map((item, index) => `<span class="ctc-stage ${index < completed ? 'ctc-stage-done' : item === progressStage || repair && index === stages.length - 1 ? 'ctc-stage-current' : ''}">${escape(item === 'VERIFY' ? '检查' : label(item))}</span>`).join('');
   return progressPanel(title, completed, stages.length, `已通过 ${completed} / ${stages.length} 个主流程阶段`, detail,
-    `<div class="ctc-stages">${chips}</div>${active ? runningStatus(currentRun?.createdAt, active.progress) : ''}`);
+    `<div class="ctc-stages">${chips}</div>${qaAllowanceHtml(execution)}${active ? runningStatus(currentRun?.createdAt, active.progress) : ''}`);
 }
 function progressPanel(title, completed, total, count, detail, activity) {
   return `<section class="ctc-task-progress" aria-label="任务进度"><div class="ctc-subtitle"><strong>${escape(title)}</strong><span class="ctc-small">${escape(count)}</span></div><progress aria-label="${escape(count)}" max="${Math.max(1, total)}" value="${Math.min(completed, total)}"></progress><p class="ctc-small">${escape(detail)}</p>${activity}<div class="ctc-actions">${button('更新进度', 'refresh')}</div></section>`;

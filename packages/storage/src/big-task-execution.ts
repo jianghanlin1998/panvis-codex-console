@@ -157,7 +157,7 @@ export class BigTaskExecutionStore {
     integrationWriters.set(storage, (id, intent) => this.#integrate(id, intent));
   }
 
-  repairCycleLimit(id: BigTaskId): 1 | 2 { return this.#approval(id).request.limits.repairCycleLimit; }
+  repairCycleLimit(id: BigTaskId): 0 | 1 | 2 { return this.#approval(id).request.limits.repairCycleLimit; }
 
   /** Read only the result bound to this approval, never a caller-selected path/ref. */
   readDelivery(bigTaskId: BigTaskId) {
@@ -925,14 +925,14 @@ export function commitApprovedExecutionCandidate(storage: TaskStorage, input: {
 }
 
 /** Historical workflow replay uses the immutable approval limit, without requiring a running lease. */
-export function approvedRepairCycleLimit(storage: TaskStorage, id: BigTaskId, subtaskId?: string): 1 | 2 {
+export function approvedRepairCycleLimit(storage: TaskStorage, id: BigTaskId, subtaskId?: string): 0 | 1 | 2 {
   if (!isLivePlannedTask(storage, id)) return 1;
   const row = access(storage).sqlite.prepare("SELECT payload FROM big_task_execution_approvals WHERE big_task_id = ?").get(id);
   if (row === undefined) return 1;
   const legacyLimit = new BigTaskExecutionStore(storage).repairCycleLimit(id);
   if (subtaskId && new LivePlanningStore(storage).readIntake(id).intake.consoleReviewPolicy) {
     const profile = storage.getDurablePlanningSnapshot(id)?.reviewState.candidate.subtasks.find(task => task.id === subtaskId)?.profile;
-    return profile === "HIGH_RISK_FOUNDATION" ? Math.min(2, legacyLimit) as 1 | 2 : 1;
+    return profile === "HIGH_RISK_FOUNDATION" ? Math.min(2, legacyLimit) as 0 | 1 | 2 : Math.min(1, legacyLimit) as 0 | 1;
   }
   return legacyLimit;
 }

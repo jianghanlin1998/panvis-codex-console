@@ -279,7 +279,7 @@ export class ConsoleApplication {
                 const result = control?.kind === "CONFIRM_DRAFT"
                   ? await this.request("draft-confirm-and-plan", { draftId: control.draftId, revision: control.revision })
                   : control?.kind === "APPROVE_PLAN" ? await this.request("plan-approve-and-start", { bigTaskId: control.bigTaskId, expectedBinding: control.expectedBinding })
-                    : control?.kind === "RECOVER_TASK" ? await this.request("task-recover-and-start", { bigTaskId: control.bigTaskId, planDigest: control.planDigest, expectedRevision: control.expectedRevision, acknowledgeUnknownUsage: control.acknowledgeUnknownUsage, durationMinutes: control.durationMinutes }) : invalid();
+                    : control?.kind === "RECOVER_TASK" ? await this.request("task-recover-and-start", { bigTaskId: control.bigTaskId, planDigest: control.planDigest, expectedRevision: control.expectedRevision, acknowledgeUnknownUsage: control.acknowledgeUnknownUsage, durationMinutes: control.durationMinutes, networkAccess: control.networkAccess }) : invalid();
                 const value = object(result);
                 this.store.completeTaskAction(finished.id, index, { kind: "TASK_ADVANCED", targetId: String(value.targetId), description: String(value.description) });
               } catch {

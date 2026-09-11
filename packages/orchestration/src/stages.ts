@@ -342,10 +342,10 @@ const blocked = (
 
 export const evaluateStageTransition = (
   inputValue: Readonly<StageTransitionInput>,
-  repairCycleLimit: 1 | 2 = 1,
+  repairCycleLimit: 0 | 1 | 2 = 1,
 ): StageTransitionResult => {
   const input = parseInput(inputValue);
-  if (input === null || (repairCycleLimit !== 1 && repairCycleLimit !== 2) || input.repairCyclesUsed > repairCycleLimit) {
+  if (input === null || (repairCycleLimit !== 0 && repairCycleLimit !== 1 && repairCycleLimit !== 2) || input.repairCyclesUsed > repairCycleLimit) {
     return blocked("INVALID_INPUT", null, null);
   }
 
@@ -397,6 +397,13 @@ export const evaluateStageTransition = (
         requiredEvidence,
         input.repairCyclesUsed,
       );
+    }
+    if (input.evidence.freshQaOutcome === "BLOCKING_FAIL" && repairCycleLimit === 0) {
+      return Object.freeze({
+        kind: "HUMAN_REQUIRED", reason: "REPAIR_REQA_EXHAUSTED",
+        currentStage: input.currentStage, nextStage: null,
+        requiredEvidence, missingEvidence: Object.freeze([]), repairCyclesUsed: 0,
+      });
     }
     if (input.evidence.freshQaOutcome === "BLOCKING_FAIL") {
       expectedNextStage = "REPAIR";
