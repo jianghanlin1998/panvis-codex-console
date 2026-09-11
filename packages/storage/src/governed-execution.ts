@@ -2,7 +2,7 @@ import { ConsoleWorkspaceStore } from "./console-workspace.js";
 import { LivePlanningStore } from "./live-planning.js";
 import { recordExecutionProgress } from "./execution-progress.js";
 import type { ExecutionProgress } from "@codex-task-console/domain";
-import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId, executionGit, executionRecoveries } from "./big-task-execution.js";
+import { assertLivePlanApproved, approvedRepairCycleLimit, ensureExecutionResultRef, integrateCompletedExecutionCandidate, isLivePlannedTask, BigTaskExecutionStore, commitApprovedExecutionCandidate, executionDeadlineForSubtask, executionCandidateDigest, recoveryAuthorizationId, executionGit, executionRecoveries, recoverableRoleCandidate } from "./big-task-execution.js";
 import { checkExecutionGitFilters, executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -461,7 +461,7 @@ const roleWrites = (
 const roleInstruction = (role: GovernedSubtaskRole): string => {
   switch (role) {
     case "EXECUTE":
-      return "Implement exactly the durable Task Contract in the owned candidate worktree. Leave a clean committed candidate. Return only the governed JSON result contract.";
+      return "Implement exactly the durable Task Contract in the owned candidate worktree. Leave a clean committed candidate. READY means this role’s implementation and required local checks are complete and ready for the next independent check; it is not QA or product acceptance. Do not return BLOCKED solely because subsequent independent QA or final acceptance has not run. Report genuine missing prerequisites explicitly. Return only the governed JSON result contract.";
     case "VERIFY":
       return "Inspect the exact candidate read-only against its acceptance criteria. Do not modify files. Return only the governed JSON result contract.";
     case "HARDEN":
@@ -469,7 +469,7 @@ const roleInstruction = (role: GovernedSubtaskRole): string => {
     case "FRESH_QA":
       return "Perform fresh independent no-write QA against canonical evidence only. Exclude builder and hardener reasoning. Return only the governed JSON result contract.";
     case "REPAIR":
-      return "Repair only the supplied exact bounded blocking finding batch in the owned candidate. Leave a clean committed candidate. Return only the governed JSON result contract.";
+      return "Repair only the supplied exact bounded blocking finding batch in the owned candidate. Leave a clean committed candidate. READY means this role’s implementation and required local checks are complete and ready for the next independent check; it is not QA or product acceptance. Do not return BLOCKED solely because subsequent independent QA or final acceptance has not run. Report genuine missing prerequisites explicitly. Return only the governed JSON result contract.";
     case "FOCUSED_RE_QA":
       return "Perform fresh read-only retesting of only the supplied exact bounded target batch plus required canonical evidence. Exclude repair reasoning. Return only the governed JSON result contract.";
   }
@@ -1108,15 +1108,16 @@ export class GovernedExecutionStore {
     const recovered = new Set([...executionRecoveries(state).map(r => r.failedAuthorizationId), state.qaRecovery?.failedAuthorizationId]);
     const rows = this.#access().sqlite.prepare(`SELECT a.authorization_id, l.execution_run_id FROM governed_role_authorizations a
       JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id JOIN execution_runs r ON r.id=l.execution_run_id
-      WHERE a.big_task_id=? AND r.status!='SUCCEEDED'`).all(bigTaskId).filter(row => !recovered.has(String(row.authorization_id)));
+      WHERE a.big_task_id=?`).all(bigTaskId).filter(row => !recovered.has(String(row.authorization_id)) && recoverableRoleCandidate(this.#storage, String(row.authorization_id)) !== null);
     if (rows.length !== 1) throw conflict("One known failed implementation is required.");
     const authorization = this.getRoleAuthorization(String(rows[0]!.authorization_id))!;
     const run = this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(rows[0]!.execution_run_id));
     this.#assertRoleAuthorizationCurrent(authorization);
-    if (this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt as number >= (state.limitAdjustment?.values.recoveryAttemptLimit ?? 1) || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
-      (run.normalizedUsage?.totalTokens === undefined && !state.limitAdjustment?.values.acknowledgedUnknownRunIds?.includes(run.id)) || this.#getRoleResult(authorization.authorizationId) !== null) throw conflict("The failed role cannot be recovered.");
+    if (this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt as number >= (state.limitAdjustment?.values.recoveryAttemptLimit ?? 1) || run === null ||
+      (run.normalizedUsage?.totalTokens === undefined && !state.limitAdjustment?.values.acknowledgedUnknownRunIds?.includes(run.id))) throw conflict("The failed role cannot be recovered.");
     const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
-    if (worktree.ownership.id !== authorization.worktreeOwnershipId || worktree.currentHeadSha !== authorization.candidateSha) throw conflict("Recovery candidate changed.");
+    if (worktree.ownership.id !== authorization.worktreeOwnershipId || worktree.currentHeadSha !== recoverableRoleCandidate(this.#storage, authorization.authorizationId)) throw conflict("Recovery candidate changed.");
+    if (run.status === "SUCCEEDED") this.#getRoleResult(authorization.authorizationId);
     const candidateDigest = executionCandidateDigest(worktree.ownership, () => Date.parse(state.expiresAt!) - this.#access().clock().getTime());
     return { request: { bigTaskId, planDigest: state.planDigest, repositoryHeadSha: execution.review(bigTaskId).repositoryHeadSha,
       failedAuthorizationId: authorization.authorizationId, failedExecutionRunId: run.id, candidateDigest,

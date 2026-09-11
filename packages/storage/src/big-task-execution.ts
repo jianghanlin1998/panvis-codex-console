@@ -37,6 +37,21 @@ const idOf = (input: BigTaskId): BigTaskId => {
   return parsed.data;
 };
 
+/** A retry keeps the original verdict and starts from its recorded candidate; it never promotes a verdict. */
+export function recoverableRoleCandidate(storage: TaskStorage, authorizationId: string): string | null {
+  const row = access(storage).sqlite.prepare(`SELECT a.role, a.candidate_sha AS original_sha, r.status,
+    v.outcome, v.candidate_sha AS result_sha FROM governed_role_authorizations a
+    JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id
+    JOIN execution_runs r ON r.id=l.execution_run_id
+    LEFT JOIN governed_role_results v ON v.authorization_id=a.authorization_id
+    WHERE a.authorization_id=?`).get(authorizationId);
+  if (!row) return null;
+  if (["FAILED", "INTERRUPTED"].includes(String(row.status)) && row.outcome === null) return String(row.original_sha);
+  if (row.status === "SUCCEEDED" && row.outcome === "BLOCKED" && ["EXECUTE", "REPAIR"].includes(String(row.role)))
+    return String(row.result_sha);
+  return null;
+}
+
 /** Fixed Git operations use argument arrays, bounded output, no user hooks or ambient Git configuration. */
 export function executionGit(repository: string, args: readonly string[], input?: Buffer,
   privateIndex?: string, commitDate?: string, remainingMilliseconds?: () => number): string {
@@ -283,10 +298,10 @@ export class BigTaskExecutionStore {
             JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id WHERE a.authorization_id=?`).get(request.data.failedAuthorizationId);
           const next = access(this.storage).sqlite.prepare("SELECT * FROM governed_role_authorizations WHERE authorization_id=?").get(event.authorizationId);
           if (old === undefined || next === undefined || old.big_task_id !== bigTaskId || !Number.isSafeInteger(old.recovery_attempt) || Number(old.recovery_attempt) >= (limitAdjustment?.values.recoveryAttemptLimit ?? 1) ||
-            old.execution_run_id !== request.data.failedExecutionRunId || failed === null || !["FAILED", "INTERRUPTED"].includes(failed.status) ||
+            old.execution_run_id !== request.data.failedExecutionRunId || failed === null || recoverableRoleCandidate(this.storage, request.data.failedAuthorizationId) === null ||
             (failed.normalizedUsage?.totalTokens === undefined && !limitAdjustment?.values.acknowledgedUnknownRunIds?.includes(failed.id)) || next.recovery_attempt !== Number(old.recovery_attempt) + 1 || next.authorized_at !== event.at ||
-            Object.keys(next).some(key => !["authorization_id", "authorized_at", "recovery_attempt"].includes(key) && next[key] !== old[key]) ||
-            access(this.storage).sqlite.prepare("SELECT 1 FROM governed_role_results WHERE authorization_id=?").get(request.data.failedAuthorizationId)) fail("MALFORMED_STORED_DATA");
+            Object.keys(next).some(key => !["authorization_id", "authorized_at", "recovery_attempt", "candidate_sha"].includes(key) && next[key] !== old[key]) ||
+            next.candidate_sha !== recoverableRoleCandidate(this.storage, request.data.failedAuthorizationId)) fail("MALFORMED_STORED_DATA");
           const recorded = { ...request.data, authorizationId: event.authorizationId };
           if (recovery === undefined) recovery = recorded; else additionalRecoveries.push(recorded);
           phase = "PAUSED"; stopReason = "CHECKPOINT_RECOVERED"; break;
@@ -437,8 +452,8 @@ export class BigTaskExecutionStore {
         JOIN governed_role_execution_links l ON l.authorization_id=a.authorization_id WHERE a.authorization_id=?`).get(request.failedAuthorizationId);
       const run = this.storage.getExecutionRunById(request.failedExecutionRunId);
       if (failed === undefined || failed.big_task_id !== request.bigTaskId || !Number.isSafeInteger(failed.recovery_attempt) || Number(failed.recovery_attempt) >= (state.limitAdjustment?.values.recoveryAttemptLimit ?? 1) ||
-        failed.execution_run_id !== request.failedExecutionRunId || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
-        (run.normalizedUsage?.totalTokens === undefined && !state.limitAdjustment?.values.acknowledgedUnknownRunIds?.includes(run.id)) || sql.prepare("SELECT 1 FROM governed_role_results WHERE authorization_id=?").get(request.failedAuthorizationId)) fail();
+        failed.execution_run_id !== request.failedExecutionRunId || run === null || recoverableRoleCandidate(this.storage, request.failedAuthorizationId) === null ||
+        (run.normalizedUsage?.totalTokens === undefined && !state.limitAdjustment?.values.acknowledgedUnknownRunIds?.includes(run.id))) fail();
       const view = this.storage.getDurableWorkflowControlView(failed.subtask_id as SubtaskId);
       if (view === null || view.currentStage !== failed.role || view.transitionCount + 1 !== failed.workflow_sequence || view.unresolvedHumanRequired !== null) fail();
       const at = timestamp(this.storage), authorizationId = recoveryAuthorizationId(request.failedAuthorizationId);
@@ -446,8 +461,8 @@ export class BigTaskExecutionStore {
         (authorization_id, dispatch_receipt_id, project_id, big_task_id, plan_revision, candidate_binding, subtask_id, workflow_sequence,
          workflow_stage, repair_cycles_used, role, context_profile, write_enabled, worktree_ownership_id, candidate_sha, authorized_at, recovery_attempt)
         SELECT ?, dispatch_receipt_id, project_id, big_task_id, plan_revision, candidate_binding, subtask_id, workflow_sequence,
-          workflow_stage, repair_cycles_used, role, context_profile, write_enabled, worktree_ownership_id, candidate_sha, ?, recovery_attempt + 1
-        FROM governed_role_authorizations WHERE authorization_id=?`).run(authorizationId, at, request.failedAuthorizationId);
+          workflow_stage, repair_cycles_used, role, context_profile, write_enabled, worktree_ownership_id, ?, ?, recovery_attempt + 1
+        FROM governed_role_authorizations WHERE authorization_id=?`).run(authorizationId, recoverableRoleCandidate(this.storage, request.failedAuthorizationId), at, request.failedAuthorizationId);
       this.#append(request.bigTaskId, { kind: "RECOVERY", at, request, authorizationId });
       return this.inspect(request.bigTaskId);
     };
