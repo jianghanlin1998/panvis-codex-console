@@ -295,6 +295,7 @@ function executionProblemHtml(execution) {
 function adjustmentForm(execution) {
   const expired=execution.expiresAt && Date.parse(execution.expiresAt)<=Date.now();
   return `${execution.stopReason==='USAGE_UNKNOWN'?'<p class="ctc-note">本轮调用已结束，但最终用量缺失。继续后仍记为未知，不会填成零；采用统计提醒模式。此次只重试技术中断，不重置 QA。</p><input type="hidden" name="acknowledgeUnknown" value="yes">':''}<p>当前已用 ${num(execution.knownTokens)} token，已调用 ${num(execution.roleCalls)} 个模型步骤。保留所有历史，调整后从未完成的步骤继续。</p>
+    <label class="ctc-field">联网能力<select name="networkAccess"><option value="off" ${!execution.limitAdjustment?.values.networkAccess?'selected':''}>关闭</option><option value="on" ${execution.limitAdjustment?.values.networkAccess?'selected':''}>允许当前任务联网</option></select></label><p>用于当前任务的搜索、读取网页和联网验证；独立 QA 仍不能改代码。新增付费服务另按你的决定执行。</p>
     <details><summary>高级设置：恢复次数和用量</summary>${field('recoveryLimit','同一步最多恢复次数（已用 '+recoveryAttemptsUsed(execution)+' 次）',Math.max(execution.limitAdjustment?.values.recoveryAttemptLimit??1,recoveryAttemptsUsed(execution)+1),{type:'number',min:1,max:100})}
     <label class="ctc-field">token 控制<select name="budgetMode"><option value="MEASURE" ${execution.totalBudgetMode==='WARNING_ONLY'?'selected':''}>只统计和提醒</option><option value="HARD" ${execution.totalBudgetMode!=='WARNING_ONLY'?'selected':''}>达到上限后暂停</option></select></label>
     ${field('tokens','累计 token 参考／上限',execution.limits.totalTokenLimit,{type:'number',min:1,max:100000000})}
@@ -595,7 +596,7 @@ async function confirmModal() {
   if (action === 'adjust-and-continue') {
     try {
       let execution=await api('execution-adjust-limits',{bigTaskId:id,planDigest:record.execution.planDigest,expectedRevision:record.execution.limitAdjustment?.revision??0,
-        values:{totalTokenLimit:Number(value('tokens')),roleCallLimit:Number(value('calls')),budgetMode:value('acknowledgeUnknown')?'MEASURE':value('budgetMode'),recoveryAttemptLimit:Number(value('recoveryLimit')),...((value('acknowledgeUnknown') || record.execution.limitAdjustment?.values.acknowledgedUnknownRunIds) ? {acknowledgedUnknownRunIds:value('acknowledgeUnknown')?record.execution.unknownUsageRunIds:record.execution.limitAdjustment.values.acknowledgedUnknownRunIds}:{})}});
+        values:{networkAccess:value('networkAccess')==='on',totalTokenLimit:Number(value('tokens')),roleCallLimit:Number(value('calls')),budgetMode:value('acknowledgeUnknown')?'MEASURE':value('budgetMode'),recoveryAttemptLimit:Number(value('recoveryLimit')),...((value('acknowledgeUnknown') || record.execution.limitAdjustment?.values.acknowledgedUnknownRunIds) ? {acknowledgedUnknownRunIds:value('acknowledgeUnknown')?record.execution.unknownUsageRunIds:record.execution.limitAdjustment.values.acknowledgedUnknownRunIds}:{})}});
       // Each successful amendment is durable; use its returned revision on another click after a later failure.
       record.execution=execution;
       if (value('minutes')) {execution=await api('execution-renew-window',{bigTaskId:id,planDigest:execution.planDigest,previousExpiresAt:execution.expiresAt,durationMilliseconds:Number(value('minutes'))*60000});record.execution=execution;}

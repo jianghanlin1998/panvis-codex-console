@@ -151,13 +151,13 @@ lines.on("line", (line) => {
       record(properties.findings).maxItems === (role === "EXECUTE" || role === "REPAIR" ? 0 : 16);
     const validSandbox = writeEnabled
       ? sandbox.type === "workspaceWrite" &&
-        sandbox.networkAccess === false &&
+        sandbox.networkAccess === (record(governedInput.networkPolicy).enabled === true) &&
         sandbox.excludeSlashTmp === true &&
         sandbox.excludeTmpdirEnvVar === false &&
         Array.isArray(sandbox.writableRoots) &&
         sandbox.writableRoots.length === 1 &&
         sandbox.writableRoots[0] === process.cwd()
-      : sandbox.type === "readOnly" && sandbox.networkAccess === false;
+      : sandbox.type === "readOnly" && sandbox.networkAccess === (record(governedInput.networkPolicy).enabled === true);
     if (
       !threadStarted ||
       params.threadId !== threadId ||

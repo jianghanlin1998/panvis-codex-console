@@ -25,6 +25,7 @@ export const BigTaskExecutionAdjustmentValuesSchema = z.object({
   budgetMode: z.enum(["MEASURE", "HARD"]),
   recoveryAttemptLimit: z.number().int().min(1).max(100),
   acknowledgedUnknownRunIds: z.array(ExecutionRunIdSchema).max(10000).optional(),
+  networkAccess: z.boolean().optional(),
 }).strict();
 export const BigTaskExecutionAdjustmentSchema = z.object({
   bigTaskId: BigTaskIdSchema, planDigest: z.string().regex(/^[a-f0-9]{64}$/u),

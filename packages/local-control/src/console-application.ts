@@ -210,6 +210,7 @@ export class ConsoleApplication {
         values: { totalTokenLimit: state.limits.totalTokenLimit, roleCallLimit: Math.max(state.limits.roleCallLimit, state.roleCalls+1),
           budgetMode: control.acknowledgeUnknownUsage || state.totalBudgetMode === "WARNING_ONLY" ? "MEASURE" : "HARD",
           recoveryAttemptLimit: Math.min(100, (prior?.recoveryAttemptLimit ?? 1)+1),
+          ...((control.networkAccess ?? prior?.networkAccess) !== undefined ? { networkAccess: control.networkAccess ?? prior?.networkAccess } : {}),
           ...(control.acknowledgeUnknownUsage ? { acknowledgedUnknownRunIds: state.unknownUsageRunIds ?? [] } : prior?.acknowledgedUnknownRunIds ? { acknowledgedUnknownRunIds: prior.acknowledgedUnknownRunIds } : {}) } });
       if (control.durationMinutes !== null && state.expiresAt && Date.parse(state.expiresAt) <= Date.parse(this.store.now()))
         await this.request("execution-renew-window", { bigTaskId: state.bigTaskId, planDigest: state.planDigest, previousExpiresAt: state.expiresAt, durationMilliseconds: control.durationMinutes*60000 });

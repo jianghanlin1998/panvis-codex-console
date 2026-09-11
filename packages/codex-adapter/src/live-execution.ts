@@ -339,7 +339,7 @@ interface GovernedRoleThreadPolicy {
   readonly ephemeral: true;
   readonly sandbox: "readOnly" | "workspaceWrite";
   readonly writableRootCount: 0 | 1;
-  readonly networkAccess: false;
+  readonly networkAccess: boolean;
 }
 
 interface GovernedRoleCodexExecutionResultBase {
@@ -1686,6 +1686,7 @@ async function executeGovernedRoleCodexWithDependencies(
     } catch {
       throw new GovernedLiveExecutionError("GOVERNED_AUTHORITY_REQUIRED");
     }
+    const networkAccess = governed.approvedRoleBounds(authorizationId)?.networkAccess ?? false;
     const turnResult = await client.request(
       4,
       "turn/start",
@@ -1701,11 +1702,11 @@ async function executeGovernedRoleCodexWithDependencies(
           ? {
               type: "workspaceWrite",
               writableRoots: [worktreePath],
-              networkAccess: false,
+              networkAccess,
               excludeSlashTmp: true,
               excludeTmpdirEnvVar: false,
             }
-          : { type: "readOnly", networkAccess: false },
+          : { type: "readOnly", networkAccess },
       },
       withinDeadline(dependencies.limits.requestTimeoutMs),
       {
@@ -1736,7 +1737,7 @@ async function executeGovernedRoleCodexWithDependencies(
       ephemeral: true,
       sandbox: trustedAuthorization.writeEnabled ? "workspaceWrite" : "readOnly",
       writableRootCount: trustedAuthorization.writeEnabled ? 1 : 0,
-      networkAccess: false,
+      networkAccess,
     };
 
     const terminal = await eventTracker.waitForTerminal(

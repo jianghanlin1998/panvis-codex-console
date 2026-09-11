@@ -1569,7 +1569,7 @@ export class GovernedExecutionStore {
     });
   }
 
-  approvedRoleBounds(authorizationId: string): { remainingMilliseconds: number; remainingTokens: number | null } | null {
+  approvedRoleBounds(authorizationId: string): { remainingMilliseconds: number; remainingTokens: number | null; networkAccess: boolean } | null {
     const authorization = this.getRoleAuthorization(authorizationId);
     if (authorization === null) throw malformed();
     const id = authorization.bigTaskId as BigTaskId;
@@ -1581,7 +1581,7 @@ export class GovernedExecutionStore {
     // streaming usage is supplied by the adapter, never assumed to be zero.
     const subtaskBudget = this.#deriveAggregateBudget(authorization.subtaskId, true,
       link === undefined ? undefined : String(link.execution_run_id));
-    return { remainingMilliseconds: execution.remainingMilliseconds(id),
+    return { remainingMilliseconds: execution.remainingMilliseconds(id), networkAccess: state.limitAdjustment?.values.networkAccess ?? false,
       remainingTokens: hasUnacknowledgedExecutionUsage(state) ? 0 : state.totalBudgetMode === "WARNING_ONLY" ? null : (state.recovery !== undefined || state.limits.budgetMode !== undefined) ? state.limits.totalTokenLimit - state.knownTokens : Math.min(state.limits.totalTokenLimit - state.knownTokens,
         subtaskBudget.effectiveLimitTokens - (subtaskBudget.totalTokens ?? subtaskBudget.effectiveLimitTokens)) };
   }
@@ -3031,6 +3031,9 @@ export class GovernedExecutionStore {
       ...(isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId) && new LivePlanningStore(this.#storage).readIntake(authorization.bigTaskId as BigTaskId).intake.consoleReviewPolicy ? {
         consoleReviewPolicy: "Respect the selected review depth and mandatory repository checks. VERIFY performs only necessary basic verification. For UI work, FRESH_QA and FOCUSED_RE_QA must inspect the actual rendered interface and relevant interactions, and report concrete visual evidence. If rendering or visual tools are unavailable, report BLOCKING_FAIL with that limitation; never substitute source inspection or synthetic tests for visual verification. HARDEN investigates edge cases and regressions within scope before independent QA. The coordinator enforces the selected QA failure limit; do not invent additional loops or claim product acceptance.",
       } : {}),
+      networkPolicy: { enabled: isLivePlannedTask(this.#storage, authorization.bigTaskId as BigTaskId) &&
+        (new BigTaskExecutionStore(this.#storage).inspect(authorization.bigTaskId as BigTaskId).limitAdjustment?.values.networkAccess ?? false),
+        instruction: "The current networkPolicy.enabled is the owner's recorded execution amendment and supersedes earlier offline-only task wording. If enabled, use network access for the approved task's public research and verification. Preserve the role's file-write restrictions. Do not infer authority for additional paid services or send credentials/private files to arbitrary destinations. If disabled, do not use command network access." },
       resultContract: roleResultContract(authorization.role),
       ...(targets.length === 0 ? {} : { boundedFindings: targets }),
       canonicalContext: base.text,

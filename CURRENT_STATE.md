@@ -3,6 +3,13 @@
 Last reconciled: 2026-09-11
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
+## Current task networking (2026-09-11)
+- Task-level network access is now an explicit, durable execution adjustment, editable in the recovery dialog or through the recovery chat action. Default remains off; null/omission inherits. The approved setting reaches implementation and read-only QA turn sandboxes and supersedes stale offline-only role wording. No schema migration or QA counter reset.
+- Current B revision has network access enabled (adjustment revision 3), with its original expiry and QA history retained. Execution remains stopped pending candidate-bound paid API verification authorization; no paid probe ran. Automatic approval rejected the initial probe, and Hanlin was asked explicitly about the three-request API validation.
+- Real installed Codex App Server read-only network smoke returned HTTP 200 from public example.com with zero model calls. Isolated desktop/mobile browser checks passed: saved network toggle submitted once, no page errors or overflow. Activation preserved all 55 existing table record sets at schema 34.
+- Final verification: 205 files / 4,949 tests PASS (four workers); public hygiene, lint, typecheck, build and diff checks PASS. The first full run found a provider structured-output required-field mismatch; the nullable inherited setting was repaired before the final passing run. No Windows execution is claimed.
+- A legacy execution fixture also exposed that switching a historical approval without budgetMode to MEASURE through LIMITS_ADJUSTED is not recognized by one budget-provenance validator. Current B was approved in MEASURE and is unaffected; the legacy budget transition is not repaired by this networking change.
+
 ## Repository
 - Repo: `jianghanlin1998/panvis-codex-console`
 - Branch: `main` (approved Console workflow, context and capability fixes)

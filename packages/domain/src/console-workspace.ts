@@ -77,7 +77,7 @@ const taskActionScope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("SUBTASK"), id: SubtaskIdSchema }).strict(),
 ]);
 const discussionAction = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("RECOVER_TASK"), bigTaskId: BigTaskIdSchema, planDigest: z.string().regex(/^[a-f0-9]{64}$/), expectedRevision: z.number().int().nonnegative(), acknowledgeUnknownUsage: z.boolean(), durationMinutes: z.number().int().min(1).max(180).nullable() }).strict(),
+  z.object({ kind: z.literal("RECOVER_TASK"), bigTaskId: BigTaskIdSchema, planDigest: z.string().regex(/^[a-f0-9]{64}$/), expectedRevision: z.number().int().nonnegative(), acknowledgeUnknownUsage: z.boolean(), networkAccess: z.boolean().nullable().optional(), durationMinutes: z.number().int().min(1).max(180).nullable() }).strict(),
   z.object({ kind: z.literal("CONFIRM_DRAFT"), draftId: z.string(), revision: z.number().int().nonnegative() }).strict(),
   z.object({ kind: z.literal("APPROVE_PLAN"), bigTaskId: BigTaskIdSchema, expectedBinding: z.string().regex(/^[a-f0-9]{32}$/) }).strict(),
   z.object({ kind: z.literal("ADVANCE_TASK"), scope: taskActionScope }).strict(),
@@ -98,6 +98,10 @@ export const ConsoleDiscussionAnswerSchema = z.object({
 export type ConsoleDiscussionAnswer = z.infer<typeof ConsoleDiscussionAnswerSchema>;
 export const CONSOLE_DISCUSSION_OUTPUT_SCHEMA = z.toJSONSchema(ConsoleDiscussionAnswerSchema.extend({ actions: z.array(discussionAction).max(12), contextSummary: payloadText }), {
   override: ({ zodSchema, jsonSchema }) => {
+    // Keep older local callers compatible; provider output uses explicit null to inherit.
+    if (jsonSchema.type === "object" && jsonSchema.properties?.networkAccess) {
+      jsonSchema.required = Object.keys(jsonSchema.properties);
+    }
     // The provider's structured-output subset accepts anyOf, not oneOf.
     // Distinct required kind literals keep these branches mutually exclusive.
     if (zodSchema instanceof z.ZodDiscriminatedUnion && jsonSchema.oneOf) {
