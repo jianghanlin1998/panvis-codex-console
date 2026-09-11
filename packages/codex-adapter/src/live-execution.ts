@@ -644,7 +644,7 @@ class TurnEventTracker {
       this.terminal !== null &&
       TURN_SCOPED_NOTIFICATION_METHODS.has(method)
     ) {
-      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "TERMINAL_ORDER");
     }
     const record = requireRecord(params);
     switch (method) {
@@ -684,7 +684,7 @@ class TurnEventTracker {
         if (itemType === "commandExecution" || itemType === "fileChange") {
           if (this.eventPolicy.kind === "READ_ONLY" || (this.eventPolicy.kind === "CONSOLE_RESEARCH" || this.eventPolicy.kind === "READ_ONLY_WORKTREE") && itemType === "fileChange") {
             this.diagnostics.toolActionsObserved += 1;
-            throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
+            throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED", "TOOL_WRITE_IN_READ_ONLY");
           }
           this.#observeWriteToolItem(
             method,
@@ -698,28 +698,30 @@ class TurnEventTracker {
           itemType !== "userMessage" &&
           itemType !== "agentMessage" &&
           itemType !== "plan" &&
-          itemType !== "reasoning"
+          itemType !== "reasoning" &&
+          itemType !== "contextCompaction"
         ) {
           this.diagnostics.toolActionsObserved += 1;
-          throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
+          throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED", itemType === "dynamicToolCall" ? "TOOL_DYNAMIC_NOT_CONFIGURED" : itemType === "mcpToolCall" ? "TOOL_MCP_NOT_CONFIGURED" : ["collabAgentToolCall", "subAgentActivity"].includes(itemType) ? "TOOL_AGENT_NOT_CONFIGURED" : "TOOL_TYPE_UNKNOWN");
         }
+        if (itemType === "contextCompaction") requireBoundedString(item.id, 512);
         if (
           method === "item/started" &&
           "status" in item &&
           item.status !== "inProgress"
         ) {
-          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "ITEM_STATUS");
         }
         if (
           method === "item/completed" &&
           "status" in item &&
           item.status === "inProgress"
         ) {
-          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "ITEM_STATUS");
         }
         if (method === "item/completed" && itemType === "agentMessage") {
           const itemId = requireBoundedString(item.id, 512);
-          if (this.#completedAgentIds.has(itemId)) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+          if (this.#completedAgentIds.has(itemId)) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "AGENT_MESSAGE_LIFECYCLE");
           this.#completedAgentIds.add(itemId);
           const completedText = requireString(item.text);
           if (Buffer.byteLength(completedText, "utf8") > this.maxAgentResponseBytes) throw new LiveExecutionError("AGENT_RESPONSE_LIMIT_EXCEEDED");
@@ -727,10 +729,10 @@ class TurnEventTracker {
           // separate from prior progress messages and is authoritative too.
           this.#lastCompletedAgentText = completedText;
           if (item.phase !== undefined && item.phase !== null) {
-            if (item.phase !== "commentary" && item.phase !== "final_answer") throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+            if (item.phase !== "commentary" && item.phase !== "final_answer") throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "AGENT_MESSAGE_PHASE");
             this.#sawMessagePhase = true;
             if (item.phase === "final_answer") {
-              if (this.#finalAnswerText !== null) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+              if (this.#finalAnswerText !== null) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "AGENT_MESSAGE_LIFECYCLE");
               // Completed items are authoritative; progress and streaming
               // fragments are not the final structured deliverable.
               this.#finalAnswerText = completedText;
@@ -756,7 +758,7 @@ class TurnEventTracker {
         const itemId = requireBoundedString(record.itemId, 512);
         if (this.eventPolicy.kind === "READ_ONLY" || (this.eventPolicy.kind === "CONSOLE_RESEARCH" || this.eventPolicy.kind === "READ_ONLY_WORKTREE") && method !== "item/commandExecution/outputDelta") {
           this.diagnostics.toolActionsObserved += 1;
-          throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED");
+          throw new LiveExecutionError("TOOL_ACTION_ATTEMPTED", "TOOL_WRITE_IN_READ_ONLY");
         }
         const expectedType =
           method === "item/commandExecution/outputDelta"
@@ -1759,6 +1761,7 @@ async function executeGovernedRoleCodexWithDependencies(
     }
   } catch (error: unknown) {
     failureCode = asGovernedRoleFailureCode(error);
+    if (error instanceof LiveExecutionError && ["APP_SERVER_PROTOCOL_ERROR", "TOOL_ACTION_ATTEMPTED"].includes(error.code)) diagnostics.protocolCheck = error.protocolCheck ?? "UNCLASSIFIED";
     if (
       turnStartSent &&
       client !== undefined &&
@@ -1795,6 +1798,7 @@ async function executeGovernedRoleCodexWithDependencies(
           client.failure === null
             ? null
             : asGovernedRoleFailureCode(client.failure);
+        if (client.failure && ["APP_SERVER_PROTOCOL_ERROR", "TOOL_ACTION_ATTEMPTED"].includes(client.failure.code)) diagnostics.protocolCheck = client.failure.protocolCheck ?? "UNCLASSIFIED";
         if (!appServerChildCleaned && failureCode === null) {
           failureCode = "PROCESS_CLEANUP_FAILED";
         }

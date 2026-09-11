@@ -3,6 +3,14 @@
 Last reconciled: 2026-09-11
 Purpose: compact operational index only. Repository and exact-SHA evidence outrank this file.
 
+## Working chat capability visibility (2026-09-11)
+- Chat now exposes a read-only integration inventory, also included in model context. It distinguishes registered search/context support, role-bound terminal execution, task command-network policy, and unconfigured browser/connector/parallel-agent integrations. Registration is explicitly not live verification or desktop capability parity. No external credentials are discovered or borrowed.
+- Big-task discussion displays its existing blocker/recovery controls. Subtask discussion offers parent recovery locally with an explicit whole-big-task scope explanation before opening the existing adjustment flow; no silent sibling authority expansion or QA reset.
+- Governed failures retain allowlisted protocol/tool-category diagnostics; UI distinguishes protocol incompatibility and unconfigured tools from token limits. Historical failures without tags remain unknown. Context-compaction notifications are accepted as bookkeeping with original thread/turn checks intact; unknown tools and read-only write attempts remain rejected.
+- B's second EXECUTE timed out; a supported recovery started a third call, which stopped with TOOL_ACTION_ATTEMPTED. The old event type was not retained, so this cannot be attributed conclusively to context compaction. Code and final-QA allowance remain preserved; the original 19:11 Beijing deadline remains binding.
+- Verification: public hygiene, lint, typecheck, build and diff checks PASS; 207 files / 4,956 tests PASS with four workers. Private-copy desktop/mobile checks PASS, recovery adjustment submitted exactly once, zero provider calls or production writes. An earlier new test fixture omitted required cleanup flags; fixed before final verification. Windows was not exercised.
+- Activated at schema 34 with all 55 existing table record sets unchanged and the signed desktop entry preserved. The supported recovery endpoint then started B EXECUTE call 4 with Sol, preserving the 19:11 Beijing deadline and final-QA allowance. Live verification/QA remain pending; no complete capability parity claim.
+
 ## Current task networking (2026-09-11)
 - Task-level network access is now an explicit, durable execution adjustment, editable in the recovery dialog or through the recovery chat action. Default remains off; null/omission inherits. The approved setting reaches implementation and read-only QA turn sandboxes and supersedes stale offline-only role wording. No schema migration or QA counter reset.
 - Superseding owner decision: the ambient API key belongs to Panvis and is prohibited for Console/Board. The paid-probe proposal is withdrawn; no such probe ran. Both B task scopes record this restriction. Network access remains enabled, but the old execution window expired at 2026-09-11T05:13:54.484Z; it was not extended.

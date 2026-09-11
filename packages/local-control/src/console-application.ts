@@ -6,7 +6,7 @@ import { devNull } from "node:os";
 import { isAbsolute } from "node:path";
 import { realpathSync, lstatSync } from "node:fs";
 import {
-  ConsoleDiscussionAnswerSchema, ConsoleModelSelectionSchema, ConsoleScopeSchema, BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
+  describeConsoleCapabilities, ConsoleDiscussionAnswerSchema, ConsoleModelSelectionSchema, ConsoleScopeSchema, BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
   ConsoleProjectCreateSchema, CONSOLE_DISCUSSION_OUTPUT_SCHEMA, ProjectIdSchema, SubtaskIdSchema,
 } from "@codex-task-console/domain";
 import { readConsoleModelCatalog, executeConsoleDiscussionCodex } from "@codex-task-console/codex-adapter";
@@ -85,6 +85,14 @@ export class ConsoleApplication {
   async request(action: string, input: unknown): Promise<object> {
     const data = object(input);
     if (action === "models") { exact(input, ["refresh"]); if (data.refresh !== undefined && typeof data.refresh !== "boolean") invalid(); return this.#models(data.refresh === true); }
+    if (action === "capabilities") {
+      exact(input, ["scope"]);
+      const { scope } = this.store.resolveScope(ConsoleScopeSchema.parse(data.scope));
+      const id = scope.kind === "BIG_TASK" ? scope.id : scope.kind === "SUBTASK" ? this.store.subtaskRecord(scope.id)!.task.bigTaskId : null;
+      const execution = id && this.store.taskPresence(id).execution ? new BigTaskExecutionStore(this.storage).inspect(BigTaskIdSchema.parse(id)) : null;
+      return { scope, executionTaskId: id, basis: "REGISTERED_INTEGRATION_AND_CURRENT_POLICY", liveVerification: false,
+        capabilities: describeConsoleCapabilities(execution ? execution.limitAdjustment?.values.networkAccess ?? false : null) };
+    }
     if (action === "workspace") {
       exact(input, []);
       const projects = this.storage.listProjects();

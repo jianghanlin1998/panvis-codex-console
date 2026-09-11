@@ -1,3 +1,4 @@
+import { PlanningProviderDiagnosticsSchema } from "./big-task-planning.js";
 import { z } from "zod";
 import { BigTaskIdSchema, SubtaskIdSchema, ExecutionRunIdSchema } from "./identifiers.js";
 import { RepositoryCommitShaSchema } from "./implementation-checkpoint.js";
@@ -88,7 +89,7 @@ const diagnosticCount = z.number().int().min(0).max(1_000_000);
 export const BigTaskRoleFailureSchema = z.object({
   authorizationId: z.string().regex(/^gra_[a-f0-9]{48}$/u), failureCode: GovernedExecutionFailureCodeSchema,
   phase: z.enum(["BEFORE_TURN", "TURN", "RESULT"]),
-  diagnostics: z.object({ approvalRequestsDeclined: diagnosticCount, interruptRequests: diagnosticCount,
+  diagnostics: z.object({ protocolCheck: PlanningProviderDiagnosticsSchema.shape.protocolCheck, approvalRequestsDeclined: diagnosticCount, interruptRequests: diagnosticCount,
     notificationsReceived: diagnosticCount, serverRequestsReceived: diagnosticCount, toolActionsObserved: diagnosticCount,
     turnStartRequests: diagnosticCount, unknownNotificationsIgnored: diagnosticCount }).strict(),
   appServerChildCleaned: z.boolean(), transientRuntimeCleaned: z.boolean(),

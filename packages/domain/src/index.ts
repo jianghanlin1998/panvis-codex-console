@@ -369,3 +369,5 @@ export * from "./console-workspace.js";
 
 export { ConsoleModelSelectionSchema } from "./console-workspace.js";
 export type { ConsoleModelSelection } from "./console-workspace.js";
+
+export { describeConsoleCapabilities } from "./console-capabilities.js";

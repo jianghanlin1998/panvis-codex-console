@@ -390,6 +390,11 @@ describe("Step 8D governed provider hardening", () => {
         prepared.authorization.authorizationId, dependencies("EXECUTE", false, scenario));
       const valid = scenario === "phased-completed" || scenario === "phased-stream" || scenario === "legacy-progress";
       expect(result.success).toBe(valid);
+      if (scenario === "phased-two-finals") {
+        expect(result.failureCode).toBe("APP_SERVER_PROTOCOL_ERROR");
+        expect(result.diagnostics.protocolCheck).toBe("AGENT_MESSAGE_LIFECYCLE");
+        expect(BigTaskRoleFailureSchema.parse({authorizationId:prepared.authorization.authorizationId,phase:"TURN",failureCode:result.failureCode,appServerChildCleaned:result.appServerChildCleaned,transientRuntimeCleaned:result.transientRuntimeCleaned,diagnostics:result.diagnostics}).diagnostics?.protocolCheck).toBe("AGENT_MESSAGE_LIFECYCLE");
+      }
       if (valid) expect(result.roleResult).toMatchObject({ outcome: "READY", summary: "EXECUTE completed." });
       else expect(result.roleResult).toBeNull();
       expect(result.appServerChildCleaned).toBe(true);

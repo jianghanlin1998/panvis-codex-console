@@ -54,6 +54,14 @@ describe("write-tool notification lifecycle", () => {
     ).toThrow("APP_SERVER_PROTOCOL_ERROR");
   });
 
+  it("accepts context compaction without relaxing tool or turn checks", () => {
+    const root = fixtureRoot();
+    const item = {type:"contextCompaction",id:"compaction-1"};
+    expect(() => validateWriteTurnNotificationSequenceForTest(root,[started(item),completed(item),terminal()])).not.toThrow();
+    expect(() => validateWriteTurnNotificationSequenceForTest(root,[terminal(),completed(item)])).toThrow("APP_SERVER_PROTOCOL_ERROR");
+    expect(() => validateWriteTurnNotificationSequenceForTest(root,[started({...item,id:""})])).toThrow("APP_SERVER_PROTOCOL_ERROR");
+  });
+
   it("rejects unknown tool item types", () => {
     const root = fixtureRoot();
     expect(() =>
