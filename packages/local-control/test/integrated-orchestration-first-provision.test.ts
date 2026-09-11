@@ -81,7 +81,7 @@ it.each(["sibling", "capacity"] as const)("preserves the real %s blocker after a
       return observed;
     });
     expect(f.governed.prepareNextRole(BIG_TASK_ID)).toMatchObject({ kind: "BLOCKED",
-      reason: mode === "sibling" ? "CONCURRENCY_BLOCKED" : "WORKTREE_BLOCKED", subtaskId: first });
+      reason: "CONCURRENCY_BLOCKED", subtaskId: first });
     const ownership = f.readRows("SELECT * FROM worktree_ownerships WHERE status IN ('PROVISIONING','ACTIVE','RELEASING')");
     expect(ownership).toHaveLength(2);
     expect(history(first)).toHaveLength(mode === "sibling" ? 1 : 0);
@@ -137,7 +137,7 @@ it.each(["PROJECT_CAPACITY_EXCEEDED", "RECOVERY_REQUIRED", "GIT_OPERATION_FAILED
         expect(f.governed.prepareNextRole(BIG_TASK_ID).kind).toBe("ROLE_AUTHORIZED");
         throw new WorktreeOwnershipError(code, "Synthetic bounded failure.");
       });
-      expect(f.governed.prepareNextRole(BIG_TASK_ID)).toMatchObject({ kind: "BLOCKED", reason: "WORKTREE_BLOCKED" });
+      expect(f.governed.prepareNextRole(BIG_TASK_ID)).toMatchObject({ kind: "BLOCKED", reason: code === "PROJECT_CAPACITY_EXCEEDED" ? "CONCURRENCY_BLOCKED" : "WORKTREE_BLOCKED" });
       expect(failures).toBe(1);
       expect(f.counts()).toMatchObject({ governed_dispatch_receipts: 1, governed_role_authorizations: 1 });
     } finally { f.close(); }

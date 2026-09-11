@@ -39,6 +39,21 @@ it.each([true, false])("records safe local failure stage without exception text 
   } finally { await service.stopAndDrain!(); f.close(); }
 });
 
+it("persists the specific preparation blocker and allows a safe retry", async () => {
+  const f = makeExecutionFixture();
+  const forbidden = async (): Promise<never> => { throw new Error("Unexpected provider path"); };
+  getGovernedProviderBridge(f.governed).prepareNextRole = () => ({ kind: "BLOCKED", reason: "CONCURRENCY_BLOCKED", subtaskId: null });
+  const service = createLocalControlServiceForTesting(f.storage, f.manager, forbidden, f.execute, forbidden, f.governed);
+  try {
+    f.execution.approve(f.approval); await service.startExecution!(f.approval.bigTaskId);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(await service.inspectExecution!(f.approval.bigTaskId)).toMatchObject({ phase: "HUMAN_REQUIRED", stopReason: "LOCAL_OPERATION_FAILED", roleCalls: 0,
+      lastControlFailure: { phase: "PREPARE_ROLE", failureCode: "CONCURRENCY_BLOCKED" } });
+    expect(f.execution.canRetryPreparation(f.approval.bigTaskId)).toBe(true);
+    expect(f.starts).toHaveLength(0);
+  } finally { await service.stopAndDrain!(); f.close(); }
+});
+
 it.each([false, true, "format"] as const)("recovers one unknown QA through the operator without erasing history (later failure=%s)", async mode => {
   const laterUnknown = mode === true, laterFormat = mode === "format";
   let instant = Date.parse("2026-09-07T00:00:00.000Z");

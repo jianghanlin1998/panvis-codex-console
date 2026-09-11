@@ -41,7 +41,7 @@ it.each(cases)("converges across two processes for $profile / $operation first p
       expect(outcomes[0]!.kind).toBe("ROLE_AUTHORIZED");
       expect(outcomes[0]).toEqual(outcomes[1]);
     } else expect(outcomes[0]).toMatchObject({ kind: "BLOCKED",
-      reason: operation === "SIBLING" ? "CONCURRENCY_BLOCKED" : "WORKTREE_BLOCKED" });
+      reason: ["SIBLING", "CAPACITY"].includes(operation) ? "CONCURRENCY_BLOCKED" : "WORKTREE_BLOCKED" });
     const ownerships = f.readRows("SELECT * FROM worktree_ownerships");
     expect(ownerships).toHaveLength(operation === "SAME" ? 1 : 2);
     expect(ownerships.every(row => row.status === "ACTIVE")).toBe(true);

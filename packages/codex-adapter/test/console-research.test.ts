@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { CONSOLE_DISCUSSION_OUTPUT_SCHEMA } from "@codex-task-console/domain";
 import { ConsoleWorkspaceStore } from "../../storage/src/console-workspace.js";
 import { makePlanningFixture } from "../../storage/test/live-planning-fixture.js";
+import { makeExecutionFixture } from "../../storage/test/big-task-execution-fixture.js";
 import { planningProviderFixture } from "./planning-provider-fixture.js";
 import { executeConsoleDiscussionCodexForTest } from "../src/live-execution.js";
 import { consoleResearch } from "../src/console-research.js";
@@ -11,6 +12,23 @@ import type { JsonValue } from "../src/protocol.js";
 
 const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
 describe("Console read-only investigation and real image inputs", () => {
+  it("retrieves original QA findings without mutating execution or confusing empty chat history with missing QA", async () => {
+    const f = makeExecutionFixture(undefined, role => role === "FRESH_QA" ? "two-blockers" : undefined, "STANDARD");
+    try {
+      f.execution.approve(f.approval); f.execution.start(f.approval.bigTaskId);
+      for (let n=0; n<2; n++) {
+        const next=f.governed.prepareNextRole(f.approval.bigTaskId);
+        if (next.kind !== "ROLE_AUTHORIZED") throw new Error("Role required");
+        expect((await f.execute(f.governed,next.authorization.authorizationId)).success).toBe(true);
+      }
+      const before=f.execution.inspect(f.approval.bigTaskId);
+      const read=consoleResearch(f.storage,f.intake.bigTask.projectId,{kind:"BIG_TASK",id:f.approval.bigTaskId});
+      const evidence=read({kind:"reviews"}) as {records:Array<{role:string;findings:object[]}>};
+      expect(evidence.records.find(row=>row.role==="FRESH_QA")?.findings).toHaveLength(3);
+      expect(read({kind:"reviews",scope:{kind:"PROJECT",id:"prj_unknown"}})).toMatchObject({error:"READ_UNAVAILABLE"});
+      expect(f.execution.inspect(f.approval.bigTaskId)).toEqual(before);
+    } finally { f.close(); }
+  }, 30_000);
   it("reads the retained Git version even after the working file changes", () => {
     const f = makePlanningFixture();
     try {
@@ -33,6 +51,31 @@ describe("Console read-only investigation and real image inputs", () => {
       expect(result).toMatchObject({ success: true, failureCode: null });
       expect(peer.requests.find(request => request.method === "thread/start")?.params).toMatchObject({ sandbox: "read-only", config: { features: { shell_tool: true, unified_exec: true }, web_search: "live" } });
       expect(f.git(["status", "--short"]).toString()).toBe("");
+    } finally { f.close(); }
+  });
+  it("reads a registered retained checkout without granting write access", async () => {
+    const f = makePlanningFixture();
+    try {
+      const retained = join(f.root, "retained candidate");
+      f.git(["worktree", "add", "--detach", retained, "HEAD"]);
+      const ui = new ConsoleWorkspaceStore(f.storage);
+      const claim = ui.claimDiscussion({ requestId: "retained-research", scope: { kind: "PROJECT", id: f.intake.bigTask.projectId }, message: "Review the retained candidate" });
+      const peer = planningProviderFixture(() => ({ reply: "Reviewed retained code", proposal: null }), { researchTools: true, researchCwd: retained });
+      const result = await executeConsoleDiscussionCodexForTest(f.storage, claim.inputText, CONSOLE_DISCUSSION_OUTPUT_SCHEMA as JsonValue, () => 300000, peer.dependencies);
+      expect(result).toMatchObject({ success: true, failureCode: null });
+      expect(peer.requests.find(request => request.method === "thread/start")?.params).toMatchObject({ sandbox: "read-only" });
+      expect(f.git(["status", "--short"]).toString()).toBe("");
+    } finally { f.close(); }
+  });
+  it("records a safe working-directory diagnostic without retaining provider content", async () => {
+    const f = makePlanningFixture();
+    try {
+      const ui = new ConsoleWorkspaceStore(f.storage);
+      const claim = ui.claimDiscussion({ requestId: "cwd-diagnostic", scope: { kind: "PROJECT", id: f.intake.bigTask.projectId }, message: "Inspect" });
+      const peer = planningProviderFixture(() => null, { researchTools: true, researchCwd: "/private/outside-canary" });
+      const result = await executeConsoleDiscussionCodexForTest(f.storage, claim.inputText, CONSOLE_DISCUSSION_OUTPUT_SCHEMA as JsonValue, () => 300000, peer.dependencies);
+      expect(result).toMatchObject({ success: false, failureCode: "APP_SERVER_PROTOCOL_ERROR", diagnostics: { protocolCheck: "COMMAND_WORKING_DIRECTORY" } });
+      expect(JSON.stringify(result.diagnostics)).not.toContain("outside-canary");
     } finally { f.close(); }
   });
   it("roundtrips a dynamic read through JSONL and sends the saved screenshot as an image input", async () => {

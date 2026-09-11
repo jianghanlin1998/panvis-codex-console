@@ -201,7 +201,7 @@ function discussionFailure(code) {
 }
 function messagesHtml(turns) {
   if (!turns.length) return `<div class="ctc-empty"><h3>从这里开始讨论</h3><p>告诉 Console 想要什么结果。任务相关的决定会先整理给你确认。</p></div>`;
-  return turns.map(turn => `<article class="ctc-message ctc-human"><div class="ctc-messagehead"><span class="ctc-avatar">H</span><strong>你</strong><span class="ctc-label">${escape(timestamp(turn.createdAt))}</span></div><p>${escape(turn.message)}</p>${(turn.attachments ?? []).map(asset => `<button class="ctc-image-link" type="button" data-view-image="${escape(asset.id)}"><img data-saved-image="${escape(asset.id)}" alt="${escape(asset.name)}" ${state.imageCache.has(asset.id) ? `src="${escape(state.imageCache.get(asset.id))}"` : ''}><span>${escape(asset.name)} · 查看大图</span></button>`).join('')}</article><article class="ctc-message"><div class="ctc-messagehead"><span class="ctc-avatar">C</span><strong>Console</strong>${pill(turn.effects?.some(effect => effect.kind === 'TASK_ACTION_FAILED') ? '操作未完成' : label(turn.status), turn.status === 'RUNNING' ? 'ctc-wait' : '')}</div><p>${escape(turn.answer?.reply ?? (turn.status === 'RUNNING' ? '正在思考。你可以切换页面，回复会保存在这里。' : discussionFailure(turn.failureCode)))}</p>${turn.status === 'RUNNING' ? runningStatus(turn.createdAt, turn.progress) : ''}${(turn.effects ?? []).map(effect => `<div class="ctc-effect">${effect.kind === 'TASK_CREATED' ? link(effect.description + ' →', `draft/${encodeURIComponent(effect.targetId)}`, 'ctc-link') : ['PLAN_REVIEW_CHANGED','EXECUTION_CONFIRMATION_REQUIRED','TASK_ADVANCED','TASK_ACTION_FAILED','TASK_PAUSED'].includes(effect.kind) ? link(effect.description + ' →', effect.targetId.startsWith('st_') ? `subtask/${encodeURIComponent(effect.targetId)}` : `task/${encodeURIComponent(effect.targetId)}/plan`, 'ctc-link') : escape(effect.description)}</div>`).join('')}${turn.answer?.proposal ? '<p class="ctc-small">已整理产品方向建议，可在方向表单中查看和修改。</p>' : ''}<details class="ctc-message-details"><summary>运行记录</summary><p>${escape(turn.actualModel ?? turn.modelSelection?.model ?? '历史记录未保存模型')}${turn.modelSelection?.reasoningEffort ? ` / ${escape(turn.modelSelection.reasoningEffort)}` : ''}</p><p class="ctc-small">${turn.status === 'RUNNING' ? '用量统计中' : `本轮用量：${num(turn.usage?.totalTokens)} tokens`}</p></details></article>`).join('');
+  return turns.map(turn => `<article class="ctc-message ctc-human"><div class="ctc-messagehead"><span class="ctc-avatar">H</span><strong>你</strong><span class="ctc-label">${escape(timestamp(turn.createdAt))}</span></div><p>${escape(turn.message)}</p>${(turn.attachments ?? []).map(asset => `<button class="ctc-image-link" type="button" data-view-image="${escape(asset.id)}"><img data-saved-image="${escape(asset.id)}" alt="${escape(asset.name)}" ${state.imageCache.has(asset.id) ? `src="${escape(state.imageCache.get(asset.id))}"` : ''}><span>${escape(asset.name)} · 查看大图</span></button>`).join('')}</article><article class="ctc-message"><div class="ctc-messagehead"><span class="ctc-avatar">C</span><strong>Console</strong>${pill(turn.effects?.some(effect => effect.kind === 'TASK_ACTION_FAILED') ? '操作未完成' : label(turn.status), turn.status === 'RUNNING' ? 'ctc-wait' : '')}</div><p>${escape(turn.answer?.reply ?? (turn.status === 'RUNNING' ? '正在思考。你可以切换页面，回复会保存在这里。' : discussionFailure(turn.failureCode)))}</p>${turn.status === 'RUNNING' ? runningStatus(turn.createdAt, turn.progress) : ''}${(turn.effects ?? []).map(effect => `<div class="ctc-effect">${effect.kind === 'TASK_CREATED' ? link(effect.description + ' →', `draft/${encodeURIComponent(effect.targetId)}`, 'ctc-link') : ['PLAN_REVIEW_CHANGED','EXECUTION_CONFIRMATION_REQUIRED','TASK_ADVANCED','TASK_ACTION_FAILED','TASK_PAUSED'].includes(effect.kind) ? link(effect.description + ' →', effect.targetId.startsWith('draft_') ? `draft/${encodeURIComponent(effect.targetId)}` : effect.targetId.startsWith('st_') ? `subtask/${encodeURIComponent(effect.targetId)}` : `task/${encodeURIComponent(effect.targetId)}/plan`, 'ctc-link') : escape(effect.description)}</div>`).join('')}${turn.answer?.proposal ? '<p class="ctc-small">已整理产品方向建议，可在方向表单中查看和修改。</p>' : ''}<details class="ctc-message-details"><summary>运行记录</summary><p>${escape(turn.actualModel ?? turn.modelSelection?.model ?? '历史记录未保存模型')}${turn.modelSelection?.reasoningEffort ? ` / ${escape(turn.modelSelection.reasoningEffort)}` : ''}</p><p class="ctc-small">${turn.status === 'RUNNING' ? '用量统计中' : `本轮用量：${num(turn.usage?.totalTokens)} tokens`}</p></details></article>`).join('');
 }
 async function contextHtml() {
   const context = await api('context', { scope: state.scope });
@@ -225,13 +225,14 @@ async function taskPage(id, tab) {
 }
 function blockersHtml(record) {
   const planning = record.planning, execution = record.execution;
+  const provider = planning?.runs?.at(-1)?.providerDiagnostics;
   const reason = execution?.stopReason ?? planning?.stopReason;
   if (!reason && !planning?.questions?.length) return '';
-  const engineering = !execution && (['ENGINEERING_PREPARATION', 'CONTEXT_CHANGED', 'CONTEXT_LIMIT', 'INVALID_OUTPUT'].includes(reason) || (planning?.questions ?? []).some(question => /禁止使用工具|只读核对|协调者|用量费用估算/.test(question)));
+  const engineering = !execution && (['ENGINEERING_PREPARATION', 'CONTEXT_CHANGED', 'CONTEXT_LIMIT', 'INVALID_OUTPUT', 'PROVIDER_FAILED'].includes(reason) || (planning?.questions ?? []).some(question => /禁止使用工具|只读核对|协调者|用量费用估算/.test(question)));
   const title = engineering ? '计划准备遇到问题' : reason === 'USER_PAUSED' ? '任务已暂停' : execution ? '执行需要处理' : '准备下一步';
-  const preparationFailure = execution?.stopReason === 'LOCAL_OPERATION_FAILED' && ['CHECK_LIMITS', 'PREPARE_ROLE'].includes(execution.lastControlFailure?.phase);
-  const explanation = preparationFailure ? 'Console 在准备下一步时中断，已保留计划和完成的工作。修复后可从保存的进度重试；不会重新规划或重置用量。' : engineering ? '需要继续核对代码、现有成果或工具能力。实施尚未开始；这些调查由 Console 处理，你可以让它重新准备计划。' : execution ? executionFailureExplanation(execution) : reasons[reason] ?? '查看当前记录后继续。';
-  return `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>${title}</h2>${execution?.lastRoleFailure ? executionProblemHtml(execution) : `<p class="ctc-spaced">${escape(explanation)}</p>`}${!engineering ? (planning?.questions ?? []).map(question => `<p class="ctc-spaced">${escape(question)}</p>`).join('') : ''}<div class="ctc-actions ctc-spaced">${!execution && planning?.phase === 'HUMAN_REQUIRED' ? button('重新调查并准备计划', 'plan-retry', true) : ''}${link('在聊天里讨论', `task/${encodeURIComponent(record.task.id)}/discussion`)}${execution && ['PAUSED','HUMAN_REQUIRED'].includes(execution.phase) && execution.activeRoleCount === 0 ? button('调整限制并继续', 'adjust-limits', true) : ''}${execution && record.canRenewWindow ? button('调整续跑时间', 'renew-dialog') : ''}${preparationFailure && record.canResume ? button('重试并继续执行', 'start', true) : execution?.lastRoleFailure && ['GOVERNED_BLOCKED','TOKEN_LIMIT_REACHED','TIME_LIMIT_REACHED','USAGE_UNKNOWN'].includes(execution.stopReason) ? button('查看原因与处理方式', execution.stopReason === 'USAGE_UNKNOWN' ? 'qa-recovery-review' : 'recovery-review') : ''}</div><details class="ctc-spaced"><summary>查看工程记录</summary><p>${escape((planning?.questions ?? []).join('\n'))}</p>${execution?.lastRoleFailure ? `<p>${escape(execution.lastRoleFailure.phase)} · ${escape(execution.lastRoleFailure.failureCode)}</p>` : ''}${execution?.lastControlFailure ? `<p>${escape(execution.lastControlFailure.phase)} · ${escape(execution.lastControlFailure.failureCode)}</p>` : ''}</details></section>`;
+  const preparationFailure = execution?.stopReason === 'LOCAL_OPERATION_FAILED' && ['CHECK_LIMITS', 'PREPARE_ROLE'].includes(execution.lastControlFailure?.phase) || execution?.stopReason === 'GOVERNED_BLOCKED' && execution.roleCalls === 0 && record.canResume;
+  const explanation = provider?.protocolCheck === 'COMMAND_WORKING_DIRECTORY' ? '调查被 Console 的工作目录检查中断。模型没有完成计划；已保存的任务和代码保留。可重新调查，或在聊天里调整调查范围。' : provider?.failureCode === 'APP_SERVER_TIMEOUT' ? '本轮调查长时间没有返回新活动，连接已结束。已有材料保留，可以重新调查；这不计作 QA 失败。' : preparationFailure ? executionFailureExplanation(execution) : engineering ? '需要继续核对代码、现有成果或工具能力。实施尚未开始；这些调查由 Console 处理，你可以让它重新准备计划。' : execution ? executionFailureExplanation(execution) : reasons[reason] ?? '查看当前记录后继续。';
+  return `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>${title}</h2>${execution?.lastRoleFailure ? executionProblemHtml(execution) : `<p class="ctc-spaced">${escape(explanation)}</p>`}${!engineering ? (planning?.questions ?? []).map(question => `<p class="ctc-spaced">${escape(question)}</p>`).join('') : ''}<div class="ctc-actions ctc-spaced">${!execution && planning?.phase === 'HUMAN_REQUIRED' ? button('重新调查并准备计划', 'plan-retry', true) : ''}${link('在聊天里讨论', `task/${encodeURIComponent(record.task.id)}/discussion`)}${execution && !preparationFailure && ['PAUSED','HUMAN_REQUIRED'].includes(execution.phase) && execution.activeRoleCount === 0 ? button(execution.stopReason === 'USAGE_UNKNOWN' ? '保留未知用量并重试' : '调整限制并继续', 'adjust-limits', true) : ''}${execution && record.canRenewWindow ? button('调整续跑时间', 'renew-dialog') : ''}${preparationFailure && record.canResume ? button('重试并继续执行', 'start', true) : execution?.lastRoleFailure && ['GOVERNED_BLOCKED','TOKEN_LIMIT_REACHED','TIME_LIMIT_REACHED','USAGE_UNKNOWN'].includes(execution.stopReason) ? button('查看原因与处理方式', 'recovery-review') : ''}</div><details class="ctc-spaced"><summary>查看工程记录</summary>${provider ? `<p>${escape(provider.failureCode ?? '')}${provider.protocolCheck ? ` · ${escape(provider.protocolCheck)}` : ''}</p>` : ''}<p>${escape((planning?.questions ?? []).join('\n'))}</p>${execution?.lastRoleFailure ? `<p>${escape(execution.lastRoleFailure.phase)} · ${escape(execution.lastRoleFailure.failureCode)}</p>` : ''}${execution?.lastControlFailure ? `<p>${escape(execution.lastControlFailure.phase)} · ${escape(execution.lastControlFailure.failureCode)}</p>` : ''}</details>${revisionActions(record)}</section>`;
 }
 function activityName(activity) {
   return { STARTING: '连接模型', THINKING: '分析与思考', READING_OR_TESTING: '读取资料或使用工具', EDITING: '修改文件', RESPONDING: '整理结果' }[activity] ?? '等待活动记录';
@@ -242,13 +243,34 @@ function recoveryAttemptsUsed(execution) {
   for (let i=0;i<records.length;i++) {const entry=records.find(item=>item.authorizationId===id);if(!entry) break;count++;id=entry.failedAuthorizationId;}
   return count;
 }
+function revisionActions(record) {
+  if (!record?.execution) return '';
+  const revision = record.revisionDrafts?.[0];
+  return `<section class="ctc-note ctc-spaced"><strong>需要调整任务或重新安排 QA？</strong><p>保留当前代码、旧问题和检查记录，以修订任务开展新一轮检查。你可以直接在聊天里说明怎么改并确认。</p><div class="ctc-actions">${revision ? link('查看修订：'+revision.title, revision.confirmedBigTaskId ? `task/${encodeURIComponent(revision.currentBigTaskId ?? revision.confirmedBigTaskId)}/plan` : `draft/${encodeURIComponent(revision.id)}`) : button('讨论修订任务与 QA', 'revise-task')}${revision && !revision.confirmedBigTaskId ? button('确认修订并准备计划', 'confirm-revision', true) : ''}</div></section>`;
+}
 function executionRecoveryBlocker(execution) {
   if (!execution) return '尚未取得执行状态。';
+  if (execution.stopReason === 'USAGE_UNKNOWN') return '本轮没有返回最终用量，并非用量超限。调整 token 数字不能恢复这个步骤。可选择保留未知用量后重试；若要改变任务或重新安排 QA，使用下方修订入口。';
   if (!execution.latestRole?.outcome && recoveryAttemptsUsed(execution) >= (execution.limitAdjustment?.values.recoveryAttemptLimit ?? 1)) return '这一步已达到当前恢复次数上限。可以点击「调整限制并继续」增加恢复机会，从保留的工作重试；历史失败与 QA 结果不会清除。';
   if (execution.expiresAt && Date.parse(execution.expiresAt) <= Date.now()) return '本次执行时间窗口已经结束。请在任务页调整续跑时间后再检查恢复条件。';
   return null;
 }
 function executionFailureExplanation(execution) {
+  const preparationCauses = {
+    CONCURRENCY_BLOCKED: '另一项工作仍占用执行名额。请先暂停正在运行的任务，等它停止后点击“重试并继续执行”。已暂停且没有模型运行的工作不会占用名额。',
+    PROJECT_CAPACITY_EXCEEDED: '项目的执行名额已满。先暂停其他正在运行的任务，待模型停止后重试；保留的代码不会被删除。',
+    WORKTREE_BLOCKED: '任务的代码工作区尚未准备好，或存在未保存的改动。请在聊天里要求核对并保留现有代码，再重试当前步骤。',
+    REPOSITORY_PREFLIGHT_BLOCKED: '当前代码版本与任务记录不一致。请在聊天里要求核对版本并准备修订，已有代码和结果保留。',
+    CONTEXT_PREFLIGHT_BLOCKED: '执行所需的任务上下文尚未准备完整。请在聊天里要求补齐上下文后继续，不需要重新描述产品方向。',
+    REPAIR_REQA_EXHAUSTED: '本次约定的 QA 失败次数已用完。可以在聊天里说明需要怎样修订，并为修订后的工作开启新一轮 QA；历史失败仍保留。',
+    DEPENDENCY_BLOCKED: '这一步依赖的任务尚未完成或已暂停。请到推进图查看前置任务，恢复前置工作或在聊天里调整安排。',
+    MANUAL_START_REQUIRED: '这个小任务设置为手动开始。请到小任务主页开始执行，或在聊天里要求推进该任务。',
+  };
+  if (execution?.lastControlFailure?.at && (!execution.lastRoleFailure?.at || execution.lastControlFailure.at >= execution.lastRoleFailure.at)) {
+    const cause = preparationCauses[execution.lastControlFailure.failureCode];
+    if (cause) return cause;
+  }
+  if (execution?.roleCalls === 0 && ['GOVERNED_BLOCKED', 'LOCAL_OPERATION_FAILED'].includes(execution.stopReason)) return '下一步尚未启动。已有计划和代码保留，可以点击“重试并继续执行”重新检查启动条件；无需重新规划。';
   if (['BLOCKED', 'BLOCKING_FAIL'].includes(execution?.latestRole?.outcome)) return execution.latestRole.summary || '本轮报告了尚未解决的问题。';
   const code = execution?.lastRoleFailure?.failureCode;
   const resultCauses = {
@@ -260,6 +282,7 @@ function executionFailureExplanation(execution) {
     RESULT_RECONCILIATION_FAILED: '本轮结果已保存，但 Console 推进后续任务状态时失败。应先核对已保存结果，避免重复执行。',
   };
   if (resultCauses[code]) return resultCauses[code];
+  if (code === 'APP_SERVER_TIMEOUT') return '本轮模型调用超时，未收到完整结束结果'+(execution.stopReason === 'USAGE_UNKNOWN' ? '和最终用量。这不是 token 超限。' : '。已有代码和记录保留。');
   if (code === 'GOVERNED_AUTHORITY_REQUIRED' && execution.lastRoleFailure.phase === 'RESULT') return '模型步骤已结束，但 Console 接收结果时内部校验或保存失败。旧记录没有保留具体检查项；这不是要求你重新批准工具。';
   return reasons[execution?.stopReason] ?? '执行已停下，需要处理。';
 }
@@ -271,13 +294,13 @@ function executionProblemHtml(execution) {
 }
 function adjustmentForm(execution) {
   const expired=execution.expiresAt && Date.parse(execution.expiresAt)<=Date.now();
-  return `<p>当前已用 ${num(execution.knownTokens)} token，已调用 ${num(execution.roleCalls)} 个模型步骤。保留所有历史，调整后从未完成的步骤继续。</p>
-    ${field('recoveryLimit','同一步最多恢复次数（已用 '+recoveryAttemptsUsed(execution)+' 次）',Math.max(execution.limitAdjustment?.values.recoveryAttemptLimit??1,recoveryAttemptsUsed(execution)+1),{type:'number',min:1,max:100})}
+  return `${execution.stopReason==='USAGE_UNKNOWN'?'<p class="ctc-note">本轮调用已结束，但最终用量缺失。继续后仍记为未知，不会填成零；采用统计提醒模式。此次只重试技术中断，不重置 QA。</p><input type="hidden" name="acknowledgeUnknown" value="yes">':''}<p>当前已用 ${num(execution.knownTokens)} token，已调用 ${num(execution.roleCalls)} 个模型步骤。保留所有历史，调整后从未完成的步骤继续。</p>
+    <details><summary>高级设置：恢复次数和用量</summary>${field('recoveryLimit','同一步最多恢复次数（已用 '+recoveryAttemptsUsed(execution)+' 次）',Math.max(execution.limitAdjustment?.values.recoveryAttemptLimit??1,recoveryAttemptsUsed(execution)+1),{type:'number',min:1,max:100})}
     <label class="ctc-field">token 控制<select name="budgetMode"><option value="MEASURE" ${execution.totalBudgetMode==='WARNING_ONLY'?'selected':''}>只统计和提醒</option><option value="HARD" ${execution.totalBudgetMode!=='WARNING_ONLY'?'selected':''}>达到上限后暂停</option></select></label>
     ${field('tokens','累计 token 参考／上限',execution.limits.totalTokenLimit,{type:'number',min:1,max:100000000})}
     ${field('calls','累计模型步骤上限',Math.max(execution.limits.roleCallLimit,execution.roleCalls+1),{type:'number',min:Math.max(1,execution.roleCalls),max:10000})}
-    ${expired?field('minutes','时间已到：新增续跑时间（分钟）',180,{type:'number',min:1,max:180}):`<p>本次时间截止：${escape(timestamp(execution.expiresAt))}。到期后可在这里延长。</p>`}
-    <p>这里调整执行限制；实际 QA 结论和已用修复轮数保留。模型重试使用 Sol/xhigh。</p>`;
+    </details>${expired?field('minutes','时间已到：新增续跑时间（分钟）',180,{type:'number',min:1,max:180}):`<p>本次时间截止：${escape(timestamp(execution.expiresAt))}。到期后可在这里延长。</p>`}
+    <p>默认增加一次技术重试，沿用你的用量模式。实际 QA 结论保留；要重新安排 QA，请使用任务修订入口。模型重试使用 Sol/xhigh。</p>`;
 }
 function taskProgressHtml(record) {
   const execution = record.execution;
@@ -334,13 +357,15 @@ function subtasksHtml(record) {
 }
 async function subtaskPage(id, tab) {
   const record = await api('subtask', { subtaskId: id }); state.subtask = record; state.scope = { kind: 'SUBTASK', id }; state.scopeSettings = record.settings;
-  try { const parentRecord = await api('task', { bigTaskId: record.task.bigTaskId }); record.execution = parentRecord.execution; if (record.execution) record.execution.latestRole = parentRecord.latestRole; record.planning = parentRecord.planning; record.planningActive = parentRecord.planningActive; } catch { record.progressUnavailable = true; }
+  try { const parentRecord = await api('task', { bigTaskId: record.task.bigTaskId }); record.execution = parentRecord.execution; if (record.execution) record.execution.latestRole = parentRecord.latestRole; record.planning = parentRecord.planning; record.planningActive = parentRecord.planningActive; record.parentRecord = parentRecord; } catch { record.progressUnavailable = true; }
   const head = `<div class="ctc-crumb">${link(projectName(record.parent?.projectId), `project/${encodeURIComponent(record.parent?.projectId ?? '')}`, 'ctc-link')} / ${link(record.parent?.title ?? '大任务', `task/${encodeURIComponent(record.task.bigTaskId)}`, 'ctc-link')} / 小任务</div>` + heading(record.task.title, record.task.goal) + lifecycleHtml(record.settings, record.execution?.activeRole?.subtaskId === id ? record.execution : null) + subtaskProgressHtml(record) + tabsHtml('subtask', id, tab, [['overview', '任务概览'], ['discussion', '聊天'], ['context', '上下文'], ['history', '执行记录']]);
   if (tab === 'discussion') return head + await discussionHtml();
   if (tab === 'context') return head + await contextHtml();
   if (tab === 'history') return head + `<section class="ctc-surface"><h2>执行记录</h2>${record.inspection?.durableExecution.recentChatThreads.flatMap(thread => thread.runs.map(run => `<article class="ctc-contextitem"><strong>${escape(label(run.status))}</strong><span>${escape(timestamp(run.updatedAt))} · ${escape(run.providerModelId ?? '模型信息未返回')}</span></article>`)).join('') || '<p class="ctc-spaced">还没有开始实施，聊天与准备材料已经可以使用。</p>'}</section>`;
   const planned = record.materialized === false;
-  return head + `<section class="ctc-surface ctc-nextstep"><div>${pill(planned ? '计划中 · 尚未开工' : label(record.workflow?.currentStage ?? record.task.status))}<h2>${planned ? '先把这项任务说明白' : '当前工作'}</h2><p>${planned ? '你可以现在讨论细节、附截图或补充上下文。大任务计划确认后，这些材料会继续保留。' : record.inspection?.dependencyReadiness.ready ? '前置条件已满足，按大任务安排推进。' : '正在等待前置任务完成。'}</p></div>${link('进入小任务聊天', `subtask/${encodeURIComponent(id)}/discussion`, 'ctc-button ctc-primary')}</section><section class="ctc-surface ctc-spaced">${facts([['要做什么', record.task.goal], ['怎样算完成', record.task.acceptanceCriteria.join('；')], ['属于哪个大任务', record.parent?.title]])}</section>${record.canAmendPlan ? `<form data-form="candidate-review" class="ctc-surface ctc-spaced"><h3>这项任务怎么检查</h3>${reviewSelect('reviewLevel', {LOW:'LIGHT',STANDARD:'STANDARD',HIGH_RISK_FOUNDATION:'THOROUGH'}[record.plannedProfile])}<button class="ctc-button" type="submit">保存到当前计划</button><p class="ctc-small">开工前可调整，原聊天和计划记录会保留。</p></form>` : scopeSettingsHtml(record.settings, !planned)}${planned ? link('查看整体计划', `task/${encodeURIComponent(record.task.bigTaskId)}/plan`) : ''}`;
+  const stopped = ['PAUSED','HUMAN_REQUIRED'].includes(record.execution?.phase);
+  const recovery = stopped ? `<section class="ctc-surface ctc-spaced ctc-blocker"><h2>这项任务已停下，可在这里处理</h2><p>${escape(executionFailureExplanation(record.execution))}</p><div class="ctc-actions ctc-spaced">${link('查看原因并调整续跑', `task/${encodeURIComponent(record.task.bigTaskId)}`, 'ctc-button ctc-primary')}${link('讨论修订与新的 QA 安排', `task/${encodeURIComponent(record.task.bigTaskId)}/discussion`)}</div><p class="ctc-small">历史失败和已完成工作保留。调整执行限制不会把 QA 失败标成通过。</p></section>` : '';
+  return head + recovery + `<section class="ctc-surface ctc-nextstep"><div>${pill(planned ? '计划中 · 尚未开工' : label(record.workflow?.currentStage ?? record.task.status))}<h2>${planned ? '先把这项任务说明白' : '当前工作'}</h2><p>${planned ? '你可以现在讨论细节、附截图或补充上下文。大任务计划确认后，这些材料会继续保留。' : record.inspection?.dependencyReadiness.ready ? '前置条件已满足，按大任务安排推进。' : '正在等待前置任务完成。'}</p></div>${link('进入小任务聊天', `subtask/${encodeURIComponent(id)}/discussion`, 'ctc-button ctc-primary')}</section><section class="ctc-surface ctc-spaced">${facts([['要做什么', record.task.goal], ['怎样算完成', record.task.acceptanceCriteria.join('；')], ['属于哪个大任务', record.parent?.title]])}</section>${record.canAmendPlan ? `<form data-form="candidate-review" class="ctc-surface ctc-spaced"><h3>这项任务怎么检查</h3>${reviewSelect('reviewLevel', {LOW:'LIGHT',STANDARD:'STANDARD',HIGH_RISK_FOUNDATION:'THOROUGH'}[record.plannedProfile])}<button class="ctc-button" type="submit">保存到当前计划</button><p class="ctc-small">开工前可调整，原聊天和计划记录会保留。</p></form>` : scopeSettingsHtml(record.settings, !planned)}${planned ? link('查看整体计划', `task/${encodeURIComponent(record.task.bigTaskId)}/plan`) : ''}`;
 }
 async function resultHtml(record) {
   const execution = record.execution;
@@ -478,11 +503,23 @@ async function act(action) {
     const prefs = state.review.consoleWorkflow;
     openModal('确认计划并开始实施', `<p>按刚才查看的计划实施，完成约定的检查与修复；最终产品验收仍由你决定。</p><details><summary>时长和用量安排</summary>${prefs ? `<label class="ctc-field">用量控制<select name="budgetMode"><option value="MEASURE" ${prefs.budgetMode === 'MEASURE' ? 'selected' : ''}>只统计和提醒</option><option value="HARD" ${prefs.budgetMode === 'HARD' ? 'selected' : ''}>达到预算后暂停</option></select></label>` : ''}${field('minutes', '本次运行窗口（分钟）', prefs?.durationMinutes ?? 180, { type: 'number', min: 1, max: prefs ? 1440 : 180 })}${field('tokens', state.review.consoleWorkflow ? '用量参考／预算' : '本次 token 上限', prefs?.executionTokenLimit ?? 2000000, { type: 'number', min: 1, max: prefs ? 100000000 : 2880000 })}${prefs ? '<input type="hidden" name="calls" value="10000">' : field('calls', '最多模型步骤', 96, { type: 'number', min: 1, max: 192 })}</details>${state.review.consoleReviewPolicy ? '<input type="hidden" name="repairs" value="2"><p>按各小任务选择执行：独立 QA 第 2 次失败停止；加固与 QA 第 3 次失败停止。</p>' : '<label class="ctc-field">QA 未通过后的修复轮数<select name="repairs"><option value="1">最多一轮</option><option value="2" selected>最多两轮</option></select></label>'}${state.review.executionIssues?.length ? `<p>当前计划仍有执行问题，请先处理：${escape(JSON.stringify(state.review.executionIssues))}</p>` : ''}`, 'execution-approve', '批准并开始');
   }
+  if (action === 'refresh-task') { modal.close(); await renderRoute(); return; }
+  if (action === 'confirm-revision') {
+    const revision = state.task.revisionDrafts?.find(draft => !draft.confirmedBigTaskId);
+    if (!revision) { await renderRoute(); return; }
+    const result = await api('draft-confirm-and-plan', { draftId: revision.id, revision: revision.revision });
+    await loadWorkspace(); routeTo(`task/${encodeURIComponent(result.targetId)}/plan`); notify('方向已确认，正在准备修订计划。'); return;
+  }
+  if (action === 'revise-task') {
+    const scope={kind:'BIG_TASK',id:state.task.task.id};
+    state.drafts.set(scopeKey(scope), '请复核当前任务的阻塞和已有代码，提出修订方案及新的 QA 检查安排。保留历史失败和用量；先把具体改动告诉我，供我确认。');
+    routeTo(`task/${encodeURIComponent(scope.id)}/discussion`); return;
+  }
   if (action === 'adjust-limits') { openModal('调整限制并继续', adjustmentForm(state.task.execution), 'adjust-and-continue', '保存调整并继续'); return; }
   if (action === 'recovery-review') {
     const execution = state.task?.execution;
     state.review = null;
-    openModal('执行中断说明', executionProblemHtml(execution) + button('调整限制并继续', 'adjust-limits', true), 'image-close', '关闭');
+    openModal('执行中断说明', executionProblemHtml(execution) + button(execution.stopReason === 'USAGE_UNKNOWN' ? '保留未知用量并重试' : '调整限制并继续', 'adjust-limits', true) + revisionActions(state.task), 'image-close', '关闭');
     if (executionRecoveryBlocker(execution)) return;
     const generation = state.generation;
     try {
@@ -492,7 +529,7 @@ async function act(action) {
       openModal('执行中断说明', executionProblemHtml(execution) + '<p class="ctc-spaced">恢复入口当前可用。点击后使用 Sol/xhigh 重试失败步骤；保留已有用量、代码和失败历史。</p>', 'execution-recover', '恢复并继续');
     } catch (error) {
       if (!modal.open || state.generation !== generation) return;
-      openModal('执行中断说明', executionProblemHtml(execution) + `<p class="ctc-note" role="alert">恢复入口当前不可用：${escape(error.message)} 原任务保留，没有启动新的模型调用。</p>`, 'image-close', '关闭');
+      openModal('执行中断说明', executionProblemHtml(execution) + `<p class="ctc-note" role="alert">恢复入口当前不可用：${escape(error.message)} 原任务保留，没有启动新的模型调用。</p>` + revisionActions(state.task), 'image-close', '关闭');
     }
     return;
   }
@@ -549,7 +586,7 @@ async function confirmModal() {
   if (action === 'adjust-and-continue') {
     try {
       let execution=await api('execution-adjust-limits',{bigTaskId:id,planDigest:record.execution.planDigest,expectedRevision:record.execution.limitAdjustment?.revision??0,
-        values:{totalTokenLimit:Number(value('tokens')),roleCallLimit:Number(value('calls')),budgetMode:value('budgetMode'),recoveryAttemptLimit:Number(value('recoveryLimit'))}});
+        values:{totalTokenLimit:Number(value('tokens')),roleCallLimit:Number(value('calls')),budgetMode:value('acknowledgeUnknown')?'MEASURE':value('budgetMode'),recoveryAttemptLimit:Number(value('recoveryLimit')),...((value('acknowledgeUnknown') || record.execution.limitAdjustment?.values.acknowledgedUnknownRunIds) ? {acknowledgedUnknownRunIds:value('acknowledgeUnknown')?record.execution.unknownUsageRunIds:record.execution.limitAdjustment.values.acknowledgedUnknownRunIds}:{})}});
       // Each successful amendment is durable; use its returned revision on another click after a later failure.
       record.execution=execution;
       if (value('minutes')) {execution=await api('execution-renew-window',{bigTaskId:id,planDigest:execution.planDigest,previousExpiresAt:execution.expiresAt,durationMilliseconds:Number(value('minutes'))*60000});record.execution=execution;}
@@ -557,10 +594,11 @@ async function confirmModal() {
         const retry=await api('execution-recovery-review',{bigTaskId:id});
         record.execution=await api('execution-recover',retry.request);
       }
-      await api('execution-start',{bigTaskId:id});
+      if (record.settings?.lifecycle==='PAUSED') { const settings=record.settings; await api('lifecycle-change',{scope:settings.scope,requestId:requestId('resume-recovery'),expectedRevision:settings.revision,lifecycle:'ACTIVE'});state.requestIds.delete('resume-recovery'); }
+      else await api('execution-start',{bigTaskId:id});
       modal.close();notify('调整已保存，已从保留的进度继续。');await renderRoute();return;
     } catch(error) {
-      openModal('调整后的执行状态', `<p role="alert">${escape(error.message)}。已保存的调整保留；没有把失败标为通过。</p><p>若任务仍因工程问题停下，请查看最新执行原因；无需重复创建任务。</p>`+button('重新查看调整', 'adjust-limits'), 'image-close','关闭');return;
+      openModal('调整后的执行状态', `<p role="alert">${escape(error.message)}。已保存的调整保留；没有把失败标为通过。</p><p>当前恢复未能完成。可以查看原任务的原因，或修订任务及检查安排。</p>`+revisionActions(record)+button('返回任务查看原因', 'refresh-task'), 'image-close','关闭');return;
     }
   }
   if (action === 'execution-recover') { await api(action, review.request); await api('execution-start', { bigTaskId: id }); }

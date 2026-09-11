@@ -24,6 +24,7 @@ export const BigTaskExecutionAdjustmentValuesSchema = z.object({
   roleCallLimit: z.number().int().min(1).max(10_000),
   budgetMode: z.enum(["MEASURE", "HARD"]),
   recoveryAttemptLimit: z.number().int().min(1).max(100),
+  acknowledgedUnknownRunIds: z.array(ExecutionRunIdSchema).max(10000).optional(),
 }).strict();
 export const BigTaskExecutionAdjustmentSchema = z.object({
   bigTaskId: BigTaskIdSchema, planDigest: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -101,6 +102,9 @@ export const BigTaskControlFailureSchema = z.object({
     "REPOSITORY_PATH_UNAVAILABLE", "NOT_GIT_REPOSITORY", "REPOSITORY_ROOT_MISMATCH", "UNSAFE_WORKTREE_ROOT", "OWNERSHIP_CONFLICT",
     "PROJECT_CAPACITY_EXCEEDED", "OWNERSHIP_COLLISION", "OWNERSHIP_NOT_ACTIVE", "OWNERSHIP_DRIFT", "ACTIVE_EXECUTION_EXISTS",
     "WORKTREE_DIRTY", "GIT_OPERATION_FAILED", "RECOVERY_REQUIRED", "MALFORMED_STORED_OWNERSHIP", "STORAGE_UNAVAILABLE", "UNCLASSIFIED",
+    "PLANNING_AUTHORITY_NOT_READY", "DEPENDENCY_BLOCKED", "REPOSITORY_PREFLIGHT_BLOCKED", "CONTEXT_PREFLIGHT_BLOCKED",
+    "BUDGET_BLOCKED", "CONCURRENCY_BLOCKED", "WORKTREE_BLOCKED", "PROVIDER_ROLE_FAILED", "ROLE_RESULT_BLOCKED",
+    "NO_ELIGIBLE_ACTION", "MANUAL_START_REQUIRED", "BUDGET_EXTENSION_REQUIRED", "REPAIR_REQA_EXHAUSTED", "AUTHORITY_BLOCKED", "REPLAN_REQUIRED",
   ]),
 }).strict();
 export type BigTaskControlFailure = z.infer<typeof BigTaskControlFailureSchema>;
@@ -135,6 +139,7 @@ export const BigTaskExecutionStatusSchema = z.object({
   limitAdjustment: z.object({revision:z.number().int().positive(),values:BigTaskExecutionAdjustmentValuesSchema}).strict().optional(),
   windowRenewal: windowRenewal.optional(),
   additionalWindowRenewals: z.array(windowRenewal).min(1).optional(),
+  unknownUsageRunIds: z.array(ExecutionRunIdSchema).max(10000).optional(),
   qaRecovery: qaRecovery.optional(), unacknowledgedUnknownUsage: z.boolean().optional(),
   lastRoleFailure: BigTaskRoleFailureSchema.extend({ at: timestamp }).strict().optional(),
   lastControlFailure: BigTaskControlFailureSchema.extend({ at: timestamp }).strict().optional(),

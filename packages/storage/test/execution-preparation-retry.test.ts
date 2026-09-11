@@ -1,3 +1,4 @@
+import { ChatThreadIdSchema, ExecutionProviderIdSchema, ExecutionRunIdSchema } from "@codex-task-console/domain";
 import { describe, expect, it } from "vitest";
 import { makeExecutionFixture } from "./big-task-execution-fixture.js";
 import { BigTaskExecutionStore } from "../src/big-task-execution.js";
@@ -37,6 +38,34 @@ describe("Execution preparation and retry", () => {
       expect(f.governed.prepareNextRole(f.approval.bigTaskId).kind).toBe("ROLE_AUTHORIZED");
       f.reopen();
       expect(new BigTaskExecutionStore(f.storage).inspect(f.approval.bigTaskId).lastControlFailure).toEqual(stopped.lastControlFailure);
+      expect(f.starts).toHaveLength(0);
+    } finally { f.close(); }
+  });
+
+  it("retries legacy pre-role blocking without resetting any QA history", () => {
+    const f = makeExecutionFixture();
+    try {
+      f.execution.approve(f.approval); const original = f.execution.start(f.approval.bigTaskId).status;
+      f.execution.stop(f.approval.bigTaskId, "GOVERNED_BLOCKED");
+      expect(f.execution.canRetryPreparation(f.approval.bigTaskId)).toBe(true);
+      expect(f.execution.start(f.approval.bigTaskId).status).toMatchObject({ phase: "RUNNING", roleCalls: 0, expiresAt: original.expiresAt });
+      f.reopen();
+      expect(new BigTaskExecutionStore(f.storage).inspect(f.approval.bigTaskId).phase).toBe("RUNNING");
+    } finally { f.close(); }
+  });
+
+  it("rechecks actual project capacity when a previously authorized role resumes", () => {
+    const f = makeExecutionFixture(undefined, undefined, "STANDARD");
+    try {
+      f.execution.approve(f.approval); f.execution.start(f.approval.bigTaskId);
+      const role = f.governed.prepareNextRole(f.approval.bigTaskId);
+      if (role.kind !== "ROLE_AUTHORIZED") throw new Error("Expected role");
+      const other = f.storage.listSubtasksByBigTask(f.approval.bigTaskId).find(task => task.id !== role.authorization.subtaskId)!;
+      const chatThreadId = ChatThreadIdSchema.parse("thr_other_capacity");
+      f.storage.createChatThread({ id: chatThreadId, subtaskId: other.id, providerId: ExecutionProviderIdSchema.parse("codex-app-server") });
+      f.storage.createExecutionRun({ id: ExecutionRunIdSchema.parse("run_other_capacity"), chatThreadId });
+      expect(() => getGovernedProviderBridge(f.governed).reserveRoleExecutionAttempt(role.authorization.authorizationId)).toThrow();
+      expect(f.execution.inspect(f.approval.bigTaskId).roleCalls).toBe(0);
       expect(f.starts).toHaveLength(0);
     } finally { f.close(); }
   });

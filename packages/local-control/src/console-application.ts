@@ -6,7 +6,7 @@ import { devNull } from "node:os";
 import { isAbsolute } from "node:path";
 import { realpathSync, lstatSync } from "node:fs";
 import {
-  ConsoleModelSelectionSchema, ConsoleScopeSchema, BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
+  ConsoleDiscussionAnswerSchema, ConsoleModelSelectionSchema, ConsoleScopeSchema, BigTaskExecutionAcceptanceSchema, BigTaskIdSchema, executionUsageSettled, executionTokenLimitReached, ConsoleDiscussionInputSchema,
   ConsoleProjectCreateSchema, CONSOLE_DISCUSSION_OUTPUT_SCHEMA, ProjectIdSchema, SubtaskIdSchema,
 } from "@codex-task-console/domain";
 import { readConsoleModelCatalog, executeConsoleDiscussionCodex } from "@codex-task-console/codex-adapter";
@@ -199,6 +199,54 @@ export class ConsoleApplication {
       }
       return this.store.changeSettings(input);
     }
+    if (action === "task-recover-and-start") {
+      const control = ConsoleDiscussionAnswerSchema.parse({ reply: "Recovery", proposal: null, actions: [{ ...data, kind: "RECOVER_TASK" }] }).actions![0]!;
+      if (control.kind !== "RECOVER_TASK") return invalid();
+      const store = new BigTaskExecutionStore(this.storage), state = store.inspect(control.bigTaskId);
+      if (state.planDigest !== control.planDigest || (state.limitAdjustment?.revision ?? 0) !== control.expectedRevision) throw new TaskStorageError("CONFLICT", "Recovery state changed.");
+      if (state.unacknowledgedUnknownUsage && !control.acknowledgeUnknownUsage) throw new TaskStorageError("CONFLICT", "Missing usage requires an explicit decision to retain it and continue.");
+      const prior = state.limitAdjustment?.values;
+      await this.request("execution-adjust-limits", { bigTaskId: state.bigTaskId, planDigest: state.planDigest, expectedRevision: control.expectedRevision,
+        values: { totalTokenLimit: state.limits.totalTokenLimit, roleCallLimit: Math.max(state.limits.roleCallLimit, state.roleCalls+1),
+          budgetMode: control.acknowledgeUnknownUsage || state.totalBudgetMode === "WARNING_ONLY" ? "MEASURE" : "HARD",
+          recoveryAttemptLimit: Math.min(100, (prior?.recoveryAttemptLimit ?? 1)+1),
+          ...(control.acknowledgeUnknownUsage ? { acknowledgedUnknownRunIds: state.unknownUsageRunIds ?? [] } : prior?.acknowledgedUnknownRunIds ? { acknowledgedUnknownRunIds: prior.acknowledgedUnknownRunIds } : {}) } });
+      if (control.durationMinutes !== null && state.expiresAt && Date.parse(state.expiresAt) <= Date.parse(this.store.now()))
+        await this.request("execution-renew-window", { bigTaskId: state.bigTaskId, planDigest: state.planDigest, previousExpiresAt: state.expiresAt, durationMilliseconds: control.durationMinutes*60000 });
+      const review = object(await this.service.reviewExecutionRecovery!(state.bigTaskId));
+      await this.request("execution-recover", review.request);
+      const settings = this.store.settings({ kind: "BIG_TASK", id: state.bigTaskId });
+      if (settings.lifecycle === "PAUSED") await this.request("lifecycle-change", { scope: settings.scope, requestId: `recover_${state.bigTaskId}_${control.expectedRevision}`, expectedRevision: settings.revision, lifecycle: "ACTIVE" });
+      else await this.request("execution-start", { bigTaskId: state.bigTaskId });
+      return { kind: "TASK_ADVANCED", targetId: state.bigTaskId, description: "已按你的要求恢复技术中断。旧失败、用量和 QA 记录保留。" };
+    }
+    if (action === "draft-confirm-and-plan") {
+      exact(input, ["draftId", "revision"]);
+      if (typeof data.draftId !== "string" || !Number.isSafeInteger(data.revision)) return invalid();
+      const draft = this.store.getDraft(data.draftId);
+      if (!draft || !draft.suggestedBrief) return invalid();
+      if (draft.revision !== data.revision && !(draft.confirmation && draft.confirmation.revision === data.revision)) throw new TaskStorageError("CONFLICT", "The draft changed; review its current direction.");
+      const settings = this.store.settings({ kind: "DRAFT", id: draft.id });
+      const confirmed = draft.confirmation ? draft : this.store.confirmDirection({ draftId: draft.id, revision: draft.revision,
+        brief: draft.suggestedBrief, reviewIntensity: settings.effectiveReviewLevel, planningTokenLimit: settings.effectivePreferences.planningTokenLimit, workflow: settings.effectivePreferences });
+      await this.request("planning-start", { bigTaskId: confirmed.confirmedBigTaskId });
+      return { kind: "TASK_ADVANCED", targetId: confirmed.confirmedBigTaskId, description: "方向已确认，正在准备修订计划。旧任务及记录保留；完成后可在聊天里确认实施。" };
+    }
+    if (action === "plan-approve-and-start") {
+      exact(input, ["bigTaskId", "expectedBinding"]);
+      const id = BigTaskIdSchema.parse(data.bigTaskId);
+      if (this.store.planningBinding(id) !== data.expectedBinding) throw new TaskStorageError("CONFLICT", "The plan changed; review the current version.");
+      if (this.store.lifecycle({ kind: "BIG_TASK", id }) !== "ACTIVE") throw new TaskStorageError("CONFLICT", "Reopen the task before starting.");
+      if (!this.store.taskPresence(id).execution) {
+        const review = new BigTaskExecutionStore(this.storage).review(id);
+        const preferences = new LivePlanningStore(this.storage).readIntake(id).intake.consoleWorkflow;
+        await this.request("execution-approve", { bigTaskId: id, planDigest: review.planDigest, repositoryHeadSha: review.repositoryHeadSha,
+          limits: { durationMilliseconds: (preferences?.durationMinutes ?? 180) * 60000, totalTokenLimit: preferences?.executionTokenLimit ?? 2000000,
+            roleCallLimit: preferences ? 10000 : 96, repairCycleLimit: 2, ...(preferences ? { budgetMode: preferences.budgetMode } : {}) } });
+      }
+      await this.request("execution-start", { bigTaskId: id });
+      return { kind: "TASK_ADVANCED", targetId: id, description: "已按你在聊天中的确认开始实施当前计划。" };
+    }
     if (action === "direction-confirm") return this.store.confirmDirection(input);
     if (action === "context") { exact(input, ["scope"]); return this.store.context(data.scope); }
     if (action === "context-confirm") return this.store.confirmContext(input);
@@ -224,6 +272,20 @@ export class ConsoleApplication {
             this.#schedule(`planning:${id}`, () => this.service.runPlanning!(id));
           }
           for (const [index, effect] of (finished.effects ?? []).entries()) {
+            if (effect.kind === "TASK_CONTROL_REQUESTED") {
+              const control = finished.answer?.actions?.[index];
+              try {
+                const result = control?.kind === "CONFIRM_DRAFT"
+                  ? await this.request("draft-confirm-and-plan", { draftId: control.draftId, revision: control.revision })
+                  : control?.kind === "APPROVE_PLAN" ? await this.request("plan-approve-and-start", { bigTaskId: control.bigTaskId, expectedBinding: control.expectedBinding })
+                    : control?.kind === "RECOVER_TASK" ? await this.request("task-recover-and-start", { bigTaskId: control.bigTaskId, planDigest: control.planDigest, expectedRevision: control.expectedRevision, acknowledgeUnknownUsage: control.acknowledgeUnknownUsage, durationMinutes: control.durationMinutes }) : invalid();
+                const value = object(result);
+                this.store.completeTaskAction(finished.id, index, { kind: "TASK_ADVANCED", targetId: String(value.targetId), description: String(value.description) });
+              } catch {
+                this.store.completeTaskAction(finished.id, index, { kind: "TASK_ACTION_FAILED", targetId: effect.targetId, description: "操作未完成：目标版本或运行状态已变化。打开这里查看当前版本；你的确认和已有工作保留。" });
+              }
+              continue;
+            }
             if (effect.kind !== "TASK_ADVANCE_REQUESTED" && effect.kind !== "TASK_PAUSE_REQUESTED") continue;
             const scope = BigTaskIdSchema.safeParse(effect.targetId).success
               ? { kind: "BIG_TASK" as const, id: effect.targetId } : { kind: "SUBTASK" as const, id: effect.targetId };
@@ -282,6 +344,7 @@ export class ConsoleApplication {
         && executionUsageSettled(execution) && !executionTokenLimitReached(execution)
         && execution.roleCalls < execution.limits.roleCallLimit && execution.pendingIntegration === null;
       return { task, latestRole: execution ? createGovernedExecutionStore(this.storage).latestRoleSummary(id) : null, planningBinding: this.store.planningBinding(id), presentation: this.store.presentation(id), settings: this.store.settings({ kind: "BIG_TASK", id }), navigation: this.store.navigation(task.projectId).find(item => item.id === id), sourceDraft: this.store.sourceDraft(id), planning, execution, canResume, canRenewWindow,
+        revisionDrafts: this.store.listDrafts(task.projectId).filter(draft => draft.relatedBigTaskId === id && !draft.parentDraftId).map(draft => ({ id: draft.id, title: draft.title, revision: draft.revision, confirmedBigTaskId: draft.confirmedBigTaskId, currentBigTaskId: draft.confirmedBigTaskId ? this.store.presentation(draft.confirmedBigTaskId).historyOf ?? draft.confirmedBigTaskId : null })),
         subtasks: this.storage.listSubtasksByBigTask(id), plan: this.storage.getDurablePlanningSnapshot(id),
         contracts: this.storage.getDurablePlanningReviewBundle(id)?.taskContracts ?? [],
         planReviewMode: presence.planning ? new LivePlanningStore(this.storage).readIntake(id).intake.consoleWorkflow?.planReview ?? "INDEPENDENT" : null,

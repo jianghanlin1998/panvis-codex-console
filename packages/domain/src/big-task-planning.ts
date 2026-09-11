@@ -34,6 +34,7 @@ export const PlanningBudgetExceptionSchema = z.object({
 }).strict();
 
 export const PlanningProviderDiagnosticsSchema = z.object({
+  protocolCheck: z.enum(["TOOL_ITEM_LIFECYCLE", "TOOL_OUTPUT_LIFECYCLE", "DYNAMIC_TOOL_REQUEST", "COMMAND_ITEM_SHAPE", "COMMAND_ACTION_SHAPE", "COMMAND_WORKING_DIRECTORY", "TURN_IDENTITY"]).optional(),
   failureCode: z.enum([
     "INVALID_INPUT", "PREFLIGHT_FAILED", "PREFLIGHT_BLOCKED", "ACTIVE_RUNTIME_REQUIRED",
     "APP_SERVER_START_FAILED", "APP_SERVER_PROTOCOL_ERROR", "APP_SERVER_TIMEOUT", "APP_SERVER_EXITED",

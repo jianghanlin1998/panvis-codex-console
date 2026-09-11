@@ -11,6 +11,7 @@ import {
   BigTaskExecutionRecoverySchema,
   BigTaskQaRecoverySchema, hasUnacknowledgedExecutionUsage, executionUsageSettled, executionTokenLimitReached,
   ChatThreadIdSchema,
+  ProjectIdSchema,
   NormalizedUsageSchema,
   DEFAULT_V1_BUDGET_POLICY,
   ExecutionProviderIdSchema,
@@ -82,6 +83,7 @@ export type GovernedRoleContextProfile =
   | "FOCUSED_RE_QA";
 
 export type GovernedDispatchStatus =
+  | "PAUSED"
   | "RESERVED"
   | "ACTIVE"
   | "COMPLETED"
@@ -662,7 +664,7 @@ const parseDispatchRow = (row: DispatchRow): GovernedDispatchReceipt => {
   const profile = ["LOW", "STANDARD", "HIGH_RISK_FOUNDATION"].find(
     (value) => value === row.profile,
   );
-  const status = ["RESERVED", "ACTIVE", "COMPLETED", "HUMAN_REQUIRED"].find(
+  const status = ["RESERVED", "ACTIVE", "PAUSED", "COMPLETED", "HUMAN_REQUIRED"].find(
     (value) => value === row.status,
   );
   if (
@@ -1099,7 +1101,7 @@ export class GovernedExecutionStore {
     const execution = new BigTaskExecutionStore(this.#storage);
     const state = execution.inspect(bigTaskId);
     execution.assertCurrent(bigTaskId);
-    if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED", "TIME_LIMIT_REACHED"].includes(state.stopReason ?? "") ||
+    if (state.phase !== "HUMAN_REQUIRED" || !["GOVERNED_BLOCKED", "TOKEN_LIMIT_REACHED", "TIME_LIMIT_REACHED", "USAGE_UNKNOWN"].includes(state.stopReason ?? "") ||
       !executionUsageSettled(state) || state.expiresAt === null || Date.parse(state.expiresAt) <= this.#access().clock().getTime() ||
       (state.stopReason !== "TOKEN_LIMIT_REACHED" && executionTokenLimitReached(state)) || state.roleCalls >= state.limits.roleCallLimit || state.pendingIntegration !== null) throw conflict("Recovery is unavailable.");
     this.#validateBigTaskAuthority(bigTaskId);
@@ -1112,7 +1114,7 @@ export class GovernedExecutionStore {
     const run = this.#storage.getExecutionRunById(ExecutionRunIdSchema.parse(rows[0]!.execution_run_id));
     this.#assertRoleAuthorizationCurrent(authorization);
     if (this.#access().sqlite.prepare("SELECT recovery_attempt FROM governed_role_authorizations WHERE authorization_id=?").get(authorization.authorizationId)?.recovery_attempt as number >= (state.limitAdjustment?.values.recoveryAttemptLimit ?? 1) || run === null || !["FAILED", "INTERRUPTED"].includes(run.status) ||
-      run.normalizedUsage?.totalTokens === undefined || this.#getRoleResult(authorization.authorizationId) !== null) throw conflict("The failed role cannot be recovered.");
+      (run.normalizedUsage?.totalTokens === undefined && !state.limitAdjustment?.values.acknowledgedUnknownRunIds?.includes(run.id)) || this.#getRoleResult(authorization.authorizationId) !== null) throw conflict("The failed role cannot be recovered.");
     const worktree = this.#worktrees.resolveActiveOwnedWorktreeForSubtask(authorization.subtaskId);
     if (worktree.ownership.id !== authorization.worktreeOwnershipId || worktree.currentHeadSha !== authorization.candidateSha) throw conflict("Recovery candidate changed.");
     const candidateDigest = executionCandidateDigest(worktree.ownership, () => Date.parse(state.expiresAt!) - this.#access().clock().getTime());
@@ -1307,6 +1309,17 @@ export class GovernedExecutionStore {
           throw conflict("The governed role pre-start attempt cannot be resumed safely.");
         }
         return attempt;
+      }
+      const projectRuns = access.sqlite.prepare(`SELECT DISTINCT ct.subtask_id, a.write_enabled
+        FROM execution_runs er JOIN chat_threads ct ON ct.id = er.chat_thread_id
+        JOIN subtasks s ON s.id = ct.subtask_id JOIN big_tasks b ON b.id = s.big_task_id
+        LEFT JOIN governed_role_execution_links l ON l.execution_run_id = er.id
+        LEFT JOIN governed_role_authorizations a ON a.authorization_id = l.authorization_id
+        WHERE b.project_id = ? AND er.status IN ('CREATED', 'RUNNING')`).all(authorization.projectId) as Array<{ subtask_id: string; write_enabled: number | null }>;
+      const project = this.#storage.getProjectById(ProjectIdSchema.parse(authorization.projectId))!;
+      if (projectRuns.length >= project.maxActiveCodingSubtasks ||
+          authorization.writeEnabled && projectRuns.some(row => row.write_enabled !== 0)) {
+        throw conflict("The Project already has an active execution occupying this slot.");
       }
       const active = access.sqlite
         .prepare(
@@ -1876,6 +1889,19 @@ export class GovernedExecutionStore {
       });
       view = this.#requiredWorkflowView(view.subtaskId);
     }
+    if (receipt.status === "PAUSED") {
+      receipt = this.#storage.runInTransaction(() => {
+        const occupied = this.#occupiedDispatches(view.projectId);
+        const project = this.#storage.getProjectById(ProjectIdSchema.parse(view.projectId))!;
+        if (occupied.length >= project.maxActiveCodingSubtasks || view.writeEnabled && occupied.some(row => row.write_enabled === 1)) {
+          throw new GovernedPreparationBlock(freeze({ kind: "BLOCKED", reason: "CONCURRENCY_BLOCKED", subtaskId: view.subtaskId }));
+        }
+        const saved = this.#getDispatchReceiptForSubtask(view.subtaskId)!;
+        if (saved.status === "PAUSED") this.#access().sqlite.prepare("UPDATE governed_dispatch_receipts SET status='ACTIVE', updated_at=? WHERE receipt_id=? AND status='PAUSED'")
+          .run(this.#timestampAtOrAfter(saved.updatedAt), saved.receiptId);
+        return this.#getDispatchReceiptForSubtask(view.subtaskId)!;
+      });
+    }
     if (receipt.status === "COMPLETED" || receipt.status === "HUMAN_REQUIRED") {
       throw malformed();
     }
@@ -2053,16 +2079,8 @@ export class GovernedExecutionStore {
       throw conflict("The governed Subtask start transition is not allowed.");
     }
     const access = this.#access();
-    const activeWrite = access.sqlite
-      .prepare(
-        `SELECT receipt_id
-           FROM governed_dispatch_receipts
-          WHERE project_id = ? AND write_enabled = 1
-            AND status IN ('RESERVED', 'ACTIVE')
-          LIMIT 1`,
-      )
-      .get(current.projectId) as { readonly receipt_id: string } | undefined;
-    if (current.writeEnabled && activeWrite !== undefined) {
+    const occupied = this.#occupiedDispatches(current.projectId);
+    if (current.writeEnabled && occupied.some(row => row.write_enabled === 1)) {
       throw new GovernedPreparationBlock(
         freeze({
           kind: "BLOCKED",
@@ -2722,6 +2740,20 @@ export class GovernedExecutionStore {
     );
   }
 
+  #occupiedDispatches(projectId: string) {
+    const console = new ConsoleWorkspaceStore(this.#storage), access = this.#access();
+    const rows = access.sqlite.prepare(`SELECT receipt_id, subtask_id, status, write_enabled, updated_at
+      FROM governed_dispatch_receipts WHERE project_id = ? AND status IN ('RESERVED', 'ACTIVE')`)
+      .all(projectId) as Array<{ receipt_id: string; subtask_id: string; status: string; write_enabled: number; updated_at: string }>;
+    for (const row of rows) {
+      if (row.status === "ACTIVE" && console.isIdleRetainedSubtask(row.subtask_id)) {
+        access.sqlite.prepare("UPDATE governed_dispatch_receipts SET status='PAUSED', updated_at=? WHERE receipt_id=? AND status='ACTIVE'")
+          .run(this.#timestampAtOrAfter(row.updated_at), row.receipt_id);
+      }
+    }
+    return rows.filter(row => row.status !== "ACTIVE" || !console.isIdleRetainedSubtask(row.subtask_id));
+  }
+
   #deriveDispatchGates(
     view: DurableWorkflowControlView,
     worktree: ResolvedActiveOwnedWorktree,
@@ -2810,22 +2842,9 @@ export class GovernedExecutionStore {
       );
     }
     const budget = this.#deriveAggregateBudget(view.subtaskId, true);
-    const access = this.#access();
-    const activeWrite = access.sqlite
-      .prepare(
-        `SELECT count(*) AS count
-           FROM governed_dispatch_receipts
-          WHERE project_id = ? AND write_enabled = 1
-            AND status IN ('RESERVED', 'ACTIVE')`,
-      )
-      .get(view.projectId) as { readonly count: number };
-    const activeCoding = access.sqlite
-      .prepare(
-        `SELECT count(*) AS count
-           FROM governed_dispatch_receipts
-          WHERE project_id = ? AND status IN ('RESERVED', 'ACTIVE')`,
-      )
-      .get(view.projectId) as { readonly count: number };
+    const occupied = this.#occupiedDispatches(view.projectId);
+    const activeWrite = { count: occupied.filter(row => row.write_enabled === 1).length };
+    const activeCoding = { count: occupied.length };
     if (activeCoding.count >= 2 || (view.writeEnabled && activeWrite.count !== 0)) {
       throw new GovernedPreparationBlock(
         freeze({
@@ -3093,7 +3112,7 @@ export class GovernedExecutionStore {
         throw new GovernedPreparationBlock(
           freeze({
             kind: "BLOCKED",
-            reason: "WORKTREE_BLOCKED",
+            reason: error instanceof WorktreeOwnershipError && error.code === "PROJECT_CAPACITY_EXCEEDED" ? "CONCURRENCY_BLOCKED" : "WORKTREE_BLOCKED",
             subtaskId,
           }),
         );
@@ -3467,7 +3486,7 @@ export class GovernedExecutionStore {
     const rows = this.#access().sqlite
       .prepare(
         `SELECT * FROM governed_dispatch_receipts
-          WHERE big_task_id = ? AND status IN ('RESERVED', 'ACTIVE')`,
+          WHERE big_task_id = ? AND status IN ('RESERVED', 'ACTIVE', 'PAUSED')`,
       )
       .all(bigTaskId) as unknown as readonly DispatchRow[];
     for (const row of rows) {
@@ -3496,7 +3515,7 @@ export class GovernedExecutionStore {
     if (receipt.status === status) {
       return;
     }
-    if (receipt.status !== "RESERVED" && receipt.status !== "ACTIVE") {
+    if (receipt.status !== "RESERVED" && receipt.status !== "ACTIVE" && receipt.status !== "PAUSED") {
       throw malformed();
     }
     const terminalAt = this.#timestampAtOrAfter(receipt.updatedAt);
@@ -3504,7 +3523,7 @@ export class GovernedExecutionStore {
       .prepare(
         `UPDATE governed_dispatch_receipts
             SET status = ?, updated_at = ?, terminal_at = ?
-          WHERE receipt_id = ? AND status IN ('RESERVED', 'ACTIVE')`,
+          WHERE receipt_id = ? AND status IN ('RESERVED', 'ACTIVE', 'PAUSED')`,
       )
       .run(status, terminalAt, terminalAt, receiptId);
   }

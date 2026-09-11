@@ -1,3 +1,4 @@
+import { ConsoleWorkspaceStore } from "./console-workspace.js";
 import { approvedExecutionBase, executionDeadlineForSubtask } from "./big-task-execution.js";
 import { checkExecutionGitFilters, executionGitTimeout, withExecutionGitBoundary } from "./execution-git-boundary.js";
 import { spawnSync } from "node:child_process";
@@ -824,6 +825,7 @@ const withImmediateTransaction = <T>(
 };
 
 const reserveOwnership = (
+  storage: TaskStorage,
   access: TaskStorageWorktreeAccess,
   hierarchy: CanonicalHierarchy,
   ownership: WorktreeOwnership,
@@ -884,12 +886,13 @@ const reserveOwnership = (
       );
     }
 
-    const slots = access.sqlite
-      .prepare(
-        "SELECT count(*) AS count FROM worktree_ownerships WHERE project_id = ? AND status IN ('PROVISIONING', 'ACTIVE', 'RELEASING')",
-      )
-      .get(ownership.projectId) as { readonly count: number };
-    if (slots.count >= hierarchy.project.maxActiveCodingSubtasks) {
+    const console = new ConsoleWorkspaceStore(storage);
+    const slots = (access.sqlite.prepare(
+      "SELECT subtask_id, status FROM worktree_ownerships WHERE project_id = ? AND status IN ('PROVISIONING', 'ACTIVE', 'RELEASING')",
+    ).all(ownership.projectId) as Array<{ subtask_id: string; status: string }>).filter(
+      row => row.status !== "ACTIVE" || !console.isIdleRetainedSubtask(row.subtask_id),
+    );
+    if (slots.length >= hierarchy.project.maxActiveCodingSubtasks) {
       throw ownershipError(
         "PROJECT_CAPACITY_EXCEEDED",
         "The Project has no available active-coding worktree slot.",
@@ -1659,6 +1662,7 @@ class LocalWorktreeOwnershipManager implements WorktreeOwnershipManager {
     this.#dependencies.failureHooks.beforeReservation?.();
     executionGitTimeout(GIT_TIMEOUT_MILLISECONDS);
     const persisted = reserveOwnership(
+      this.#storage,
       access,
       hierarchy,
       reservation,

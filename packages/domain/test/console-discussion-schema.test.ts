@@ -20,7 +20,7 @@ describe("Console discussion structured-output contract", () => {
     check(CONSOLE_DISCUSSION_OUTPUT_SCHEMA);
     expect(unions).toBeGreaterThanOrEqual(3);
     const actions = (CONSOLE_DISCUSSION_OUTPUT_SCHEMA.properties!.actions as { items: { anyOf: Array<{ properties: { kind: { const: string } } }> } }).items;
-    expect(actions.anyOf.map(branch => branch.properties.kind.const)).toEqual(["ADVANCE_TASK", "PAUSE_TASK", "AMEND_PLAN_REVIEW", "CREATE_TASK", "SET_REVIEW_LEVEL"]);
+    expect(actions.anyOf.map(branch => branch.properties.kind.const)).toEqual(["RECOVER_TASK", "CONFIRM_DRAFT", "APPROVE_PLAN", "ADVANCE_TASK", "PAUSE_TASK", "AMEND_PLAN_REVIEW", "CREATE_TASK", "SET_REVIEW_LEVEL"]);
   });
   it("preserves local validation and exact action kinds after changing only the provider schema representation", () => {
     const base = { reply: "Draft only", proposal: null };

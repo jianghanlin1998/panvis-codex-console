@@ -1,4 +1,4 @@
-import type { ConsoleModelSelection } from "@codex-task-console/domain";
+import type { ConsoleModelSelection, PlanningProviderDiagnosticsSchema } from "@codex-task-console/domain";
 import {
   spawn,
   type ChildProcessWithoutNullStreams,
@@ -73,7 +73,7 @@ import type {
 import type { JsonObject, JsonValue, TokenUsageBreakdown } from "./protocol.js";
 import { validateOwnedWorktreeHardlinkSafety } from "./worktree-filesystem-safety.js";
 import { resolveRuntimeHttpsProxy } from "./runtime-network.js";
-import { consoleResearch, CONSOLE_RESEARCH_TOOL } from "./console-research.js";
+import { consoleResearch, consoleResearchDirectories, CONSOLE_RESEARCH_TOOL } from "./console-research.js";
 import { ConsoleWorkspaceStore, TaskStorageError } from "@codex-task-console/storage";
 import { ConsoleScopeSchema } from "@codex-task-console/domain";
 import { providerFailureCode } from "./provider-failure.js";
@@ -209,9 +209,11 @@ export type OwnedWorktreeCodexExecutionFailureCode =
   (typeof OWNED_WORKTREE_CODEX_EXECUTION_FAILURE_CODES)[number];
 
 type CodexExecutionFailureCode = OwnedWorktreeCodexExecutionFailureCode;
+type ProtocolCheck = NonNullable<(typeof PlanningProviderDiagnosticsSchema)["_output"]["protocolCheck"]>;
 
 export interface LiveCodexExecutionDiagnostics {
   readonly providerFailureCode?: string;
+  readonly protocolCheck?: ProtocolCheck;
   readonly approvalRequestsDeclined: number;
   readonly interruptRequests: number;
   readonly notificationsReceived: number;
@@ -387,6 +389,7 @@ export type GovernedRoleCodexExecutionResult =
 
 interface MutableDiagnostics {
   providerFailureCode?: string;
+  protocolCheck?: ProtocolCheck;
   approvalRequestsDeclined: number;
   interruptRequests: number;
   notificationsReceived: number;
@@ -499,7 +502,7 @@ interface OwnedWorktreeExecutionDependencies extends LiveExecutionDependencies {
 class LiveExecutionError extends Error {
   readonly code: CodexExecutionFailureCode;
 
-  constructor(code: CodexExecutionFailureCode) {
+  constructor(code: CodexExecutionFailureCode, readonly protocolCheck?: ProtocolCheck) {
     super(code);
     this.name = "LiveExecutionError";
     this.code = code;
@@ -547,7 +550,7 @@ interface WriteToolItemState {
 
 type TurnEventPolicy =
   | Readonly<{ readonly kind: "READ_ONLY" }>
-  | Readonly<{ readonly kind: "CONSOLE_RESEARCH"; readonly worktreePath: string; readonly repositoryPath?: string }>
+  | Readonly<{ readonly kind: "CONSOLE_RESEARCH"; readonly worktreePath: string; readonly researchDirectories: readonly string[] }>
   | Readonly<{ readonly kind: "READ_ONLY_WORKTREE"; readonly worktreePath: string }>
   | Readonly<{
       readonly kind: "WORKSPACE_WRITE";
@@ -687,7 +690,7 @@ class TurnEventTracker {
             method,
             item,
             itemType,
-            this.eventPolicy.kind === "CONSOLE_RESEARCH" && this.eventPolicy.repositoryPath && typeof item.cwd === "string" && commandCwdIsWithin(item.cwd, this.eventPolicy.repositoryPath) ? this.eventPolicy.repositoryPath : this.eventPolicy.worktreePath,
+            this.eventPolicy.kind === "CONSOLE_RESEARCH" ? this.eventPolicy.researchDirectories.find(root => typeof item.cwd === "string" && commandCwdIsWithin(item.cwd, root)) ?? this.eventPolicy.worktreePath : this.eventPolicy.worktreePath,
           );
         } else if (
           !(this.eventPolicy.kind === "CONSOLE_RESEARCH" && itemType === "dynamicToolCall") &&
@@ -977,13 +980,13 @@ class TurnEventTracker {
 
   #assertAuthorizedTurnId(turnId: string): void {
     if (this.turnId === null || this.turnId !== turnId) {
-      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "TURN_IDENTITY");
     }
   }
 
   #requireTurnStartSent(): void {
     if (!this.#turnStartSent) {
-      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "TURN_IDENTITY");
     }
   }
 
@@ -1001,7 +1004,7 @@ class TurnEventTracker {
         this.#writeToolItems.size >= MAX_WRITE_TOOL_ITEMS ||
         item.status !== "inProgress"
       ) {
-        throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+        throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "TOOL_ITEM_LIFECYCLE");
       }
       validateWriteThreadItem(item, itemType, worktreePath, "STARTED");
       this.#writeToolItems.set(itemId, { type: itemType, state: "STARTED" });
@@ -1014,7 +1017,7 @@ class TurnEventTracker {
       existing.state !== "STARTED" ||
       item.status === "inProgress"
     ) {
-      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "TOOL_ITEM_LIFECYCLE");
     }
     validateWriteThreadItem(item, itemType, worktreePath, "COMPLETED");
     existing.state = "COMPLETED";
@@ -1030,7 +1033,7 @@ class TurnEventTracker {
       item.type !== expectedType ||
       item.state !== "STARTED"
     ) {
-      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "TOOL_OUTPUT_LIFECYCLE");
     }
   }
 
@@ -1341,7 +1344,7 @@ class JsonlAppServerClient {
     this.diagnostics.serverRequestsReceived += 1;
     if (method === "item/tool/call" && this.research) {
       const request = requireRecord(params);
-      if (request.tool !== "console_read" || request.threadId !== this.events.threadId || request.turnId !== this.events.turnId || request.namespace != null) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      if (request.tool !== "console_read" || request.threadId !== this.events.threadId || request.turnId !== this.events.turnId || request.namespace != null) throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "DYNAMIC_TOOL_REQUEST");
       const result = this.research(request.arguments);
       const text = JSON.stringify(result);
       this.#send({ id, result: { success: true, contentItems: [{ type: "inputText", text: Buffer.byteLength(text, "utf8") <= 2 * 1024 * 1024 ? text : JSON.stringify({ error: "READ_TOO_LARGE", message: "Read a specific task or a smaller page." }) }] } });
@@ -2497,7 +2500,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     const eventTracker = new TurnEventTracker(
       diagnostics,
       planning === undefined ? dependencies.limits.maxAgentResponseBytes : BIG_TASK_PLANNING_LIMITS.maxResponseBytes,
-      planning?.research ? { kind: "CONSOLE_RESEARCH", worktreePath: executionWorkspace, ...(planning.repositoryPath ? { repositoryPath: planning.repositoryPath } : {}) } : { kind: "READ_ONLY" },
+      planning?.research ? { kind: "CONSOLE_RESEARCH", worktreePath: executionWorkspace, researchDirectories: planning.repositoryPath ? consoleResearchDirectories(planning.repositoryPath) : [] } : { kind: "READ_ONLY" },
       planning === undefined ? undefined : (usage) => {
         evidence.normalizedUsage = usage;
         planning.observe(evidence);
@@ -2583,7 +2586,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
         ephemeral: true,
         sandbox: "read-only",
         serviceName: CLIENT_INFO.name,
-        ...(planning?.research ? { config: { ...restrictedThreadConfig, ...(planning.modelSelection ? { model_reasoning_effort: planning.modelSelection.reasoningEffort } : {}), features: { shell_tool: true, unified_exec: true, skill_search: false }, web_search: "live" }, developerInstructions: "Investigate with console_read, read-only shell commands, public web search (including opening and finding within pages), and image viewing. Project files must remain unchanged in discussion/planning. Use the project path in context for repository commands. Do not read credentials or unrelated personal files. Browser automation/edits/tests belong in authorized execution. Return workflow requests through the structured actions field; do not attempt to execute them as tools.", dynamicTools: [{ type: "function", ...CONSOLE_RESEARCH_TOOL }] } : {}),
+        ...(planning?.research ? { config: { ...restrictedThreadConfig, ...(planning.modelSelection ? { model_reasoning_effort: planning.modelSelection.reasoningEffort } : {}), features: { shell_tool: true, unified_exec: true, skill_search: false }, web_search: "live" }, developerInstructions: "Investigate with console_read, read-only shell commands, public web search (including opening and finding within pages), and image viewing. Project files must remain unchanged in discussion/planning. Use the project path or its registered retained worktrees in context for read-only repository commands. Do not read credentials or unrelated personal files. Browser automation/edits/tests belong in authorized execution. Return workflow requests through the structured actions field; do not attempt to execute them as tools.", dynamicTools: [{ type: "function", ...CONSOLE_RESEARCH_TOOL }] } : {}),
         ...(planning?.modelSelection ? { model: planning.modelSelection.model } : {}),
       },
       withinDeadline(dependencies.limits.requestTimeoutMs),
@@ -2672,6 +2675,7 @@ async function executeSingleSubtaskLiveCodexWithDependencies(
     evidence.agentResponseText = eventTracker.responseText;
   } catch (error: unknown) {
     failureCode = asReadOnlyFailureCode(error);
+    if (planning && error instanceof LiveExecutionError && error.protocolCheck) diagnostics.protocolCheck = error.protocolCheck;
     if (
       turnStartSent &&
       client !== undefined &&
@@ -2908,6 +2912,7 @@ async function executeBigTaskPlanningWithDependencies(
     });
     return planning.finish(bigTaskId, run.sequence, result.success, result.agentResponseText, {
       failureCode: result.failureCode,
+      ...(result.diagnostics.protocolCheck ? { protocolCheck: result.diagnostics.protocolCheck } : {}),
       notificationsReceived: result.diagnostics.notificationsReceived,
       unknownNotificationsIgnored: result.diagnostics.unknownNotificationsIgnored,
       interruptRequests: result.diagnostics.interruptRequests,
@@ -3335,14 +3340,14 @@ function validateWriteThreadItem(
       item.status !== "failed" &&
       item.status !== "declined")
   ) {
-    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "COMMAND_ITEM_SHAPE");
   }
   if (itemType === "commandExecution") {
     requireString(item.command);
     validateCommandActions(item.commandActions);
     const commandCwd = requireBoundedString(item.cwd, 4_096);
     if (!commandCwdIsWithin(commandCwd, worktreePath)) {
-      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+      throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "COMMAND_WORKING_DIRECTORY");
     }
     return;
   }
@@ -3351,7 +3356,7 @@ function validateWriteThreadItem(
 
 function validateCommandActions(value: unknown): void {
   if (!Array.isArray(value) || value.length > 512) {
-    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+    throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "COMMAND_ACTION_SHAPE");
   }
   for (const action of value) {
     const record = requireRecord(action);
@@ -3368,7 +3373,7 @@ function validateCommandActions(value: unknown): void {
           record.path !== null &&
           typeof record.path !== "string"
         ) {
-          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+          throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "COMMAND_ACTION_SHAPE");
         }
         break;
       case "search":
@@ -3378,14 +3383,14 @@ function validateCommandActions(value: unknown): void {
             optional !== null &&
             typeof optional !== "string"
           ) {
-            throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+            throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "COMMAND_ACTION_SHAPE");
           }
         }
         break;
       case "unknown":
         break;
       default:
-        throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR");
+        throw new LiveExecutionError("APP_SERVER_PROTOCOL_ERROR", "COMMAND_ACTION_SHAPE");
     }
   }
 }

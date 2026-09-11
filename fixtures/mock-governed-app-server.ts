@@ -17,7 +17,7 @@ let accountRead = false;
 let threadStarted = false;
 
 const send = (value: JsonRecord): void => {
-  if (scenario === "missing-usage" && value.method === "thread/tokenUsage/updated") return;
+  if (["missing-usage", "missing-usage-failed"].includes(scenario ?? "") && value.method === "thread/tokenUsage/updated") return;
   if (scenario === "malformed-initialization" && value.id === 1) value.result = {};
   if (value.id === 3) {
     const result = record(value.result);
@@ -243,7 +243,7 @@ lines.on("line", (line) => {
     if (scenario === "nonblocking") result.findings = [finding("defer", false)];
     let resultText = JSON.stringify(result);
     if (scenario === "duplicate-key") resultText = resultText.replace('"outcome":', '"outcome":"PASS","outcome":');
-    if (scenario === "wrong-fields") resultText = resultText.replace('"schemaVersion":1', '"unexpected":true,"schemaVersion":1');
+    if (scenario === "wrong-fields" || scenario === "missing-usage-failed") resultText = resultText.replace('"schemaVersion":1', '"unexpected":true,"schemaVersion":1');
     if (scenario === "oversized") resultText = "x".repeat(17 * 1024);
     if (scenario === "malformed-unicode") resultText = resultText.replace(`${role} completed.`, "\\ud800");
     if (scenario?.startsWith("phased-") || scenario === "legacy-progress") {

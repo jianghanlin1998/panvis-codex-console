@@ -38,3 +38,18 @@ Hanlin 要求：工作中遇到的问题必须记录，后续修复并验证。�
 验证过程中发现的构建／测试问题也必须留痕：当前迁移已更新但一次邻接测试误用了旧 dist，触发 schema 指纹不符；重新构建后的编译产物测试通过。第一轮全量回归另发现四个文件的十个迁移计数断言仍期待 24，实际是 25；补齐准确数量后，29 个迁移测试和最终 169 文件／4,726 测试全部通过。历史数据、外键、回滚和防篡改断言均保留。后续新增迁移要先构建并完整核对最终迁移数量断言，避免重犯。完整测试历史和最终结果记录在 CURRENT_STATE.md。
 
 本轮验证过程也保留：HTTP 测试最初因沙箱禁止 localhost 监听失败，按既有授权重跑通过；容量边界断言明确更新为新错误码，未放宽字节上限。新模拟模型漏填协议字段、错误使用 QA 的 PASS 作为 EXECUTE 结果及固定时间导致先后关系不成立，均修正测试生产器后通过。旧版本兼容用历史形状插入测试库，未关闭不可变记录保护。首次全量为 175 文件／4,755 测试，34 失败、1 个未捕获的旧路由断言：涉及新增表的清单/矩阵、旧路由/错误码预期，以及全量运行期间新增测试读到已缓存旧实现；分别修复并先验证 257 项邻接回归。摘要路由另补中文编号真实 HTTP 解码测试。最终全量结果与真实关单状态见 CURRENT_STATE.md。
+
+
+2026-09-11 recovery follow-up:
+
+| ID | Root problem | Durable correction | Evidence / remaining limit |
+| --- | --- | --- | --- |
+| S10-05 | Chat acknowledged explicit confirmation but could only describe another UI entry | Bound draft confirmation, plan approval/start and technical recovery actions; show authoritative effects | Deterministic action/scope/idempotence tests; real revision planned and started. Missing product decisions still require alignment |
+| S10-06 | Unknown completed usage kept recovery blocked after changing the budget | Explicit acknowledgment of exact unknown completed runs in measurement mode | Unknown remains unknown; old QA outcomes and history preserved; invalid/cross-run acknowledgment rejected |
+| S10-07 | Read-only planning rejected the retained Git worktree; chat lacked original QA evidence | Allow canonical registered same-repo checkouts; scoped paginated original QA reports | Actual Astra/high plan succeeded after a confirmed COMMAND_WORKING_DIRECTORY failure; outside paths still rejected |
+| S10-08 | Paused idle work consumed execution capacity, while service dropped the blocker | Explicit PAUSED dispatch state, retained checkout, writer-locked resume and safe reason propagation | Original active-write uniqueness retained; live calls prevent slot release; migration preserves old rows |
+| S10-09 | Revision links returned to failed earlier plans; stopped subtask lacked a recovery route | Link latest revision and expose parent recovery/revision controls beside task status | Actual-data private-copy browser check; no promise that external provider failures can be eliminated |
+
+Verification issues retained: after the final schema addition, the first full run passed 4,942/4,946 checks. Three assertions still expected WORKTREE_BLOCKED where capacity now correctly reports CONCURRENCY_BLOCKED; the predecessor-upgrade fixture also retained a current Console-dependent trigger after deleting Console tables. Exact category assertions and the pinned predecessor trigger were corrected; no history/provenance/foreign-key assertion was removed.
+
+Final recheck: 204 files / 4,946 tests PASS, including all four corrected checks; no failures, skips or weakened assertions. Schema 34 activated with all 55 existing table record sets unchanged, and B revision entered a real EXECUTE role.

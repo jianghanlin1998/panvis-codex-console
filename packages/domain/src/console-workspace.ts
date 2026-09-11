@@ -77,6 +77,9 @@ const taskActionScope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("SUBTASK"), id: SubtaskIdSchema }).strict(),
 ]);
 const discussionAction = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("RECOVER_TASK"), bigTaskId: BigTaskIdSchema, planDigest: z.string().regex(/^[a-f0-9]{64}$/), expectedRevision: z.number().int().nonnegative(), acknowledgeUnknownUsage: z.boolean(), durationMinutes: z.number().int().min(1).max(180).nullable() }).strict(),
+  z.object({ kind: z.literal("CONFIRM_DRAFT"), draftId: z.string(), revision: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal("APPROVE_PLAN"), bigTaskId: BigTaskIdSchema, expectedBinding: z.string().regex(/^[a-f0-9]{32}$/) }).strict(),
   z.object({ kind: z.literal("ADVANCE_TASK"), scope: taskActionScope }).strict(),
   z.object({ kind: z.literal("PAUSE_TASK"), scope: taskActionScope }).strict(),
   ConsolePlanReviewChangeSchema.omit({ requestId: true }).extend({ kind: z.literal("AMEND_PLAN_REVIEW") }).strict(),
@@ -111,7 +114,7 @@ export const ConsoleDiscussionTurnSchema = z.object({
   createdAt: z.iso.datetime(), endedAt: z.iso.datetime().nullable(),
   progress: ExecutionProgressSchema.optional(), modelSelection: ConsoleModelSelectionSchema.nullable().optional(), actualModel: z.string().max(200).optional(),
   completionBinding: z.string().regex(/^[a-f0-9]{32}$/).optional(),
-  effects: z.array(z.object({ kind: z.enum(["TASK_CREATED", "REVIEW_LEVEL_CHANGED", "PLAN_REVIEW_CHANGED", "TASK_ADVANCE_REQUESTED", "TASK_PAUSE_REQUESTED", "TASK_ADVANCED", "TASK_PAUSED", "TASK_ACTION_FAILED", "EXECUTION_CONFIRMATION_REQUIRED"]), targetId: z.string(), description: text(1000) }).strict()).max(12).optional(),
+  effects: z.array(z.object({ kind: z.enum(["TASK_CREATED", "REVIEW_LEVEL_CHANGED", "PLAN_REVIEW_CHANGED", "TASK_ADVANCE_REQUESTED", "TASK_PAUSE_REQUESTED", "TASK_CONTROL_REQUESTED", "TASK_ADVANCED", "TASK_PAUSED", "TASK_ACTION_FAILED", "EXECUTION_CONFIRMATION_REQUIRED"]), targetId: z.string(), description: text(1000) }).strict()).max(12).optional(),
 }).strict();
 export type ConsoleDiscussionTurn = z.infer<typeof ConsoleDiscussionTurnSchema>;
 export const ConsoleProjectCreateSchema = z.object({

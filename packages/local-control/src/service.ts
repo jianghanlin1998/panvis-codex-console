@@ -528,7 +528,10 @@ class ProductionLocalControlService implements LocalControlService {
         if (prepared.kind === "BIG_TASK_COMPLETE") { phase = "DELIVER"; execution.deliver(bigTaskId); return; }
         if (prepared.kind !== "ROLE_AUTHORIZED") {
           const lifecycleWait = prepared.kind === "BLOCKED" && prepared.reason === "DEPENDENCY_BLOCKED" && this.#storage.listSubtasksByBigTask(bigTaskId).some(task => task.status !== "DONE" && this.#console.store.lifecycle({ kind: "SUBTASK", id: task.id }) !== "ACTIVE");
-          execution.stop(bigTaskId, lifecycleWait ? "USER_PAUSED" : "GOVERNED_BLOCKED"); return;
+          const reason = prepared.kind === "ROLE_IN_PROGRESS" ? "ACTIVE_EXECUTION_EXISTS" : prepared.reason;
+          execution.recordControlFailure(bigTaskId, { phase: "PREPARE_ROLE", failureCode: reason });
+          const preparationBlocked = ["CONCURRENCY_BLOCKED", "WORKTREE_BLOCKED", "REPOSITORY_PREFLIGHT_BLOCKED", "CONTEXT_PREFLIGHT_BLOCKED"].includes(reason);
+          execution.stop(bigTaskId, lifecycleWait ? "USER_PAUSED" : preparationBlocked ? "LOCAL_OPERATION_FAILED" : "GOVERNED_BLOCKED"); return;
         }
         if (state.roleCalls >= state.limits.roleCallLimit) { execution.stop(bigTaskId, "ROLE_LIMIT_REACHED"); return; }
         if (this.#console.store.lifecycle({ kind: "SUBTASK", id: prepared.authorization.subtaskId }) !== "ACTIVE") { execution.stop(bigTaskId, "USER_PAUSED"); return; }

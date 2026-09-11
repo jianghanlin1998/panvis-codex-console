@@ -1,3 +1,4 @@
+import { ConsoleWorkspaceStore } from "../src/console-workspace.js";
 import { GATE_KINDS, provenanceId, readGateObservation } from "../src/governed-occurrence-provenance.js";
 import { createGovernedExecutionStoreForTesting as createGovernedExecutionStore } from "../src/governed-execution.js";
 import type { GovernedExecutionStore } from "../src/governed-execution.js";
@@ -818,6 +819,31 @@ describe("Operational Governed Execution V0", () => {
       storage.close();
       rmSync(scenario.directory, { force: true, recursive: true });
     }
+  });
+
+  it("admits a revision beside an idle paused task but prevents concurrent provider resumption", () => {
+    const scenario = createScenario();
+    try {
+      const first = seed(scenario, { suffix: "_retained_a", projectId: "prj_retained", profiles: ["LOW"] });
+      const second = seed(scenario, { suffix: "_retained_b", projectId: "prj_retained", profiles: ["LOW"] });
+      const governed = governedFor(scenario, [first.bigTaskId, second.bigTaskId]);
+      const a = authorized(governed.prepareNextRole(first.bigTaskId));
+      const console = new ConsoleWorkspaceStore(scenario.storage);
+      console.changeSettings({ requestId: "pause_original", scope: { kind: "BIG_TASK", id: first.bigTaskId }, expectedRevision: 0, lifecycle: "PAUSED" });
+      const b = authorized(governed.prepareNextRole(second.bigTaskId));
+      governed.reserveRoleExecutionAttempt(b.authorization.authorizationId);
+      console.changeSettings({ requestId: "resume_original", scope: { kind: "BIG_TASK", id: first.bigTaskId }, expectedRevision: 1, lifecycle: "ACTIVE" });
+      expect(() => governed.reserveRoleExecutionAttempt(a.authorization.authorizationId)).toThrow();
+      expect(governed.prepareNextRole(first.bigTaskId)).toMatchObject({ kind: "BLOCKED", reason: "CONCURRENCY_BLOCKED" });
+      const db = new DatabaseSync(scenario.databasePath);
+      expect(() => db.prepare("UPDATE governed_dispatch_receipts SET status='ACTIVE' WHERE receipt_id=?").run(a.receipt.receiptId)).toThrow();
+      console.changeSettings({ requestId: "pause_running", scope: { kind: "BIG_TASK", id: second.bigTaskId }, expectedRevision: 0, lifecycle: "PAUSED" });
+      expect(() => db.prepare("UPDATE governed_dispatch_receipts SET status='PAUSED' WHERE receipt_id=?").run(b.receipt.receiptId)).toThrow();
+      expect(db.prepare("SELECT count(*) AS count FROM governed_dispatch_receipts WHERE status='ACTIVE'").get()).toEqual({ count: 1 });
+      expect(db.prepare("SELECT count(*) AS count FROM governed_dispatch_receipts WHERE status='PAUSED'").get()).toEqual({ count: 1 });
+      expect(db.prepare("SELECT count(*) AS count FROM execution_runs WHERE status IN ('CREATED','RUNNING')").get()).toEqual({ count: 1 });
+      db.close();
+    } finally { cleanupScenario(scenario); }
   });
 
   it("serializes competing process reservations to one Project write authority", async () => {
@@ -1794,6 +1820,12 @@ it("upgrades predecessor-format claims without inventing input or gate provenanc
     db.exec("DELETE FROM __drizzle_migrations WHERE id >= 20");
     // Later migrations may replace triggers on predecessor tables. Restore the
     // pinned predecessor definition as well as removing later additive tables.
+    // Restore the predecessor dispatch guard too: current PAUSED transitions
+    // reference Console lifecycle tables which did not exist in version 19.
+    db.exec("DROP TRIGGER governed_dispatch_update_guard");
+    const dispatchSql = readFileSync(new URL("../drizzle/20260903184138_omniscient_lyja/migration.sql", import.meta.url), "utf8");
+    const priorDispatchGuard = dispatchSql.split("--> statement-breakpoint").find(sql => sql.includes("CREATE TRIGGER `governed_dispatch_update_guard`"));
+    expect(priorDispatchGuard).toBeDefined(); db.exec(priorDispatchGuard!);
     db.exec("DROP TRIGGER governed_success_provenance_guard");
     const hardeningSql = readFileSync(new URL("../drizzle/20260905045319_governed_hardening/migration.sql", import.meta.url), "utf8");
     const priorSuccessGuard = hardeningSql.split("--> statement-breakpoint").find(sql => sql.includes("CREATE TRIGGER governed_success_provenance_guard"));

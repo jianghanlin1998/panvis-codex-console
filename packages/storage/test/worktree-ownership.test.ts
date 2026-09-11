@@ -1,3 +1,4 @@
+import { ConsoleWorkspaceStore } from "../src/console-workspace.js";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -17,6 +18,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  ChatThreadIdSchema, ExecutionProviderIdSchema, ExecutionRunIdSchema,
   BigTaskSchema,
   ProjectSchema,
   SubtaskCreateInputSchema,
@@ -422,6 +424,30 @@ describe("Git Worktree Ownership & Provisioning V0", () => {
       storage.close();
       cleanupScenario(scenario);
     }
+  });
+
+  it.each([false, true])("retains paused code without consuming a slot only after provider work stops (active=%s)", active => {
+    const scenario = createScenario(), storage = openStorage(scenario);
+    try {
+      const [firstId, secondId] = seedHierarchy(storage, scenario, { maximum: 1 });
+      const manager = managerFor(storage, scenario, [ids.a, ids.b]);
+      const retained = manager.provisionOwnedWorktreeForSubtask(firstId!);
+      writeFileSync(join(retained.worktreePath, "retained.txt"), "unfinished work", "utf8");
+      const console = new ConsoleWorkspaceStore(storage);
+      console.changeSettings({ requestId: "pause_retained", scope: { kind: "SUBTASK", id: firstId }, expectedRevision: 0, lifecycle: "PAUSED" });
+      if (active) {
+        const chatThreadId = ChatThreadIdSchema.parse("thr_retained");
+        storage.createChatThread({ id: chatThreadId, subtaskId: firstId!, providerId: ExecutionProviderIdSchema.parse("codex-app-server") });
+        storage.createExecutionRun({ id: ExecutionRunIdSchema.parse("run_retained"), chatThreadId });
+        expect(console.isIdleRetainedSubtask(firstId!)).toBe(false);
+        expect(captureOwnershipError(() => manager.provisionOwnedWorktreeForSubtask(secondId!)).code).toBe("PROJECT_CAPACITY_EXCEEDED");
+      } else {
+        expect(console.isIdleRetainedSubtask(firstId!)).toBe(true);
+        expect(manager.provisionOwnedWorktreeForSubtask(secondId!).status).toBe("ACTIVE");
+      }
+      expect(manager.listWorktreeOwnershipHistoryForSubtask(firstId!)).toEqual([retained]);
+      expect(readFileSync(join(retained.worktreePath, "retained.txt"), "utf8")).toBe("unfinished work");
+    } finally { storage.close(); cleanupScenario(scenario); }
   });
 
   it("enforces Project max=1 and max=2 transactionally across storage connections", () => {

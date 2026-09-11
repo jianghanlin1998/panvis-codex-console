@@ -1436,7 +1436,7 @@ export const governedDispatchReceiptsTable = sqliteTable(
     ),
     check(
       "governed_dispatch_lifecycle_check",
-      sql`(${table.status} in ('RESERVED', 'ACTIVE') and ${table.terminalAt} is null)
+      sql`(${table.status} in ('RESERVED', 'ACTIVE', 'PAUSED') and ${table.terminalAt} is null)
         or (${table.status} in ('COMPLETED', 'HUMAN_REQUIRED')
           and ${table.terminalAt} is not null
           and ${table.updatedAt} = ${table.terminalAt})`,
